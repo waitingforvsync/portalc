@@ -47,7 +47,7 @@ RC_TEST(palette, blend)
         for (uint8_t b = 0; b < 4; b++) {
             if (a == b)
                 continue;
-            for (uint8_t k = 0; k <= 8; k++) {
+            for (uint8_t k = 0; k <= 8; k += 2) {
                 pt_pattern p = pt_pattern_blend(a, b, k);
                 uint8_t nb = 0;
                 uint8_t ne = 0;

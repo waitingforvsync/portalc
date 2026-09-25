@@ -57,6 +57,11 @@ int main(int argc, char **argv)
         {-500, 0, 0, 7, "corridor_back"},           // looking back out
         {-800, 0, 128, 8, "room2"},                 // the far room
         {-700, 100, 32, 8, "room2_to_door"},        // back toward the doorway
+        {-824, -100, 192, 8, "stair_door"},         // facing the stair doorway
+        {-824, -300, 192, 11, "stairs_up"},         // climbing the staircase
+        {-824, -480, 224, 15, "upper_corridor"},    // into the first bend
+        {-794, -592, 213, 16, "second_bend"},       // toward the doorway
+        {-400, -853, 107, 18, "end_room"},          // looking back at the door
     };
 
     char path[512];

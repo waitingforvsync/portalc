@@ -39,12 +39,14 @@ pt_pattern pt_pattern_check(uint8_t a, uint8_t b);
 // pt_pattern_blend spreads a mix over the full 4x2 byte tile instead.
 pt_pattern pt_pattern_cell(uint8_t tl, uint8_t tr, uint8_t bl, uint8_t br);
 
-// A blend of colours a and b: k of the 8 pixels of the 4x2 byte tile are b
-// (k = 0 solid a, 4 a checkerboard, 8 solid b), placed so partial fills
-// stagger across both scanlines rather than gathering on one. Two-colour
-// blends dither far better than mixes of three or four, and blends of
-// colours adjacent in brightness (black-blue, blue-red, red-green) best of
-// all.
+// A blend of colours a and b: k of the 8 pixels of the 4x2 byte tile are b,
+// in quarter densities only (k = 0, 2, 4, 6, 8), from a hardcoded table of
+// fill shapes. 50% is the checkerboard (already chunky on screen, since
+// MODE 5 pixels are double wide); the quarter and three-quarter levels put
+// a dot (or hole) in each 2x2 half of the tile, staggered across the
+// scanlines so nothing stacks into stripes. Two-colour blends dither far
+// better than mixes of three or four, and blends of colours adjacent in
+// brightness (black-blue, blue-red, red-green) best of all.
 pt_pattern pt_pattern_blend(uint8_t a, uint8_t b, uint8_t k);
 
 // The 35 distinct mixes of four pixels from the four colours, indexed from

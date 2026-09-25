@@ -15,7 +15,7 @@
 #include "richc/macros.h"
 
 #define PT_POOL_SIZE 256      // piece 0 is the null link
-#define PT_MAX_DEPTH 16
+#define PT_MAX_DEPTH 24
 #define PT_MAX_CLOSED 8
 #define PT_EYE_HEIGHT 80
 

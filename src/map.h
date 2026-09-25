@@ -13,13 +13,13 @@
 #include "palette.h"
 
 #define PT_MAX_VERTS 64
-#define PT_MAX_CELLS 16
-#define PT_MAX_EDGES 64
+#define PT_MAX_CELLS 24
+#define PT_MAX_EDGES 96
 #define PT_MAX_CELL_EDGES 8
 
 // The translation applied to the authored scene coordinates.
 #define PT_WORLD_OX 1536
-#define PT_WORLD_OY 512
+#define PT_WORLD_OY 1536
 #define PT_WORLD_OZ 512
 
 typedef struct pt_vertex {

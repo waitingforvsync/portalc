@@ -40,23 +40,52 @@ pt_pattern pt_pattern_cell(uint8_t tl, uint8_t tr, uint8_t bl, uint8_t br)
     };
 }
 
+// One row of a fill shape: which of the byte's four pixels take colour b,
+// written left to right so a PT_FILL line reads like the tile it draws.
+#define PT_FILL(e0, e1, e2, e3, o0, o1, o2, o3)                        \
+    {                                                                  \
+        (uint8_t)((e0) << 3 | (e1) << 2 | (e2) << 1 | (e3)),           \
+        (uint8_t)((o0) << 3 | (o1) << 2 | (o2) << 1 | (o3)),           \
+    }
+
+// The b pixels of one scanline's mask, over a background of a.
+static uint8_t fill_byte(uint8_t mask, uint8_t a, uint8_t b)
+{
+    uint8_t px[4];
+    for (uint8_t p = 0; p < 4; p++)
+        px[p] = (mask >> (3 - p)) & 1 ? b : a;
+    return pattern_byte(px[0], px[1], px[2], px[3]);
+}
+
 pt_pattern pt_pattern_blend(uint8_t a, uint8_t b, uint8_t k)
 {
     RC_ASSERT(a < 4 && b < 4 && k <= 8);
+    RC_ASSERT((k & 1) == 0);    // quarter densities only
 
-    // Which of the 8 tile pixels are b at each fill level (bit 0-3 = even
-    // scanline columns 0-3, bit 4-7 = odd). Each level spreads its pixels
-    // over both scanlines: 2/8 and 6/8 are offset lattices, 4/8 the
-    // checkerboard, so no partial blend leaves a scanline a solid run.
-    static const uint8_t fill[9] = {0x00, 0x01, 0x41, 0x25, 0xA5, 0xB5, 0x7D, 0xFD, 0xFF};
+    // The dither shapes, hardcoded per quarter (even scanline row first).
+    // 50% is the single-pixel checkerboard, which MODE 5's double-wide
+    // pixels already render chunky; the quarter and three-quarter levels
+    // put one dot (or hole) in each 2x2 half of the tile, the second half
+    // offset onto the other scanline so nothing stacks into stripes.
+    static const struct fill {
+        uint8_t e, o;
+    } fills[5] = {
+        PT_FILL(0, 0, 0, 0,    // solid a
+                0, 0, 0, 0),
+        PT_FILL(1, 0, 0, 0,    // quarter
+                0, 0, 1, 0),
+        PT_FILL(1, 0, 1, 0,    // half: the checkerboard
+                0, 1, 0, 1),
+        PT_FILL(1, 0, 1, 1,    // three quarters
+                1, 1, 1, 0),
+        PT_FILL(1, 1, 1, 1,    // solid b
+                1, 1, 1, 1),
+    };
 
-    uint8_t m = fill[k];
-    uint8_t px[8];
-    for (uint8_t i = 0; i < 8; i++)
-        px[i] = (m >> i) & 1 ? b : a;
+    const struct fill *f = &fills[k >> 1];
     return (pt_pattern) {
-        .e = pattern_byte(px[0], px[1], px[2], px[3]),
-        .o = pattern_byte(px[4], px[5], px[6], px[7]),
+        .e = fill_byte(f->e, a, b),
+        .o = fill_byte(f->o, a, b),
     };
 }
 

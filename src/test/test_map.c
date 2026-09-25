@@ -9,8 +9,8 @@ RC_TEST(map, scene_valid)
     pt_scene_build(&m);
     RC_CHECK_TRUE(pt_map_validate(&m));
 
-    // 9 rooms plus the reserved outside
-    RC_CHECK(m.num_cells, ==, (uint8_t)9);
+    // 19 cells plus the reserved outside
+    RC_CHECK(m.num_cells, ==, (uint8_t)19);
 
     // every ring closes: each edge's end is the next edge's start
     for (uint8_t c = 1; c < m.num_cells; c++) {

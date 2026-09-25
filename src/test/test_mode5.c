@@ -27,12 +27,12 @@ RC_TEST(mode5, plot_and_fill)
     pt_mode5_plot(fb, 5, 20, red);
     pt_mode5_fill(fb);
 
-    static uint8_t rgba[PT_SCREEN_W * PT_SCREEN_SCANLINES * 4];
+    static uint8_t rgba[PT_SCREEN_WIDTH * PT_SCREEN_SCANLINES * 4];
     pt_mode5_to_rgba(fb, rgba);
 
     // pixel column 5: black above, red for scanlines 20..39, black below
     for (uint32_t sl = 0; sl < PT_SCREEN_SCANLINES; sl++) {
-        const uint8_t *p = &rgba[(sl * PT_SCREEN_W + 5) * 4];
+        const uint8_t *p = &rgba[(sl * PT_SCREEN_WIDTH + 5) * 4];
         bool red_here = sl >= 20 && sl < 40;
         RC_CHECK(p[0], ==, (uint8_t)(red_here ? 255 : 0));
         RC_CHECK(p[1], ==, (uint8_t)0);
@@ -41,8 +41,8 @@ RC_TEST(mode5, plot_and_fill)
 
     // neighbouring pixel columns untouched
     for (uint32_t sl = 0; sl < PT_SCREEN_SCANLINES; sl++) {
-        RC_CHECK(rgba[(sl * PT_SCREEN_W + 4) * 4], ==, (uint8_t)0);
-        RC_CHECK(rgba[(sl * PT_SCREEN_W + 6) * 4], ==, (uint8_t)0);
+        RC_CHECK(rgba[(sl * PT_SCREEN_WIDTH + 4) * 4], ==, (uint8_t)0);
+        RC_CHECK(rgba[(sl * PT_SCREEN_WIDTH + 6) * 4], ==, (uint8_t)0);
     }
 }
 
@@ -57,13 +57,13 @@ RC_TEST(mode5, dither_alignment)
     pt_mode5_plot(fb, 1, 0, chk);
     pt_mode5_fill(fb);
 
-    static uint8_t rgba[PT_SCREEN_W * PT_SCREEN_SCANLINES * 4];
+    static uint8_t rgba[PT_SCREEN_WIDTH * PT_SCREEN_SCANLINES * 4];
     pt_mode5_to_rgba(fb, rgba);
 
     // scanline 0 pixel 0 red, pixel 1 green; scanline 1 swapped
     RC_CHECK(rgba[0 * 4 + 1], ==, (uint8_t)0);      // (0,0) green channel: red
     RC_CHECK(rgba[1 * 4 + 1], ==, (uint8_t)255);    // (1,0): green
-    const uint8_t *sl1 = &rgba[PT_SCREEN_W * 4];
+    const uint8_t *sl1 = &rgba[PT_SCREEN_WIDTH * 4];
     RC_CHECK(sl1[0 * 4 + 1], ==, (uint8_t)255);     // (0,1): green
     RC_CHECK(sl1[1 * 4 + 1], ==, (uint8_t)0);       // (1,1): red
 }

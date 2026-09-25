@@ -92,7 +92,7 @@ static uint16_t row_step(uint16_t y, uint16_t g, uint8_t dx)
 static uint8_t row_of(uint16_t y_q8)
 {
     uint8_t row = (uint8_t)(y_q8 >> 8);
-    return row > 64 ? 64 : row;
+    return row > PT_SCREEN_HEIGHT ? PT_SCREEN_HEIGHT : row;
 }
 
 // The row a u8.8 value rounds up into, for conservative extents.
@@ -415,8 +415,12 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, int16_t h, pt_patte
     RC_ASSERT(e0.x >= 1 && e1.x >= 1);
     RC_ASSERT(e0.sx < e1.sx);
 
-    uint16_t d = (uint16_t)((uint16_t)(h < 0 ? -h : h) << 1);
-    uint8_t edge = h < 0 ? 0 : 64;
+    // The clip plane sits exactly where the row projection reaches the
+    // screen edge: x = 128|h|/H, the 64-row screen's classic x = 2|h|
+    // (for the 80-row screen it is 8|h|/5, shifts and adds on the 6502).
+    uint16_t uh = (uint16_t)(h < 0 ? -h : h);
+    uint16_t d = (uint16_t)(((uint32_t)uh * 128 + PT_SCREEN_HEIGHT - 1) / PT_SCREEN_HEIGHT);
+    uint8_t edge = h < 0 ? 0 : PT_SCREEN_HEIGHT;
     bool near0 = e0.x < d;
     bool near1 = e1.x < d;
 
@@ -473,8 +477,9 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, int16_t h, pt_patte
                 g = pt_g_make(gm, 1);
                 y0q = off > base ? 0 : (uint16_t)(base - off);
             }
-            // round like every other re-anchor; 64 is fine, the piece comes
-            // on screen where its gradient brings the row under 63.5
+            // round like every other re-anchor; PT_SCREEN_HEIGHT is fine,
+            // the piece comes on screen where its gradient brings the row
+            // under the screen edge less a half
             uint8_t y0 = row_of_round(y0q);
             out[n++] = (pt_line) {.x0 = cs, .x1 = e1.sx, .y0 = y0, .g = g, .ce = col.e, .co = col.o};
         }
@@ -756,8 +761,8 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     // 4. bound-forming lines, floor first: it builds the child's bottom chain
     // against T and B; the ceiling line then builds the child's top chain
     // against T and the chain the floor line just built
-    pt_chainb childb = {.bmin = 64};
-    pt_chainb childt = {.bmin = 64};
+    pt_chainb childb = {.bmin = PT_SCREEN_HEIGHT};
+    pt_chainb childt = {.bmin = PT_SCREEN_HEIGHT};
     pt_closedl closed = {0};
 
     pt_line fl[2];
@@ -859,7 +864,7 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
         .tcur = roott,
         .bcur = rootb,
         .tmax = 0,
-        .bmin = 64,
+        .bmin = PT_SCREEN_HEIGHT,
         .edge = n,
         .steps = (uint8_t)(c->num_edges + 1),
         .v0 = v,
@@ -883,7 +888,7 @@ static void plot(pt_render *r)
         if (!pt_g_isneg(p->g)) {
             for (uint8_t c = p->x0; c < p->x1; c++) {
                 uint8_t row = row_of_round(y);
-                if (row >= 64)
+                if (row >= PT_SCREEN_HEIGHT)
                     break;    // rows only grow; the rest is below the screen
                 pt_mode5_plot(r->fb, c, row, pat);
                 y = (uint16_t)(y + gm);
@@ -891,7 +896,7 @@ static void plot(pt_render *r)
         } else {
             for (uint8_t c = p->x0; c < p->x1; c++) {
                 uint8_t row = row_of_round(y);
-                if (row < 64)
+                if (row < PT_SCREEN_HEIGHT)
                     pt_mode5_plot(r->fb, c, row, pat);
                 // clamp at the screen top: the toggle stays live at row 0
                 y = gm > y ? 0 : (uint16_t)(y - gm);
@@ -902,7 +907,6 @@ static void plot(pt_render *r)
 
 void pt_render_init(pt_render *r, const pt_map *m)
 {
-    pt_arith_init();
     *r = (pt_render) {0};
     r->map = m;
 }
@@ -915,7 +919,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->cam_x = cam_x;
     r->cam_y = cam_y;
     r->cam_cell = cell;
-    r->eye_z = (uint16_t)(m->cells[cell].floor_z - PT_EYE_HEIGHT);
+    r->eye_z = (uint16_t)(m->cells[cell].floor_z - PT_CAM_HEIGHT);
     r->dsin = pt_sin(angle);
     r->dcos = pt_cos(angle);
 
@@ -928,7 +932,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     // cell's ceiling, and a dummy off-screen bottom bound
     pt_pattern ceil = m->cells[cell].ceil;
     uint8_t roott = pool_alloc(r, 0, 128, 0, 0, ceil.e, ceil.o);
-    uint8_t rootb = pool_alloc(r, 0, 128, 64, 0, 0, 0);
+    uint8_t rootb = pool_alloc(r, 0, 128, PT_SCREEN_HEIGHT, 0, 0, 0);
     push_root(r, roott, rootb);
 
     while (r->depth) {

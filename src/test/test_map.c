@@ -1,12 +1,14 @@
 // test_map.c - structural invariants of the demo scene.
 
+#include "arith.h"
 #include "map.h"
 #include "richc/test.h"
 
 RC_TEST(map, scene_valid)
 {
     static pt_map m;
-    pt_scene_build(&m);
+    pt_arith_init();
+    pt_scene_init(&m);
     RC_CHECK_TRUE(pt_map_validate(&m));
 
     // 19 cells plus the reserved outside
@@ -42,4 +44,20 @@ RC_TEST(map, scene_valid)
         RC_CHECK(ed->nx, ==, (int16_t)-ed->ey);
         RC_CHECK(ed->ny, ==, ed->ex);
     }
+
+    // the point-to-cell query maps every cell's centroid back to that cell,
+    // and a point beyond the map to the outside
+    for (uint8_t c = 1; c < m.num_cells; c++) {
+        const pt_cell *cell = &m.cells[c];
+        uint32_t cx = 0;
+        uint32_t cy = 0;
+        for (uint8_t k = 0; k < cell->num_edges; k++) {
+            cx += m.verts[m.edges[cell->first_edge + k].v0].x;
+            cy += m.verts[m.edges[cell->first_edge + k].v0].y;
+        }
+        uint16_t px = (uint16_t)(cx / cell->num_edges);
+        uint16_t py = (uint16_t)(cy / cell->num_edges);
+        RC_CHECK(pt_map_find_cell(&m, px, py), ==, c);
+    }
+    RC_CHECK(pt_map_find_cell(&m, 10, 10), ==, (uint8_t)0);
 }

@@ -1,7 +1,8 @@
-// mode5.h - the back buffer: a shrunken BBC MODE 5 screen, 128 pixels wide by
-// 128 scanlines (32 byte columns x 16 character rows x 8 scanlines = 4K), laid
-// out exactly as BBC screen memory. The engine works in canvas rows: row y is
-// the scanline pair (2y, 2y+1), carrying the even/odd dither patterns.
+// mode5.h - the back buffer: a shrunken BBC MODE 5 screen, PT_SCREEN_WIDTH
+// pixels (a byte holds 4) by PT_SCREEN_SCANLINES scanlines, laid out exactly
+// as BBC screen memory (8-scanline character rows). The engine works in
+// canvas rows: row y is the scanline pair (2y, 2y+1), carrying the even/odd
+// dither patterns.
 
 #ifndef PT_MODE5_H_
 #define PT_MODE5_H_
@@ -10,10 +11,11 @@
 
 #include "palette.h"
 
-#define PT_FB_BYTES 4096
-#define PT_SCREEN_W 128
-#define PT_SCREEN_SCANLINES 128
-#define PT_SCREEN_ROWS 64
+#define PT_SCREEN_WIDTH 128
+#define PT_SCREEN_HEIGHT 64    // canvas rows
+#define PT_SCANLINES_PER_ROW 2
+#define PT_SCREEN_SCANLINES (PT_SCREEN_HEIGHT * PT_SCANLINES_PER_ROW)
+#define PT_FB_BYTES (PT_SCREEN_WIDTH / 4 * PT_SCREEN_SCANLINES)
 
 // Byte offset of (byte column, scanline) in the BBC character-cell layout.
 static inline uint16_t pt_mode5_offset(uint8_t bytecol, uint8_t scanline)

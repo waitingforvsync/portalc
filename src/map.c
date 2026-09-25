@@ -164,81 +164,88 @@ bool pt_map_validate(const pt_map *m)
             }
             cx /= c->num_edges;
             cy /= c->num_edges;
-            if (cx * e->nx + cy * e->ny - e->d0 <= 0)
+            if (pt_map_edge_side(m, ei, (uint16_t)cx, (uint16_t)cy) <= 0)
                 return false;
         }
     }
     return true;
 }
 
+// ---- queries ----
+
+int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+{
+    const pt_edge *ed = &m->edges[e];
+    return (int32_t)x * ed->nx + (int32_t)y * ed->ny - ed->d0;
+}
+
+bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y)
+{
+    const pt_cell *c = &m->cells[cell];
+    for (uint8_t k = 0; k < c->num_edges; k++)
+        if (pt_map_edge_side(m, (uint8_t)(c->first_edge + k), x, y) < 0)
+            return false;
+    return true;
+}
+
+uint8_t pt_map_find_cell(const pt_map *m, uint16_t x, uint16_t y)
+{
+    for (uint8_t c = 1; c < m->num_cells; c++)
+        if (pt_map_cell_contains(m, c, x, y))
+            return c;
+    return 0;
+}
+
 // ---- the demo scene ----
 
-// Authored coordinates translated into the unsigned world.
-static uint16_t wx(int32_t x)
+void pt_scene_init(pt_map *m)
 {
-    return (uint16_t)(x + PT_WORLD_OX);
-}
-
-static uint16_t wy(int32_t y)
-{
-    return (uint16_t)(y + PT_WORLD_OY);
-}
-
-static uint16_t wz(int32_t z)
-{
-    return (uint16_t)(z + PT_WORLD_OZ);
-}
-
-void pt_scene_build(pt_map *m)
-{
-    pt_arith_init();
-
     builder b = begin_map(m);
 
     // Pentagon (clockwise: x up the page, y right), central square, corridor
     // doorway split points, corridor far end, and the second room's corners.
-    uint8_t p0 = add_vert(&b, wx(400), wy(0));
-    uint8_t p1 = add_vert(&b, wx(124), wy(380));
-    uint8_t p2 = add_vert(&b, wx(-324), wy(235));
-    uint8_t p3 = add_vert(&b, wx(-324), wy(-235));
-    uint8_t p4 = add_vert(&b, wx(124), wy(-380));
-    uint8_t s0 = add_vert(&b, wx(100), wy(-100));
-    uint8_t s1 = add_vert(&b, wx(100), wy(100));
-    uint8_t s2 = add_vert(&b, wx(-100), wy(100));
-    uint8_t s3 = add_vert(&b, wx(-100), wy(-100));
-    uint8_t d0 = add_vert(&b, wx(-324), wy(80));
-    uint8_t d1 = add_vert(&b, wx(-324), wy(-80));
-    uint8_t w0 = add_vert(&b, wx(-624), wy(80));
-    uint8_t w1 = add_vert(&b, wx(-624), wy(-80));
-    uint8_t r0 = add_vert(&b, wx(-624), wy(-200));
-    uint8_t r3 = add_vert(&b, wx(-624), wy(200));
-    uint8_t r4 = add_vert(&b, wx(-1024), wy(200));
-    uint8_t r5 = add_vert(&b, wx(-1024), wy(-200));
+    uint8_t p0 = add_vert(&b, 1936, 1536);
+    uint8_t p1 = add_vert(&b, 1660, 1916);
+    uint8_t p2 = add_vert(&b, 1212, 1771);
+    uint8_t p3 = add_vert(&b, 1212, 1301);
+    uint8_t p4 = add_vert(&b, 1660, 1156);
+    uint8_t s0 = add_vert(&b, 1636, 1436);
+    uint8_t s1 = add_vert(&b, 1636, 1636);
+    uint8_t s2 = add_vert(&b, 1436, 1636);
+    uint8_t s3 = add_vert(&b, 1436, 1436);
+    uint8_t d0 = add_vert(&b, 1212, 1616);
+    uint8_t d1 = add_vert(&b, 1212, 1456);
+    uint8_t w0 = add_vert(&b, 912, 1616);
+    uint8_t w1 = add_vert(&b, 912, 1456);
+    uint8_t r0 = add_vert(&b, 912, 1336);
+    uint8_t r3 = add_vert(&b, 912, 1736);
+    uint8_t r4 = add_vert(&b, 512, 1736);
+    uint8_t r5 = add_vert(&b, 512, 1336);
 
     // The staircase shaft out of the second room's west wall: seven cell
-    // boundaries at 40-unit intervals, on the shaft's north (x -764) and
-    // south (x -884) sides; nv[0]/sv[0] are also the doorway split points.
+    // boundaries at 40-unit intervals, on the shaft's north (x 772) and
+    // south (x 652) sides; nv[0]/sv[0] are also the doorway split points.
     uint8_t nv[7];
     uint8_t sv[7];
     for (int32_t i = 0; i < 7; i++) {
-        nv[i] = add_vert(&b, wx(-764), wy(-200 - 40 * i));
-        sv[i] = add_vert(&b, wx(-884), wy(-200 - 40 * i));
+        nv[i] = add_vert(&b, 772, (uint16_t)(1336 - 40 * i));
+        sv[i] = add_vert(&b, 652, (uint16_t)(1336 - 40 * i));
     }
 
     // Past the stairs the corridor runs on a little, then bends twice by
     // roughly thirty degrees, ending in a doorway into the end room; each
     // joint edge is the mitre of its two side walls, and the split door
     // wall's points are collinear so it reads as one straight wall.
-    uint8_t m1n = add_vert(&b, wx(-764), wy(-524));
-    uint8_t m1s = add_vert(&b, wx(-884), wy(-556));
-    uint8_t m2n = add_vert(&b, wx(-720), wy(-601));
-    uint8_t m2s = add_vert(&b, wx(-808), wy(-689));
-    uint8_t en = add_vert(&b, wx(-624), wy(-660));
-    uint8_t es = add_vert(&b, wx(-680), wy(-758));
-    uint8_t ra = add_vert(&b, wx(-524), wy(-485));
-    uint8_t rb = add_vert(&b, wx(-780), wy(-933));
-    uint8_t rc = add_vert(&b, wx(-276), wy(-1221));
-    uint8_t rd = add_vert(&b, wx(-20), wy(-773));
+    uint8_t m1n = add_vert(&b, 772, 1012);
+    uint8_t m1s = add_vert(&b, 652, 980);
+    uint8_t m2n = add_vert(&b, 816, 935);
+    uint8_t m2s = add_vert(&b, 728, 847);
+    uint8_t en = add_vert(&b, 912, 876);
+    uint8_t es = add_vert(&b, 856, 778);
+    uint8_t ra = add_vert(&b, 1012, 1051);
+    uint8_t rb = add_vert(&b, 756, 603);
+    uint8_t rc = add_vert(&b, 1260, 315);
+    uint8_t rd = add_vert(&b, 1516, 763);
 
     // Lighting: one fixed light shining from the north-north-east (x up the
     // page, y right; the toward-light direction is roughly (0.94, 0.34)).
@@ -284,7 +291,7 @@ void pt_scene_build(pt_map *m)
     // Cell 1: the depressed central square (floor 24 units below the ring's);
     // its edge colours are the riser faces seen from inside the pit, lit like
     // the walls: the south riser faces the light, the north riser is dark.
-    begin_cell(&b, wz(24), wz(-160), pit_floor, main_ceil);
+    begin_cell(&b, 536, 352, pit_floor, main_ceil);
     add_edge(&b, s0, pit_dark, false);   // north riser, faces south, in shadow
     add_edge(&b, s1, lit_w, false);      // east riser, faces west
     add_edge(&b, s2, lit_n, false);      // south riser, faces north
@@ -294,19 +301,19 @@ void pt_scene_build(pt_map *m)
     // spokes; all five share identical attributes. The five wall orientations
     // give five distinct brightnesses. The colours of the ring's pit edges
     // are never drawn (the drop face points away).
-    begin_cell(&b, wz(0), wz(-160), main_floor, main_ceil);    // A
+    begin_cell(&b, 512, 352, main_floor, main_ceil);    // A
     add_edge(&b, p0, lit_shadow, false);    // faces south-west, fully away
     add_edge(&b, p1, none, true);
     add_edge(&b, s1, none, false);
     add_edge(&b, s0, none, true);
 
-    begin_cell(&b, wz(0), wz(-160), main_floor, main_ceil);    // B
+    begin_cell(&b, 512, 352, main_floor, main_ceil);    // B
     add_edge(&b, p1, lit_wnw, false);    // faces west-north-west
     add_edge(&b, p2, none, true);
     add_edge(&b, s2, none, false);
     add_edge(&b, s1, none, true);
 
-    begin_cell(&b, wz(0), wz(-160), main_floor, main_ceil);    // C, holds the doorway
+    begin_cell(&b, 512, 352, main_floor, main_ceil);    // C, holds the doorway
     add_edge(&b, p2, lit_n, false);      // faces north
     add_edge(&b, d0, lit_n, false);      // the doorway portal (lintel face, stepped)
     add_edge(&b, d1, lit_n, false);
@@ -314,13 +321,13 @@ void pt_scene_build(pt_map *m)
     add_edge(&b, s3, none, false);
     add_edge(&b, s2, none, true);
 
-    begin_cell(&b, wz(0), wz(-160), main_floor, main_ceil);    // D
+    begin_cell(&b, 512, 352, main_floor, main_ceil);    // D
     add_edge(&b, p3, lit_ene, false);    // faces east-north-east
     add_edge(&b, p4, none, true);
     add_edge(&b, s0, none, false);
     add_edge(&b, s3, none, true);
 
-    begin_cell(&b, wz(0), wz(-160), main_floor, main_ceil);    // E
+    begin_cell(&b, 512, 352, main_floor, main_ceil);    // E
     add_edge(&b, p4, lit_se, false);     // faces south-east
     add_edge(&b, p0, none, true);
     add_edge(&b, s0, none, true);
@@ -330,7 +337,7 @@ void pt_scene_build(pt_map *m)
     // lit down the corridor's axis. The pentagon portal's colour is never
     // drawn (the opening is full height from this side). The corridor's
     // floor runs on from the pentagon's, so the doorway shows no seam.
-    begin_cell(&b, wz(0), wz(-128), main_floor, corr_ceil);
+    begin_cell(&b, 512, 384, main_floor, corr_ceil);
     add_edge(&b, d1, none, false);
     add_edge(&b, d0, lit_w, false);      // east wall, faces west
     add_edge(&b, w0, none, false);       // portal into room 2 (never drawn)
@@ -340,7 +347,7 @@ void pt_scene_build(pt_map *m)
     // portal edge colours both the lintel over the way in and the riser of
     // the step back up. The north wall faces away from the light, so the
     // room darkens toward the way in.
-    begin_cell(&b, wz(32), wz(-160), room2_floor, main_ceil);
+    begin_cell(&b, 544, 352, room2_floor, main_ceil);
     add_edge(&b, r0, lit_shadow, false);    // north wall, faces south
     add_edge(&b, w1, lintel2, false);       // portal back to the corridor (lintel)
     add_edge(&b, w0, lit_shadow, false);
@@ -355,7 +362,7 @@ void pt_scene_build(pt_map *m)
     // first cell's east edge carries the lintel over the doorway seen from
     // inside the stairwell, and west edges the risers seen climbing.
     for (int32_t i = 1; i <= 6; i++) {
-        begin_cell(&b, wz(32 - 16 * i), wz(-176), blue25, blue25);
+        begin_cell(&b, (uint16_t)(544 - 16 * i), 336, blue25, blue25);
         add_edge(&b, nv[i - 1], i == 1 ? blue75 : none, false);
         add_edge(&b, sv[i - 1], blue100, false);    // south wall, faces the light
         add_edge(&b, sv[i], i == 6 ? none : blue75, false);
@@ -366,19 +373,19 @@ void pt_scene_build(pt_map *m)
     // the lit south side and shadowed north side each keep one shade, so
     // the bends read as a soft curve. The door jambs at the end frame the
     // opening a rung brighter than the north wall they join.
-    begin_cell(&b, wz(-64), wz(-176), blue25, blue25);    // straight run
+    begin_cell(&b, 448, 336, blue25, blue25);    // straight run
     add_edge(&b, nv[6], none, false);    // portal from the top stair
     add_edge(&b, sv[6], blue100, false); // south wall, faces the light
     add_edge(&b, m1s, none, false);      // first bend
     add_edge(&b, m1n, blue50, false);    // north wall, in shadow
 
-    begin_cell(&b, wz(-64), wz(-176), blue25, blue25);    // between bends
+    begin_cell(&b, 448, 336, blue25, blue25);    // between bends
     add_edge(&b, m1n, none, false);
     add_edge(&b, m1s, blue100, false);
     add_edge(&b, m2s, none, false);      // second bend
     add_edge(&b, m2n, blue50, false);
 
-    begin_cell(&b, wz(-64), wz(-176), blue25, blue25);    // to the doorway
+    begin_cell(&b, 448, 336, blue25, blue25);    // to the doorway
     add_edge(&b, m2n, none, false);
     add_edge(&b, m2s, blue100, false);
     add_edge(&b, es, none, false);       // the doorway, the corridor's full width
@@ -387,7 +394,7 @@ void pt_scene_build(pt_map *m)
     // Cell 18: the end room, back in the warm shades: level floor, loftier
     // ceiling. The whole door wall is one red face: the pieces either side
     // of the doorway and the lintel above it share the same solid red.
-    begin_cell(&b, wz(-64), wz(-224), main_floor, end_ceil);
+    begin_cell(&b, 448, 288, main_floor, end_ceil);
     add_edge(&b, rd, lintel2, false);    // north-east wall, faces away
     add_edge(&b, ra, lit_ene, false);    // door wall, lit
     add_edge(&b, en, lit_ene, false);    // the doorway (lintel face)

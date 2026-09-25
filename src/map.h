@@ -1,7 +1,7 @@
 // map.h - the world: convex cells with clockwise vertex rings (viewed from
 // above with x up the page, y right, z downwards), twin-linked edges, and the
 // per-edge collision data the editor precomputes. All coordinates are
-// unsigned: the authored scene is translated into positive space.
+// unsigned: the scene is authored directly in positive space.
 
 #ifndef PT_MAP_H_
 #define PT_MAP_H_
@@ -16,11 +16,6 @@
 #define PT_MAX_CELLS 24
 #define PT_MAX_EDGES 96
 #define PT_MAX_CELL_EDGES 8
-
-// The translation applied to the authored scene coordinates.
-#define PT_WORLD_OX 1536
-#define PT_WORLD_OY 1536
-#define PT_WORLD_OZ 512
 
 typedef struct pt_vertex {
     uint16_t x;
@@ -68,11 +63,22 @@ static inline uint8_t pt_map_ring_next(const pt_map *m, uint8_t e)
 
 // Build the demo scene: a pentagonal room with a depressed square in the
 // centre of its floor, and a corridor to a second, square room.
-void pt_scene_build(pt_map *m);
+void pt_scene_init(pt_map *m);
 
 // Check every structural invariant (twins, convexity, winding, soft-edge
 // attribute equality, collision data); trips an assert on failure in debug,
 // returns false in release.
 bool pt_map_validate(const pt_map *m);
+
+// The signed distance of a point from an edge's line, s16.8: positive on the
+// cell's interior side.
+int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y);
+
+// True when the point lies inside the cell (boundary included).
+bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y);
+
+// The cell containing the point, 0 (the outside) when none does; a point on
+// a shared edge goes to the lower-numbered cell.
+uint8_t pt_map_find_cell(const pt_map *m, uint16_t x, uint16_t y);
 
 #endif

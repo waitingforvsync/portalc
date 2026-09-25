@@ -1,6 +1,7 @@
 // test_arith.c - the table arithmetic against wide-integer references.
 
 #include "arith.h"
+#include "mode5.h"
 #include "richc/test.h"
 
 RC_TEST_GROUP_DATA(arith) {
@@ -139,13 +140,14 @@ RC_TEST_STEP(arith, project_row, fix)
     static const int16_t hs[] = {-400, -80, -1, 0, 1, 80, 136, 400};
     for (uint32_t i = 0; i < sizeof(hs) / sizeof(hs[0]); i++) {
         int16_t h = hs[i];
-        uint16_t d = (uint16_t)(2 * (h < 0 ? -h : h));
+        uint32_t uh = (uint32_t)(h < 0 ? -h : h);
+        uint16_t d = (uint16_t)((uh * 128 + PT_SCREEN_HEIGHT - 1) / PT_SCREEN_HEIGHT);
         if (d == 0)
             d = 1;
         for (uint16_t x = d; x < 8000; x = (uint16_t)(x * 2 + 1)) {
-            int32_t exact = 32 + (64 * (int32_t)h) / (int32_t)x;
+            int32_t exact = PT_SCREEN_HEIGHT / 2 + (64 * (int32_t)h) / (int32_t)x;
             int32_t got = pt_project_row(h, x);
-            RC_CHECK(got >= 0 && got <= 64, ==, true);
+            RC_CHECK(got >= 0 && got <= PT_SCREEN_HEIGHT, ==, true);
             int32_t err = got - exact;
             RC_CHECK(err >= -2 && err <= 2, ==, true);
         }

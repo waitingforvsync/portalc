@@ -85,7 +85,9 @@ uint8_t pt_project_col(int16_t y, uint16_t x);
 // The same projection at depth d kept as u8.8 (the near clip's sx*).
 uint16_t pt_project_col_q8(int16_t y, uint16_t d);
 
-// 32 + 64*h/x: the screen row of a line endpoint; needs x >= 2|h|.
+// PT_SCREEN_HEIGHT/2 + 64*h/x: the screen row of a line endpoint; needs the
+// endpoint on screen vertically, x >= 128|h|/PT_SCREEN_HEIGHT (the 64-row
+// screen's classic x >= 2|h|).
 uint8_t pt_project_row(int16_t h, uint16_t x);
 
 #endif

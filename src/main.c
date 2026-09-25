@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "arith.h"
 #include "camera.h"
 #include "map.h"
 #include "mode5.h"
@@ -22,6 +23,11 @@
 #include "richc/gfx/texture.h"
 
 #define TICK_SECONDS (1.0 / 50.0)
+
+// The window: the full BBC display frame, opened at an integer scale.
+#define PT_WINDOW_WIDTH 320
+#define PT_WINDOW_HEIGHT 256
+#define PT_WINDOW_SCALE 3
 
 typedef struct vertex {
     rc_vec2f pos;
@@ -60,7 +66,7 @@ static struct {
     pt_map map;
     pt_render render;
     pt_camera camera;
-    uint8_t rgba[PT_SCREEN_W * PT_SCREEN_SCANLINES * 4];
+    uint8_t rgba[PT_SCREEN_WIDTH * PT_SCREEN_SCANLINES * 4];
     double tick_acc;
     bool keys[512];
     bool quit;
@@ -137,7 +143,7 @@ static void on_render(void *ctx, rc_vec2i size)
 
     rc_gfx_texture_update(state.screen, 0, 0,
                           rc_box2i_make_pos_size((rc_vec2i) {0, 0},
-                                                 (rc_vec2i) {PT_SCREEN_W, PT_SCREEN_SCANLINES}),
+                                                 (rc_vec2i) {PT_SCREEN_WIDTH, PT_SCREEN_SCANLINES}),
                           (rc_view_bytes) {.data = state.rgba, .num = sizeof(state.rgba)});
 
     rc_gfx_encoder *enc = rc_gfx_encoder_begin(&state.frame_arena);
@@ -150,13 +156,13 @@ static void on_render(void *ctx, rc_vec2i size)
         .label = RC_STR("present"),
     });
 
-    // fit the full 320x256 BBC frame to the window, then centre the 256x128
-    // MODE 5 area within it; the surround is the black border
-    float s = (float)size.x / 320.0f;
-    if ((float)size.y / 256.0f < s)
-        s = (float)size.y / 256.0f;
-    int32_t vw = (int32_t)(256.0f * s);
-    int32_t vh = (int32_t)(128.0f * s);
+    // fit the full BBC frame to the window, then centre the MODE 5 playfield
+    // within it (its pixels are double wide); the surround is the black border
+    float s = (float)size.x / (float)PT_WINDOW_WIDTH;
+    if ((float)size.y / (float)PT_WINDOW_HEIGHT < s)
+        s = (float)size.y / (float)PT_WINDOW_HEIGHT;
+    int32_t vw = (int32_t)((float)(PT_SCREEN_WIDTH * 2) * s);
+    int32_t vh = (int32_t)((float)PT_SCREEN_SCANLINES * s);
     rc_gfx_encoder_set_viewport(enc,
                                 rc_box2i_make_pos_size(
                                     (rc_vec2i) {(size.x - vw) / 2, (size.y - vh) / 2},
@@ -188,7 +194,7 @@ static void gfx_setup(void)
 
     state.screen = rc_gfx_texture_make(&(rc_gfx_texture_desc) {
         .format = RC_GFX_TEXTURE_FORMAT_RGBA8_SRGB,
-        .size = {PT_SCREEN_W, PT_SCREEN_SCANLINES},
+        .size = {PT_SCREEN_WIDTH, PT_SCREEN_SCANLINES},
         .usage = RC_GFX_TEXTURE_USAGE_SAMPLED | RC_GFX_TEXTURE_USAGE_COPY_DST,
         .label = RC_STR("mode5 screen"),
     });
@@ -270,14 +276,15 @@ int main(void)
     state.arena = rc_arena_make_default();
     state.frame_arena = rc_arena_make_default();
 
-    pt_scene_build(&state.map);
+    pt_arith_init();
+    pt_scene_init(&state.map);
     pt_render_init(&state.render, &state.map);
-    pt_camera_init(&state.camera, &state.map, 2, (uint16_t)(PT_WORLD_OX + 220),
-                   (uint16_t)(PT_WORLD_OY + 0), 128);
+    pt_camera_init(&state.camera, &state.map, PT_CAM_START_X, PT_CAM_START_Y,
+                   PT_CAM_START_ANGLE);
 
     rc_app_init(&(rc_app_desc) {
         .title = RC_STR("portalc"),
-        .size = {320 * 3, 256 * 3},
+        .size = {PT_WINDOW_WIDTH * PT_WINDOW_SCALE, PT_WINDOW_HEIGHT * PT_WINDOW_SCALE},
         .resizable = true,
         .callbacks = {
             .on_key_down = on_key_down,

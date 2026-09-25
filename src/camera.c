@@ -140,10 +140,10 @@ static uint32_t apply(uint32_t p, int32_t d)
     return p + (uint32_t)d;
 }
 
-void pt_camera_init(pt_camera *c, const pt_map *m, uint8_t cell, uint16_t x, uint16_t y,
-                    uint8_t angle)
+void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8_t angle)
 {
-    RC_ASSERT(cell >= 1 && cell < m->num_cells);
+    uint8_t cell = pt_map_find_cell(m, x, y);
+    RC_ASSERT(cell != 0);
 
     *c = (pt_camera) {
         .x = (uint32_t)x << 8,

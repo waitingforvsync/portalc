@@ -73,19 +73,23 @@ own test.
 
 ### 3.3 Screen
 
-MODE 5, 128 pixels wide, 2:1 (double-width) pixels, 128 scanlines. The canvas the
-engine works in is **128 columns × 64 rows**: a row is a pair of scanlines (§5), and
-every line endpoint, bound and sprite run is placed in rows. x right, y down.
+MODE 5, 128 pixels wide, 2:1 (double-width) pixels, H·2 scanlines. The canvas the
+engine works in is **128 columns × H rows**, where `H = PT_SCREEN_HEIGHT` (80 as
+built; 64 throughout the worked examples below): a row is a pair of scanlines (§5),
+and every line endpoint, bound and sprite run is placed in rows. x right, y down.
 Horizontal half-FOV is 45°: 64 pixels either side of centre.
 
 ```
 sx = 64 + 64·y/x            // column, 0..128
-sy = 32 + 64·h/x            // row,    0..64 when |h| ≤ x/2
+sy = H/2 + 64·h/x           // row,    0..H when 64·|h| ≤ x·H/2
 ```
 
-A row is as tall as a pixel is wide, so the picture is undistorted. Vertical half-FOV
-is atan(0.5) ≈ 26.6°. A line's endpoint is on screen vertically iff `x ≥ 2|h|`
-(§7.7). Rows fit in 6 bits; row 64 is used as the off-screen marker.
+A row is as tall as a pixel is wide and the vertical scale matches the horizontal,
+so the picture is undistorted at any H; a taller screen widens the vertical FOV
+(atan(H/128), ≈ 26.6° at H = 64, ≈ 32° at H = 80) rather than stretching the view.
+A line's endpoint is on screen vertically iff `x ≥ 128·|h|/H` — the 64-row
+screen's classic `x ≥ 2|h|`, `8|h|/5` at H = 80 (§7.7). Rows fit in a byte; row H
+is used as the off-screen marker.
 
 ### 3.4 Column convention
 
@@ -121,14 +125,15 @@ vertex between them and therefore partition the columns exactly.
 | Clip parameter `t`             | u0.8                 | `[0, 1)`; 1.0 cannot occur in the clips of §7.6/§7.7   |
 | `1/n`                          | u16 + shift count    | Normalised                                             |
 | `sx`, column                   | u8                   | `0..128`; a u8.8 form is used once, in §7.7            |
-| `sy`, `y0`                     | u8                   | `0..63` plotted; `64` marks an off-screen piece        |
+| `sy`, `y0`                     | u8                   | `0..H−1` plotted; `H` marks an off-screen piece        |
 | Gradient `g`                   | sign + u6.8          | `|g| < 64` once `dx ≥ 2`; `dx = 1` never uses `g`       |
 | Line evaluation `y(c)`         | u8.8 (transient)     | `y0 + (c − x0)·g`                                       |
 | Crossing quotient (§7.9)       | u7 columns, clamped  |                                                        |
 
 ## 5. Fill technique
 
-Double-buffered shrunken MODE 5, 128 wide × 128 scanlines (64 rows), 4K per buffer. In-place fill
+Double-buffered shrunken MODE 5, 128 wide × H·2 scanlines (H rows; 5K per buffer
+at H = 80). In-place fill
 and clear for now (§8.3).
 
 **EOR vertical fill.** For each byte column, walk downwards doing
@@ -171,7 +176,7 @@ used throughout §7.9:
 ```
 x0      u8      first column (inclusive)
 x1      u8      last column + 1 (exclusive)
-y0      u8      row at column x0; y0 >= 64 starts off screen (a falling piece may come on later)
+y0      u8      row at column x0; y0 >= H starts off screen (a falling piece may come on later)
 g       s7.8    gradient, sign bit + u7.8 magnitude, rows per column
 cE, cO  u8      colour patterns; cE | cO == 0 means unplotted
 next    u8      next piece in this piece's chain (0 = end)
@@ -207,12 +212,12 @@ walked.
 render_frame():
     pool.reset()
     rootT = alloc(x0=0, x1=128, y0=0,  g=0, colour=camera_cell.ceiling)   // plotted: initialises the fill
-    rootB = alloc(x0=0, x1=128, y0=64, g=0, colour=0)                     // dummy, never plotted
+    rootB = alloc(x0=0, x1=128, y0=H, g=0, colour=0)                      // dummy, never plotted
     push(cell=camera_cell, xl=0, xr=128, T=rootT, B=rootB, start=first_edge_camera())
     while stack not empty:
         walk(top)                  // may push; a pushed child runs before the parent resumes
                                    // push records sprite clip pieces (§9.3), pop issues sprites (§9.4)
-    plot every pool piece with colour != 0 and y0 < 64
+    plot every pool piece with colour != 0 and y0 < H
     sprite_pass()                  // §9.5: reads the plotted toggles, adds sprite toggles and cancels
     fill (even pass, odd pass)
 ```
@@ -353,38 +358,40 @@ coordinate is implied by the ray (`y* = −x*` or `y* = x*`).
 An endpoint needs only `(x, sx)` after this step; the `h/x` projections of §7.7 use
 `x`, and everything else is in screen space.
 
-### 7.7 Near clipping (bounding rows to 0..64)
+### 7.7 Near clipping (bounding rows to 0..H)
 
-A line at relative height `h` has row `32 + 64·h/x` at depth `x`, which leaves the
+A line at relative height `h` has row `H/2 + 64·h/x` at depth `x`, which leaves the
 screen exactly when
 
 ```
-x < 2·|h|          // off the top for h < 0 (ceilings), off the bottom for h > 0 (floors)
+x < 128·|h|/H      // off the top for h < 0 (ceilings), off the bottom for h > 0 (floors)
 ```
+
+(`2·|h|` on the 64-row screen; `8·|h|/5` at H = 80, shifts and adds.)
 
 `make_line` produces one or two pieces from the side-clipped endpoints `E0`
 (left, columns from `E0.sx`) and `E1` (right), for a height `h` and colour `col`:
 
 ```
 make_line(E0, E1, h, col):
-    d     = 2·|h|
-    edge  = (h < 0) ? 0 : 64                         // the screen edge this line can leave by
+    d     = 128·|h|/H, rounded up
+    edge  = (h < 0) ? 0 : H                          // the screen edge this line can leave by
     near0 = E0.x < d ; near1 = E1.x < d
     if near0 and near1:
-        return [ flat(E0.sx, E1.sx, edge, col) ]     // y0 = 0 → merges into the top bound; y0 = 128 → off screen
+        return [ flat(E0.sx, E1.sx, edge, col) ]     // y0 = 0 → merges into the top bound; y0 = H → off screen
     if not near0 and not near1:
-        sy0 = 32 + 64·h/E0.x ; sy1 = 32 + 64·h/E1.x
+        sy0 = H/2 + 64·h/E0.x ; sy1 = H/2 + 64·h/E1.x
         return [ line(E0.sx, E1.sx, sy0, (sy1 − sy0)/(E1.sx − E0.sx), col) ]
     // exactly one endpoint is too close: clip the edge at depth d
     (N, F) = near0 ? (E0, E1) : (E1, E0)             // near and far endpoints
     t   = (d − N.x) / (F.x − N.x)                    // u0.8
     y*  = N.y + t·(F.y − N.y)                        // lateral view coordinate at depth d
     sx* = 64 + 64·y*/d                               // u8.8, keep the fraction; 1/d cached per (cell, ceiling|floor) per frame
-    syF = 32 + 64·h/F.x
+    syF = H/2 + 64·h/F.x
     if near0:                                        // near end on the left
         c*  = ceil(sx*)
         g   = (syF − edge) / (E1.sx − sx*)           // fractional dx: same reciprocal routine, extra shift
-        y0  = edge + (c* − sx*)·g,  clamped to 0..63
+        y0  = edge + (c* − sx*)·g,  rounded to nearest and clamped to 0..H
         return [ flat(E0.sx, c*, edge, col), line(c*, E1.sx, y0, g, col) ]
     else:                                            // near end on the right
         c*  = ceil(sx*)
@@ -397,7 +404,7 @@ endpoint is `∓N.x` (on the ray); of an in-frustum endpoint it is the transform
 
 Starting the sloped piece at `ceil(sx*)` keeps its `y0` inside the screen and exact
 at that column; the column `floor(sx*)` goes to the flat piece, at most `|g|` rows
-off, in one column. After this step every `y0` is in `0..64` and every gradient of
+off, in one column. After this step every `y0` is in `0..H` and every gradient of
 a piece wider than one column fits sign + u6.8.
 
 Because the near clip runs after the side clip, the depths it sees are the
@@ -591,7 +598,7 @@ Fast path bookkeeping: `Tmax` is the largest row of any top-chain piece over the
 span and `Bmin` the smallest of any bottom-chain piece; both are maintained while
 appending (the endpoint rows are already computed during the walk), and the
 ceiling-forming line uses `childB`'s `Bmin`. For the root portal `Tmax = 0` and
-`Bmin = 64`, so every line of the camera cell skips the walk.
+`Bmin = H`, so every line of the camera cell skips the walk.
 
 #### 7.9.4 Closed columns
 
@@ -656,8 +663,8 @@ gets fresh pieces.
 
 ### 8.1 Plotting lines
 
-Iterate the pool; skip pieces with `colour == 0`, and rising pieces with `y0 ≥ 64`
-(a falling piece starting at 64 comes on screen where its row drops under 63.5).
+Iterate the pool; skip pieces with `colour == 0`, and rising pieces with `y0 ≥ H`
+(a falling piece starting at H comes on screen where its row drops under H − ½).
 The plotted row is the **nearest** row, `(y + 0x80) >> 8` — the same convention as
 every re-anchor (§6 split, §7.9 emit), so a piece split at a cut plots exactly the
 rows the unsplit line would have and a chain seam cannot notch the boundary; a
@@ -1023,8 +1030,9 @@ common case and under a thousand when sliding round a corner.
 ## 13. Verification done so far
 
 The edge-finding rules (§7.4, §7.5), the classification with mirrored projection for
-vertices behind the camera (§7.3), the side-clip formulas (§7.6) and the `x = 2|h|`
-near-clip threshold (§7.7) were checked against exact ray casting on 60,000 random
+vertices behind the camera (§7.3), the side-clip formulas (§7.6) and the (then
+`x = 2|h|`, H = 64) near-clip threshold (§7.7) were checked against exact ray
+casting on 60,000 random
 convex cells in double precision, including ~10,000 vertices behind the camera and
 cases where a single edge is clipped at both frustum rays. No failures.
 

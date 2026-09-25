@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdbool.h>
 
+#include "mode5.h"
 #include "richc/macros.h"
 
 // Quarter-square tables: sq1[i] = i*i/4, sq2[i] = (i-255)^2/4, both floored.
@@ -250,11 +251,11 @@ uint8_t pt_project_row(int16_t h, uint16_t x)
     RC_ASSERT(x > 0);
 
     uint16_t uh = (uint16_t)(h < 0 ? -h : h);
-    RC_ASSERT(x >= (uint16_t)(uh << 1));
+    RC_ASSERT((uint32_t)x * PT_SCREEN_HEIGHT >= (uint32_t)uh * 128);    // on screen vertically
 
     pt_recip rc = pt_recip16(x);
     uint32_t q = mulwide(uh, rc.r) >> (10 + rc.s);
-    if (q > 32)
-        q = 32;
-    return (uint8_t)(h < 0 ? 32 - q : 32 + q);
+    if (q > PT_SCREEN_HEIGHT / 2)
+        q = PT_SCREEN_HEIGHT / 2;
+    return (uint8_t)(h < 0 ? PT_SCREEN_HEIGHT / 2 - q : PT_SCREEN_HEIGHT / 2 + q);
 }

@@ -13,6 +13,11 @@
 #define PT_CAM_MOVE_SPEED (8u << 8)    // units per tick, u16.8
 #define PT_CAM_TURN_SPEED 2            // 256ths of a turn per tick
 
+// the start pose in the demo scene
+#define PT_CAM_START_X 1756
+#define PT_CAM_START_Y 1536
+#define PT_CAM_START_ANGLE 128
+
 // input bits for one tick
 enum {
     PT_IN_FWD = 1 << 0,
@@ -30,9 +35,8 @@ typedef struct pt_camera {
     uint8_t cell;
 } pt_camera;
 
-// Place the camera; the position must be inside the given cell.
-void pt_camera_init(pt_camera *c, const pt_map *m, uint8_t cell, uint16_t x, uint16_t y,
-                    uint8_t angle);
+// Place the camera; the position must lie inside some cell.
+void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8_t angle);
 
 // Advance one fixed tick: turn, move with sliding collision, cross portals.
 void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input);

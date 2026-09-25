@@ -4,6 +4,7 @@
 
 #include <string.h>
 
+#include "arith.h"
 #include "camera.h"
 #include "map.h"
 #include "render.h"
@@ -28,7 +29,8 @@ static void centroid(const pt_map *m, uint8_t cell, uint16_t *x, uint16_t *y)
 
 RC_TEST(render, all_cells_all_angles)
 {
-    pt_scene_build(&map_);
+    pt_arith_init();
+    pt_scene_init(&map_);
     pt_render_init(&render_, &map_);
 
     for (uint8_t cell = 1; cell < map_.num_cells; cell++) {
@@ -45,23 +47,25 @@ RC_TEST(render, all_cells_all_angles)
 
 RC_TEST(render, deterministic)
 {
-    pt_scene_build(&map_);
+    pt_arith_init();
+    pt_scene_init(&map_);
     pt_render_init(&render_, &map_);
 
     static uint8_t fb0[PT_FB_BYTES];
-    pt_render_frame(&render_, PT_WORLD_OX + 220, PT_WORLD_OY + 0, 128, 2);
+    pt_render_frame(&render_, 1756, 1536, 128, 2);
     memcpy(fb0, render_.fb, PT_FB_BYTES);
-    pt_render_frame(&render_, PT_WORLD_OX + 220, PT_WORLD_OY + 0, 128, 2);
+    pt_render_frame(&render_, 1756, 1536, 128, 2);
     RC_CHECK(memcmp(fb0, render_.fb, PT_FB_BYTES), ==, 0);
 }
 
 RC_TEST(render, random_walkthrough)
 {
-    pt_scene_build(&map_);
+    pt_arith_init();
+    pt_scene_init(&map_);
     pt_render_init(&render_, &map_);
 
     pt_camera cam;
-    pt_camera_init(&cam, &map_, 2, PT_WORLD_OX + 220, PT_WORLD_OY + 0, 128);
+    pt_camera_init(&cam, &map_, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
 
     rc_random rng = rc_random_make(12345);
     uint8_t input = PT_IN_FWD;

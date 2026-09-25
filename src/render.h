@@ -17,7 +17,7 @@
 #define PT_POOL_SIZE 256      // piece 0 is the null link
 #define PT_MAX_DEPTH 24
 #define PT_MAX_CLOSED 8
-#define PT_EYE_HEIGHT 80
+#define PT_CAM_HEIGHT 80      // eye height above the current cell's floor
 
 // A gradient is a u7.8 magnitude with the sign in bit 15 (not two's
 // complement); zero is always stored positive.
@@ -42,7 +42,7 @@ static inline uint8_t pt_g_isneg(uint16_t g)
 typedef struct pt_piece {
     uint8_t x0;
     uint8_t x1;
-    uint8_t y0;      // row at x0; 64 marks off screen (flat floor markers)
+    uint8_t y0;      // row at x0; PT_SCREEN_HEIGHT marks off screen (flat floor markers)
     uint16_t g;      // gradient, sign bit + u7.8 magnitude, rows per column
     uint8_t ce;      // colour patterns; ce | co == 0 means unplotted
     uint8_t co;

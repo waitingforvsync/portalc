@@ -16,7 +16,7 @@ void pt_mode5_clear(uint8_t *fb)
 
 void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat)
 {
-    RC_ASSERT(col < PT_SCREEN_W && row < PT_SCREEN_ROWS);
+    RC_ASSERT(col < PT_SCREEN_WIDTH && row < PT_SCREEN_HEIGHT);
 
     uint8_t mask = pixmask_[col & 3];
     uint16_t off = pt_mode5_offset(col >> 2, (uint8_t)(row << 1));
@@ -52,7 +52,7 @@ void pt_mode5_fill(uint8_t *fb)
 void pt_mode5_to_rgba(const uint8_t *fb, uint8_t *rgba)
 {
     for (uint32_t sl = 0; sl < PT_SCREEN_SCANLINES; sl++) {
-        uint8_t *out = rgba + sl * PT_SCREEN_W * 4;
+        uint8_t *out = rgba + sl * PT_SCREEN_WIDTH * 4;
         for (uint32_t bc = 0; bc < 32; bc++) {
             uint8_t b = fb[pt_mode5_offset((uint8_t)bc, (uint8_t)sl)];
             for (uint32_t p = 0; p < 4; p++) {

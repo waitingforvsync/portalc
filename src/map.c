@@ -256,7 +256,8 @@ void pt_scene_build(pt_map *m)
     pt_pattern main_floor = pt_pattern_blend(PT_BLACK, PT_RED, 6);
     pt_pattern main_ceil = pt_pattern_blend(PT_BLACK, PT_BLUE, 2);
     pt_pattern pit_floor = pt_pattern_solid(PT_GREEN);    // the one pure green
-    pt_pattern corr_ceil = pt_pattern_blend(PT_BLACK, PT_RED, 2);
+    pt_pattern corr_ceil = pt_pattern_blend(PT_BLACK, PT_RED, 4);
+    pt_pattern end_ceil = pt_pattern_blend(PT_BLACK, PT_RED, 2);
     pt_pattern room2_floor = pt_pattern_blend(PT_BLACK, PT_GREEN, 4);
 
     // walls by facing, darkest (away from the light) to brightest (toward)
@@ -307,7 +308,7 @@ void pt_scene_build(pt_map *m)
 
     begin_cell(&b, wz(0), wz(-160), main_floor, main_ceil);    // C, holds the doorway
     add_edge(&b, p2, lit_n, false);      // faces north
-    add_edge(&b, d0, lit_ene, false);    // the doorway portal (lintel face, stepped)
+    add_edge(&b, d0, lit_n, false);      // the doorway portal (lintel face, stepped)
     add_edge(&b, d1, lit_n, false);
     add_edge(&b, p3, none, true);
     add_edge(&b, s3, none, false);
@@ -344,7 +345,7 @@ void pt_scene_build(pt_map *m)
     add_edge(&b, w1, lintel2, false);       // portal back to the corridor (lintel)
     add_edge(&b, w0, lit_shadow, false);
     add_edge(&b, r3, lit_wnw, false);       // east wall, faces west
-    add_edge(&b, r4, lit_n, false);         // far wall, faces north
+    add_edge(&b, r4, lit_e, false);         // far wall (red-blue check)
     add_edge(&b, r5, lit_e2, false);        // west wall up to the stair doorway
     add_edge(&b, sv[0], blue75, false);     // stair doorway (first riser face)
     add_edge(&b, nv[0], lit_e2, false);     // west wall beyond the doorway
@@ -386,7 +387,7 @@ void pt_scene_build(pt_map *m)
     // Cell 18: the end room, back in the warm shades: level floor, loftier
     // ceiling. The whole door wall is one red face: the pieces either side
     // of the doorway and the lintel above it share the same solid red.
-    begin_cell(&b, wz(-64), wz(-224), main_floor, corr_ceil);
+    begin_cell(&b, wz(-64), wz(-224), main_floor, end_ceil);
     add_edge(&b, rd, lintel2, false);    // north-east wall, faces away
     add_edge(&b, ra, lit_ene, false);    // door wall, lit
     add_edge(&b, en, lit_ene, false);    // the doorway (lintel face)

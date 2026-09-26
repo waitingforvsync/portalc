@@ -30,8 +30,8 @@ static uint8_t add_vert(builder *b, uint16_t x, uint16_t y)
     return m->num_verts++;
 }
 
-static uint8_t begin_cell(builder *b, uint16_t floor_z, uint16_t ceil_z, pt_pattern floor,
-                          pt_pattern ceil)
+static uint8_t begin_cell(builder *b, uint16_t floor_z, uint16_t ceil_z, uint8_t floor,
+                          uint8_t ceil)
 {
     pt_map *m = b->m;
     RC_PANIC(m->num_cells < PT_MAX_CELLS);
@@ -51,7 +51,7 @@ static uint8_t begin_cell(builder *b, uint16_t floor_z, uint16_t ceil_z, pt_patt
     return b->cur_cell;
 }
 
-static void add_edge(builder *b, uint8_t v, pt_pattern wall, bool soft)
+static void add_edge(builder *b, uint8_t v, uint8_t colour)
 {
     pt_map *m = b->m;
     RC_PANIC(m->num_edges < PT_MAX_EDGES);
@@ -63,8 +63,7 @@ static void add_edge(builder *b, uint8_t v, pt_pattern wall, bool soft)
     m->edges[m->num_edges++] = (pt_edge) {
         .v0 = v,
         .cell = b->cur_cell,
-        .soft = soft,
-        .wall = wall,
+        .colour = colour,
     };
     c->num_edges++;
 }
@@ -90,10 +89,9 @@ static void end_map(builder *b)
             if (m->edges[j].v0 == v1 && edge_v1(m, j) == e->v0) {
                 RC_ASSERT(e->adj == 0);    // exactly one neighbour per edge
                 e->adj = m->edges[j].cell;
-                e->twin = j;
             }
         }
-        RC_ASSERT(!e->soft || e->adj != 0);
+        RC_ASSERT(e->colour != PT_EDGE_SOFT || e->adj != 0);
     }
 
     // collision data: unit direction, inward normal, offset, length
@@ -143,17 +141,17 @@ bool pt_map_validate(const pt_map *m)
 
             // twin symmetry and soft-edge attribute equality
             if (e->adj != 0) {
-                const pt_edge *t = &m->edges[e->twin];
-                if (t->cell != e->adj || t->adj != e->cell || t->twin != ei)
+                uint8_t ti = pt_map_twin(m, ei);
+                const pt_edge *t = &m->edges[ti];
+                if (t->cell != e->adj || t->adj != e->cell || pt_map_twin(m, ti) != ei)
                     return false;
-                if (m->edges[e->twin].v0 != edge_v1(m, ei) || edge_v1(m, e->twin) != e->v0)
+                if (t->v0 != edge_v1(m, ei) || edge_v1(m, ti) != e->v0)
                     return false;
-                if (e->soft) {
+                if (e->colour == PT_EDGE_SOFT) {
                     const pt_cell *a = &m->cells[e->cell];
                     const pt_cell *b = &m->cells[e->adj];
-                    if (!t->soft || a->floor_z != b->floor_z || a->ceil_z != b->ceil_z
-                        || a->floor.e != b->floor.e || a->floor.o != b->floor.o
-                        || a->ceil.e != b->ceil.e || a->ceil.o != b->ceil.o)
+                    if (t->colour != PT_EDGE_SOFT || a->floor_z != b->floor_z
+                        || a->ceil_z != b->ceil_z || a->floor != b->floor || a->ceil != b->ceil)
                         return false;
                 }
             }
@@ -183,6 +181,23 @@ int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
     const pt_edge *ed = &m->edges[e];
     const pt_vertex *a = &m->verts[ed->v0];
     return (int32_t)(int16_t)(x - a->x) * ed->nx + (int32_t)(int16_t)(y - a->y) * ed->ny;
+}
+
+uint8_t pt_map_twin(const pt_map *m, uint8_t e)
+{
+    RC_ASSERT(m->edges[e].adj != 0);
+
+    // the twin starts at our end vertex: rings are clockwise, so the shared
+    // wall runs the other way round in the neighbour
+    uint8_t v1 = m->edges[pt_map_ring_next(m, e)].v0;
+    const pt_cell *c = &m->cells[m->edges[e].adj];
+    for (uint8_t k = 0; k < c->num_edges; k++) {
+        uint8_t t = (uint8_t)(c->first_edge + k);
+        if (m->edges[t].v0 == v1)
+            return t;
+    }
+    RC_PANIC(0);
+    return 0;
 }
 
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y)
@@ -265,79 +280,80 @@ void pt_scene_init(pt_map *m)
     // riser), never a full wall. Floors and ceilings come from the dark end
     // of the range, and the pit floor stays the only pure saturated green.
 
-    // horizontal surfaces
-    pt_pattern main_floor = pt_shade(PT_SH_KRRR);
-    pt_pattern main_ceil = pt_shade(PT_SH_KKKB);
-    pt_pattern pit_floor = pt_shade(PT_SH_GGGG);    // the one pure green
-    pt_pattern corr_ceil = pt_shade(PT_SH_KKRR);
-    pt_pattern end_ceil = pt_shade(PT_SH_KKKR);
-    pt_pattern room2_floor = pt_shade(PT_SH_KKGG);
+    // horizontal surfaces: catalogue shade indices
+    uint8_t main_floor = PT_SH_KRRR;
+    uint8_t main_ceil = PT_SH_KKKB;
+    uint8_t pit_floor = PT_SH_GGGG;    // the one pure green
+    uint8_t corr_ceil = PT_SH_KKRR;
+    uint8_t end_ceil = PT_SH_KKKR;
+    uint8_t room2_floor = PT_SH_KKGG;
 
-    // walls by facing, darkest (away from the light) to brightest (toward)
-    pt_pattern pit_dark = pt_shade(PT_SH_KKKK);           // small face only
-    pt_pattern lit_shadow = pt_shade(PT_SH_KKBB);
-    pt_pattern lit_se = pt_shade(PT_SH_BBBB);
-    pt_pattern lit_w = pt_shade(PT_SH_KBBB);
-    pt_pattern lit_wnw = pt_shade(PT_SH_BBBR);
-    pt_pattern lit_e = pt_shade(PT_SH_BBRR);
-    pt_pattern lit_e2 = pt_shade(PT_SH_BRRR);
-    pt_pattern room2_far = pt_shade(PT_SH_KBRR);          // room 2's far wall only
-    pt_pattern lit_ene = pt_shade(PT_SH_RRRR);
-    pt_pattern lit_n = pt_shade(PT_SH_RRGG);              // fully lit
-    pt_pattern lintel2 = pt_shade(PT_SH_KKRR);
-    pt_pattern none = {0};
+    // walls by facing, darkest (away from the light) to brightest (toward):
+    // edge colours, a shade + 1
+    uint8_t pit_dark = PT_EDGE_COLOUR(PT_SH_KKKK);           // small face only
+    uint8_t lit_shadow = PT_EDGE_COLOUR(PT_SH_KKBB);
+    uint8_t lit_se = PT_EDGE_COLOUR(PT_SH_BBBB);
+    uint8_t lit_w = PT_EDGE_COLOUR(PT_SH_KBBB);
+    uint8_t lit_wnw = PT_EDGE_COLOUR(PT_SH_BBBR);
+    uint8_t lit_e = PT_EDGE_COLOUR(PT_SH_BBRR);
+    uint8_t lit_e2 = PT_EDGE_COLOUR(PT_SH_BRRR);
+    uint8_t room2_far = PT_EDGE_COLOUR(PT_SH_KBRR);          // room 2's far wall only
+    uint8_t lit_ene = PT_EDGE_COLOUR(PT_SH_RRRR);
+    uint8_t lit_n = PT_EDGE_COLOUR(PT_SH_RRGG);              // fully lit
+    uint8_t lintel2 = PT_EDGE_COLOUR(PT_SH_KKRR);
+    uint8_t none = PT_EDGE_COLOUR(PT_SH_KKKK);    // featureless black
 
     // The staircase, elbow and end room use shades of blue only: the four
     // quarter-density rungs, darkest for the treads and ceilings, brightest
     // for the south walls facing the light.
-    pt_pattern blue25 = pt_shade(PT_SH_KKKB);
-    pt_pattern blue50 = pt_shade(PT_SH_KKBB);
-    pt_pattern blue75 = pt_shade(PT_SH_KBBB);
-    pt_pattern blue100 = pt_shade(PT_SH_BBBB);
+    uint8_t blue25 = PT_SH_KKKB;    // treads and ceilings (a cell surface)
+    uint8_t blue50 = PT_EDGE_COLOUR(PT_SH_KKBB);
+    uint8_t blue75 = PT_EDGE_COLOUR(PT_SH_KBBB);
+    uint8_t blue100 = PT_EDGE_COLOUR(PT_SH_BBBB);
 
     // Cell 1: the depressed central square (floor 24 units below the ring's);
     // its edge colours are the riser faces seen from inside the pit, lit like
     // the walls: the south riser faces the light, the north riser is dark.
     begin_cell(&b, 536, 352, pit_floor, main_ceil);
-    add_edge(&b, s0, pit_dark, false);   // north riser, faces south, in shadow
-    add_edge(&b, s1, lit_w, false);      // east riser, faces west
-    add_edge(&b, s2, lit_n, false);      // south riser, faces north
-    add_edge(&b, s3, lit_e, false);      // west riser, faces east
+    add_edge(&b, s0, pit_dark);   // north riser, faces south, in shadow
+    add_edge(&b, s1, lit_w);      // east riser, faces west
+    add_edge(&b, s2, lit_n);      // south riser, faces north
+    add_edge(&b, s3, lit_e);      // west riser, faces east
 
     // Cells 2..6: the pentagon ring around the square, split convex by soft
     // spokes; all five share identical attributes. The five wall orientations
     // give five distinct brightnesses. The colours of the ring's pit edges
     // are never drawn (the drop face points away).
     begin_cell(&b, 512, 352, main_floor, main_ceil);    // A
-    add_edge(&b, p0, lit_shadow, false);    // faces south-west, fully away
-    add_edge(&b, p1, none, true);
-    add_edge(&b, s1, none, false);
-    add_edge(&b, s0, none, true);
+    add_edge(&b, p0, lit_shadow);    // faces south-west, fully away
+    add_edge(&b, p1, PT_EDGE_SOFT);
+    add_edge(&b, s1, none);
+    add_edge(&b, s0, PT_EDGE_SOFT);
 
     begin_cell(&b, 512, 352, main_floor, main_ceil);    // B
-    add_edge(&b, p1, lit_wnw, false);    // faces west-north-west
-    add_edge(&b, p2, none, true);
-    add_edge(&b, s2, none, false);
-    add_edge(&b, s1, none, true);
+    add_edge(&b, p1, lit_wnw);    // faces west-north-west
+    add_edge(&b, p2, PT_EDGE_SOFT);
+    add_edge(&b, s2, none);
+    add_edge(&b, s1, PT_EDGE_SOFT);
 
     begin_cell(&b, 512, 352, main_floor, main_ceil);    // C, holds the doorway
-    add_edge(&b, p2, lit_n, false);      // faces north
-    add_edge(&b, d0, lit_n, false);      // the doorway portal (lintel face, stepped)
-    add_edge(&b, d1, lit_n, false);
-    add_edge(&b, p3, none, true);
-    add_edge(&b, s3, none, false);
-    add_edge(&b, s2, none, true);
+    add_edge(&b, p2, lit_n);      // faces north
+    add_edge(&b, d0, lit_n);      // the doorway portal (lintel face, stepped)
+    add_edge(&b, d1, lit_n);
+    add_edge(&b, p3, PT_EDGE_SOFT);
+    add_edge(&b, s3, none);
+    add_edge(&b, s2, PT_EDGE_SOFT);
 
     begin_cell(&b, 512, 352, main_floor, main_ceil);    // D
-    add_edge(&b, p3, lit_ene, false);    // faces east-north-east
-    add_edge(&b, p4, none, true);
-    add_edge(&b, s0, none, false);
-    add_edge(&b, s3, none, true);
+    add_edge(&b, p3, lit_ene);    // faces east-north-east
+    add_edge(&b, p4, PT_EDGE_SOFT);
+    add_edge(&b, s0, none);
+    add_edge(&b, s3, PT_EDGE_SOFT);
 
     begin_cell(&b, 512, 352, main_floor, main_ceil);    // E
-    add_edge(&b, p4, lit_se, false);     // faces south-east
-    add_edge(&b, p0, none, true);
-    add_edge(&b, s0, none, true);
+    add_edge(&b, p4, lit_se);     // faces south-east
+    add_edge(&b, p0, PT_EDGE_SOFT);
+    add_edge(&b, s0, PT_EDGE_SOFT);
 
     // Cell 7: the corridor, with a lower ceiling than the rooms it joins; the
     // room 2 portal's colour is the step riser seen from the corridor, fully
@@ -345,24 +361,24 @@ void pt_scene_init(pt_map *m)
     // drawn (the opening is full height from this side). The corridor's
     // floor runs on from the pentagon's, so the doorway shows no seam.
     begin_cell(&b, 512, 384, main_floor, corr_ceil);
-    add_edge(&b, d1, none, false);
-    add_edge(&b, d0, lit_w, false);      // east wall, faces west
-    add_edge(&b, w0, none, false);       // portal into room 2 (never drawn)
-    add_edge(&b, w1, lit_e, false);      // west wall, faces east
+    add_edge(&b, d1, none);
+    add_edge(&b, d0, lit_w);      // east wall, faces west
+    add_edge(&b, w0, none);       // portal into room 2 (never drawn)
+    add_edge(&b, w1, lit_e);      // west wall, faces east
 
     // Cell 8: the second room, floor a step down from the corridor; its
     // portal edge colours both the lintel over the way in and the riser of
     // the step back up. The north wall faces away from the light, so the
     // room darkens toward the way in.
     begin_cell(&b, 544, 352, room2_floor, main_ceil);
-    add_edge(&b, r0, lit_shadow, false);    // north wall, faces south
-    add_edge(&b, w1, lintel2, false);       // portal back to the corridor (lintel)
-    add_edge(&b, w0, lit_shadow, false);
-    add_edge(&b, r3, lit_wnw, false);       // east wall, faces west
-    add_edge(&b, r4, room2_far, false);     // far wall (black-blue-red mix)
-    add_edge(&b, r5, lit_e2, false);        // west wall up to the stair doorway
-    add_edge(&b, sv[0], blue75, false);     // stair doorway (first riser face)
-    add_edge(&b, nv[0], lit_e2, false);     // west wall beyond the doorway
+    add_edge(&b, r0, lit_shadow);    // north wall, faces south
+    add_edge(&b, w1, lintel2);       // portal back to the corridor (lintel)
+    add_edge(&b, w0, lit_shadow);
+    add_edge(&b, r3, lit_wnw);       // east wall, faces west
+    add_edge(&b, r4, room2_far);     // far wall (black-blue-red mix)
+    add_edge(&b, r5, lit_e2);        // west wall up to the stair doorway
+    add_edge(&b, sv[0], blue75);     // stair doorway (first riser face)
+    add_edge(&b, nv[0], lit_e2);     // west wall beyond the doorway
 
     // Cells 9..14: the staircase, six cells climbing 16 units each toward
     // the west under one flat ceiling at the upper corridor's height; the
@@ -370,10 +386,10 @@ void pt_scene_init(pt_map *m)
     // inside the stairwell, and west edges the risers seen climbing.
     for (int32_t i = 1; i <= 6; i++) {
         begin_cell(&b, (uint16_t)(544 - 16 * i), 336, blue25, blue25);
-        add_edge(&b, nv[i - 1], i == 1 ? blue75 : none, false);
-        add_edge(&b, sv[i - 1], blue100, false);    // south wall, faces the light
-        add_edge(&b, sv[i], i == 6 ? none : blue75, false);
-        add_edge(&b, nv[i], blue50, false);         // north wall, in shadow
+        add_edge(&b, nv[i - 1], i == 1 ? blue75 : none);
+        add_edge(&b, sv[i - 1], blue100);    // south wall, faces the light
+        add_edge(&b, sv[i], i == 6 ? none : blue75);
+        add_edge(&b, nv[i], blue50);         // north wall, in shadow
     }
 
     // Cells 15..17: the upper corridor, three cells joined at mitred bends;
@@ -381,33 +397,33 @@ void pt_scene_init(pt_map *m)
     // the bends read as a soft curve. The door jambs at the end frame the
     // opening a rung brighter than the north wall they join.
     begin_cell(&b, 448, 336, blue25, blue25);    // straight run
-    add_edge(&b, nv[6], none, false);    // portal from the top stair
-    add_edge(&b, sv[6], blue100, false); // south wall, faces the light
-    add_edge(&b, m1s, none, false);      // first bend
-    add_edge(&b, m1n, blue50, false);    // north wall, in shadow
+    add_edge(&b, nv[6], none);    // portal from the top stair
+    add_edge(&b, sv[6], blue100); // south wall, faces the light
+    add_edge(&b, m1s, none);      // first bend
+    add_edge(&b, m1n, blue50);    // north wall, in shadow
 
     begin_cell(&b, 448, 336, blue25, blue25);    // between bends
-    add_edge(&b, m1n, none, false);
-    add_edge(&b, m1s, blue100, false);
-    add_edge(&b, m2s, none, false);      // second bend
-    add_edge(&b, m2n, blue50, false);
+    add_edge(&b, m1n, none);
+    add_edge(&b, m1s, blue100);
+    add_edge(&b, m2s, none);      // second bend
+    add_edge(&b, m2n, blue50);
 
     begin_cell(&b, 448, 336, blue25, blue25);    // to the doorway
-    add_edge(&b, m2n, none, false);
-    add_edge(&b, m2s, blue100, false);
-    add_edge(&b, es, none, false);       // the doorway, the corridor's full width
-    add_edge(&b, en, blue50, false);     // north wall, in shadow
+    add_edge(&b, m2n, none);
+    add_edge(&b, m2s, blue100);
+    add_edge(&b, es, none);       // the doorway, the corridor's full width
+    add_edge(&b, en, blue50);     // north wall, in shadow
 
     // Cell 18: the end room, back in the warm shades: level floor, loftier
     // ceiling. The whole door wall is one red face: the pieces either side
     // of the doorway and the lintel above it share the same solid red.
     begin_cell(&b, 448, 288, main_floor, end_ceil);
-    add_edge(&b, rd, lintel2, false);    // north-east wall, faces away
-    add_edge(&b, ra, lit_ene, false);    // door wall, lit
-    add_edge(&b, en, lit_ene, false);    // the doorway (lintel face)
-    add_edge(&b, es, lit_ene, false);    // door wall, lit
-    add_edge(&b, rb, lit_n, false);      // south-west wall, fully lit
-    add_edge(&b, rc, room2_floor, false);    // far wall, dark green check
+    add_edge(&b, rd, lintel2);    // north-east wall, faces away
+    add_edge(&b, ra, lit_ene);    // door wall, lit
+    add_edge(&b, en, lit_ene);    // the doorway (lintel face)
+    add_edge(&b, es, lit_ene);    // door wall, lit
+    add_edge(&b, rb, lit_n);      // south-west wall, fully lit
+    add_edge(&b, rc, PT_EDGE_COLOUR(room2_floor));    // far wall, dark green check
 
     end_map(&b);
 }

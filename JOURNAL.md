@@ -204,6 +204,25 @@ operations split each operand twice over. Bit-identical against a
 HEAD-baseline sweep; the rot test checks both components against wide
 references at every angle across the sign quadrants.
 
+## 2026-09-26 (late) — pt_edge and pt_cell slimmed
+
+pt_edge drops three fields. The twin index is derived on demand by
+pt_map_twin — the adjacent cell's one edge starting at our end vertex
+(rings are clockwise, so the shared wall runs the other way there), a tiny
+ring scan that only runs when a portal is pushed. The wall pattern and the
+soft flag fold into one colour byte: a catalogue shade plus one, with 0
+marking a soft edge (a soft edge never draws, and black remains expressible
+as shade 0 + 1). pt_cell's floor and ceiling patterns become shade indices
+too. pt_edge goes 19 bytes to 16, pt_cell 8 to 6; the renderer looks the
+patterns up once per edge.
+
+One conversion slip caught by the tooling: the stairs' blue25 serves as both
+a cell surface and looked like a wall colour, so the mechanical shade+1
+wrapping silently brightened nine cells' surfaces by one catalogue step. The
+render tests can't see colour-only mistakes; the byte-for-byte sweep and a
+semantic map dump (old fields vs new, decoded to patterns) pinned it in
+minutes. Both now agree exactly with the old representation.
+
 ### Open questions
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a

@@ -29,8 +29,8 @@ RC_TEST(map, scene_valid)
     for (uint8_t e = 0; e < m.num_edges; e++) {
         if (m.edges[e].adj == 0)
             continue;
-        uint8_t t = m.edges[e].twin;
-        RC_CHECK(m.edges[t].twin, ==, e);
+        uint8_t t = pt_map_twin(&m, e);
+        RC_CHECK(pt_map_twin(&m, t), ==, e);
         RC_CHECK(m.edges[t].adj, ==, m.edges[e].cell);
         RC_CHECK(m.edges[t].v0, ==, m.edges[pt_map_ring_next(&m, e)].v0);
     }

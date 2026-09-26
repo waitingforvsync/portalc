@@ -669,14 +669,15 @@ static uint8_t cut(pt_render *r, uint8_t *cursor, uint8_t xa, uint8_t xb)
 // ---- pushing portals ----
 
 // Find the child's first edge (spec 7.4) and push its frame.
-static void push_child(pt_render *r, const pt_edge *e, uint8_t xl, uint8_t xr, uint8_t thead,
+static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t thead,
                        uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv)
 {
     RC_PANIC(r->depth < PT_MAX_DEPTH);
     const pt_map *m = r->map;
+    const pt_edge *e = &m->edges[ei];
     const pt_cell *c = &m->cells[e->adj];
 
-    uint8_t n = pt_map_ring_next(m, e->twin);
+    uint8_t n = pt_map_ring_next(m, pt_map_twin(m, ei));
     pt_vv v0 = pv;
     uint8_t guard = c->num_edges;
     for (;;) {
@@ -750,11 +751,14 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     uint8_t th = cut(r, &f->tcur, xa, xb);
     uint8_t bh = cut(r, &f->bcur, xa, xb);
 
-    if (e->soft) {
-        push_child(r, e, xa, xb, th, bh, f->tmax, f->bmin, v0);
+    if (e->colour == PT_EDGE_SOFT) {
+        push_child(r, f->edge, xa, xb, th, bh, f->tmax, f->bmin, v0);
         return;
     }
 
+    pt_pattern wall = pt_shade((uint8_t)(e->colour - 1));
+    pt_pattern ca_ceil = pt_shade(ca->ceil);
+    pt_pattern ca_floor = pt_shade(ca->floor);
     pt_relh ha_c = rel_h(ca->ceil_z, r->eye_z);
     pt_relh ha_f = rel_h(ca->floor_z, r->eye_z);
     pt_line ls[2];
@@ -765,13 +769,13 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
         // gets fresh cursors (role NONE never severs the chains)
         pt_clip cx = {.r = r, .thead = th, .bhead = bh, .tmax = f->tmax, .bmin = f->bmin,
                       .role = ROLE_NONE};
-        n = make_line(ls, e0, e1, ha_c, pt_pattern_xor(ca->ceil, e->wall));
+        n = make_line(ls, e0, e1, ha_c, pt_pattern_xor(ca_ceil, wall));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
                 clip_line(&cx, &ls[i]);
         cx.tp = 0;
         cx.bp_set = false;
-        n = make_line(ls, e0, e1, ha_f, pt_pattern_xor(e->wall, ca->floor));
+        n = make_line(ls, e0, e1, ha_f, pt_pattern_xor(wall, ca_floor));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
                 clip_line(&cx, &ls[i]);
@@ -781,14 +785,16 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     const pt_cell *cb = &m->cells[e->adj];
     pt_relh hb_c = rel_h(cb->ceil_z, r->eye_z);
     pt_relh hb_f = rel_h(cb->floor_z, r->eye_z);
-    pt_pattern cbfb = pt_pattern_xor(cb->ceil, cb->floor);
+    pt_pattern cb_ceil = pt_shade(cb->ceil);
+    pt_pattern cb_floor = pt_shade(cb->floor);
+    pt_pattern cbfb = pt_pattern_xor(cb_ceil, cb_floor);
 
     // 3. non-bound-forming lines first: they only recolour, and need the top
     // and bottom chains intact
     pt_clip cxn = {.r = r, .thead = th, .bhead = bh, .tmax = f->tmax, .bmin = f->bmin,
                    .role = ROLE_NONE};
     if (cb->ceil_z > ca->ceil_z) {
-        n = make_line(ls, e0, e1, ha_c, pt_pattern_xor(ca->ceil, e->wall));
+        n = make_line(ls, e0, e1, ha_c, pt_pattern_xor(ca_ceil, wall));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
                 clip_line(&cxn, &ls[i]);
@@ -796,7 +802,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
         cxn.bp_set = false;
     }
     if (cb->floor_z < ca->floor_z) {
-        n = make_line(ls, e0, e1, ha_f, pt_pattern_xor(e->wall, ca->floor));
+        n = make_line(ls, e0, e1, ha_f, pt_pattern_xor(wall, ca_floor));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
                 clip_line(&cxn, &ls[i]);
@@ -811,12 +817,12 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
 
     pt_line fl[2];
     uint8_t nf = (cb->floor_z < ca->floor_z)
-                     ? make_line(fl, e0, e1, hb_f, pt_pattern_xor(cb->floor, e->wall))
-                     : make_line(fl, e0, e1, ha_f, pt_pattern_xor(cb->floor, ca->floor));
+                     ? make_line(fl, e0, e1, hb_f, pt_pattern_xor(cb_floor, wall))
+                     : make_line(fl, e0, e1, ha_f, pt_pattern_xor(cb_floor, ca_floor));
     pt_line cl[2];
     uint8_t nc = (cb->ceil_z > ca->ceil_z)
-                     ? make_line(cl, e0, e1, hb_c, pt_pattern_xor(e->wall, cb->ceil))
-                     : make_line(cl, e0, e1, ha_c, pt_pattern_xor(ca->ceil, cb->ceil));
+                     ? make_line(cl, e0, e1, hb_c, pt_pattern_xor(wall, cb_ceil))
+                     : make_line(cl, e0, e1, ha_c, pt_pattern_xor(ca_ceil, cb_ceil));
 
     pt_clip cxf = {.r = r, .thead = th, .bhead = bh, .tmax = f->tmax, .bmin = f->bmin,
                    .role = ROLE_BOTTOM, .build = &childb, .cbfb = cbfb, .closed = &closed};
@@ -869,7 +875,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     for (uint8_t i = no; i-- > 0;) {
         uint8_t cth = piece_at(r, childt.head, ol[i]);
         uint8_t cbh = piece_at(r, childb.head, ol[i]);
-        push_child(r, e, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
+        push_child(r, f->edge, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
     }
 }
 
@@ -974,7 +980,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
 
     // the root portal: a plotted top bound seeding the fill with the camera
     // cell's ceiling, and a dummy off-screen bottom bound
-    pt_pattern ceil = m->cells[cell].ceil;
+    pt_pattern ceil = pt_shade(m->cells[cell].ceil);
     uint8_t roott = pool_alloc(r, 0, 128, 0, 0, ceil.e, ceil.o);
     uint8_t rootb = pool_alloc(r, 0, 128, PT_SCREEN_HEIGHT, 0, 0, 0);
     push_root(r, roott, rootb);

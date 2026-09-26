@@ -102,7 +102,8 @@ static void end_map(builder *b)
         double dx = (double)q.x - a.x;
         double dy = (double)q.y - a.y;
         double len = sqrt(dx * dx + dy * dy);
-        RC_ASSERT(len >= 1.0 && len < 65535.0);
+        // the upper bound keeps the transition band's cross product in s16
+        RC_ASSERT(len >= 1.0 && len < 2048.0);
 
         e->ex = (int16_t)lround(dx * 256.0 / len);
         e->ey = (int16_t)lround(dy * 256.0 / len);
@@ -176,11 +177,14 @@ bool pt_map_validate(const pt_map *m)
 
 int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
 {
-    // exact (s16.8), relative to the edge's own vertex: the stored d0 is
-    // floored to whole units for the camera and would bias this query
+    // the exact cross product against the line through the edge's vertices:
+    // the same geometry the camera's transition band test decides by, so
+    // point location and transitions can never disagree
     const pt_edge *ed = &m->edges[e];
-    const pt_vertex *a = &m->verts[ed->v0];
-    return (int32_t)(int16_t)(x - a->x) * ed->nx + (int32_t)(int16_t)(y - a->y) * ed->ny;
+    pt_vertex a = m->verts[ed->v0];
+    pt_vertex b = m->verts[m->edges[pt_map_ring_next(m, e)].v0];
+    return (int32_t)((int16_t)(b.x - a.x)) * (int16_t)(y - a.y)
+         - (int32_t)((int16_t)(b.y - a.y)) * (int16_t)(x - a.x);
 }
 
 uint8_t pt_map_twin(const pt_map *m, uint8_t e)

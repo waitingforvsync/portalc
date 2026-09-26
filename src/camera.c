@@ -116,6 +116,58 @@ static int16_t dot16_s8(int16_t ax, int16_t sx, int16_t ay, int16_t sy)
     return nx ? (int16_t)-m : (int16_t)m;
 }
 
+// |a| * |b| mod 2^16: three lookups, the high partial dropped. Exact by
+// wraparound whenever the accumulated result is known to fit s16.
+static uint16_t mul16_lo(uint16_t a, uint16_t b)
+{
+    uint16_t lo = pt_mulu8((uint8_t)a, (uint8_t)b);
+    uint16_t mid = (uint16_t)(pt_mulu8((uint8_t)a, (uint8_t)(b >> 8))
+                              + pt_mulu8((uint8_t)(a >> 8), (uint8_t)b));
+    return (uint16_t)(lo + (uint16_t)(mid << 8));
+}
+
+// The side of Q against the exact line through the edge's two vertices (the
+// same sign convention as edge_dist), valid only within a few units of the
+// line: there the true cross product (dx qy - dy qx, perpendicular distance
+// times edge length) fits s16, so every product can be kept mod 2^16 and the
+// wraparound is exact. The twin's value is the exact negation about the same
+// two vertices, so both cells always agree where the boundary lies.
+static int16_t edge_cross_band(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+{
+    const pt_edge *ed = &m->edges[e];
+    pt_vertex a = m->verts[ed->v0];
+    pt_vertex b = m->verts[m->edges[pt_map_ring_next(m, e)].v0];
+    int16_t dx = (int16_t)(b.x - a.x);
+    int16_t dy = (int16_t)(b.y - a.y);
+    int16_t qx = (int16_t)(x - a.x);
+    int16_t qy = (int16_t)(y - a.y);
+
+    uint16_t p1 = mul16_lo((uint16_t)(dx < 0 ? -dx : dx), (uint16_t)(qy < 0 ? -qy : qy));
+    uint16_t p2 = mul16_lo((uint16_t)(dy < 0 ? -dy : dy), (uint16_t)(qx < 0 ? -qx : qx));
+    bool n1 = (dx < 0) != (qy < 0);
+    bool n2 = !((dy < 0) != (qx < 0));    // subtracted: its sign enters flipped
+    if (n1 != n2)
+        return n1 ? (int16_t)(p2 - p1) : (int16_t)(p1 - p2);
+    uint16_t m2 = (uint16_t)(p1 + p2);
+    return n1 ? (int16_t)-m2 : (int16_t)m2;
+}
+
+// Has the centre crossed this portal? Away from the line the whole-unit
+// distance is decisive (the margin covers its truncation plus the stored
+// normal's divergence from the vertex line); within the band the exact
+// vertex-line side decides, identically from both cells, so every point has
+// a definite owner and the hop walk can neither cycle nor stick. Fan lines
+// concur exactly at their shared vertex for the same reason.
+static bool portal_crossed(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+{
+    int16_t d = edge_dist(m, e, x, y);
+    if (d >= 8)
+        return false;
+    if (d < -8)
+        return true;
+    return edge_cross_band(m, e, x, y) < 0;
+}
+
 // Whole-unit position of the foot of the perpendicular along the edge from V0.
 static int16_t edge_t(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
 {
@@ -376,15 +428,18 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     c->x = apply(c->x, mx);
     c->y = apply(c->y, my);
 
-    // 3. transition: the centre has crossed a portal line
-    for (uint8_t pass = 0; pass < 4; pass++) {
+    // 3. transition: the centre has crossed a portal line. The walk hops
+    // through any violated portal and repeats; a move skimming a fan vertex
+    // may cross several cells, and can legally walk the long way round the
+    // fan, so the cap allows a full ring of hops.
+    for (uint8_t pass = 0; pass < 8; pass++) {
         const pt_cell *cur = &m->cells[c->cell];
         bool crossed = false;
         for (uint8_t k = 0; k < cur->num_edges; k++) {
             uint8_t ei = (uint8_t)(cur->first_edge + k);
             if (m->edges[ei].adj == 0)
                 continue;
-            if (edge_dist(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)) < 0) {
+            if (portal_crossed(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))) {
                 c->cell = m->edges[ei].adj;
                 crossed = true;
                 break;

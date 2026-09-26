@@ -223,6 +223,38 @@ render tests can't see colour-only mistakes; the byte-for-byte sweep and a
 semantic map dump (old fields vs new, decoded to patterns) pinned it in
 minutes. Both now agree exactly with the old representation.
 
+## 2026-09-26 (midnight) — The transition test without u24
+
+The exact q8 transition test worked but kept 24-bit intermediates. Two
+attempts to remove them, one failed and one sound:
+
+The failed one is worth recording. Evaluating each portal line once,
+canonically (through the lower-numbered cell's twin), makes the whole-unit
+test pairwise consistent -- but pairwise is not enough. Near a fan vertex
+the truncation-shifted lines no longer concur at a point, and slivers appear
+that no cell claims: cell X hops to the pit, the pit hops to Y, Y hops back
+to X, and the pass cap parks the walk wherever it stops (the probe caught a
+16-unit mis-assignment).
+
+The sound one is the band trick. Away from the line, the whole-unit
+distance is decisive (margin 8 covers its truncation plus the stored
+normal's divergence from the vertex line). Within the band, the true side
+value is provably small -- perpendicular distance times edge length, under
+s16 for any edge shorter than 2048 units (asserted in the builder) -- so
+the exact cross product against the line through the edge's two integer
+vertices is computed entirely mod 2^16, where wraparound is exact: three
+lookups per product, high partials never formed. That line passes exactly
+through both endpoints, the twin's value is its exact negation, and fan
+lines concur exactly at their shared vertex, so the hop walk can neither
+cycle nor stick. pt_map_edge_side now shares the same vertex-line geometry,
+so point location, validation and transitions can never disagree.
+
+Probes: zero penetration over all fan crossings; the only residual
+mismatches against find_cell are integer positions exactly on a rim line,
+where both cells contain the point and the walk keeps the cell it arrived
+from -- hysteresis that avoids eye-height popping while skimming a rim, and
+arguably more sensible than find_cell's scan order.
+
 ### Open questions
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a

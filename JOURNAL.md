@@ -307,3 +307,23 @@ so the biased accumulator sits below 0x4000 at the top of the loop and
 adding `gm <= 0x7FFF` cannot wrap; the descending loop already clamps at
 zero. On the 6502 the row is now literally the high byte of the
 accumulator after the 16-bit add — no per-pixel adjustment at all.
+
+### The bias made the anchor convention
+
+The same fold then went renderer-wide: `piece_y`/`line_y` (and the
+near-clip's `base`) seed their low byte with 128 — a free constant load —
+so every reconstructed u8.8 row carries the rounding bias, and all four
+re-anchor sites (`pool_split`, `emit`, the near-clip, `clamp_line`) read
+the nearest row as a plain high byte; `row_of_round` is gone. The bias
+cancels in every line-vs-bound difference feeding `crossing`, so the
+resolve logic is untouched. The one debt: the conservative extents must
+peel the bias off again — floor became `row_of_floor` (`(y - 128) >> 8`,
+two sites) and ceil's constant moved 255 to 127 (free). Net: four
+add-and-saturates traded for two subtracts, and one convention shared
+with the plot DDA instead of a bias sprinkled per call.
+
+Rail semantics note: `row_step`'s clamps now sit at *biased* 0 and
+0xFFFF, half a row different from before in unbiased terms. Re-anchored
+rows are provably identical at both rails; only a `crossing` against a
+rail-pinned value could shift by a column. The sweep says none does: all
+1,076 frames bit-identical.

@@ -77,6 +77,16 @@ typedef struct pt_clip {
 } pt_clip;
 
 // ---- row arithmetic ----
+//
+// Every reconstructed u8.8 row (piece_y, line_y, the plot DDA) carries the
+// +128 rounding bias in its anchor: seeding the low byte with 128 is a free
+// constant load, and rounding to the nearest row becomes a plain high-byte
+// read (row_of). Re-anchoring must round rather than truncate: truncation
+// always loses row fraction in the same direction, and chained splits would
+// compound the drift beyond the one-row slack the parity property absorbs.
+// The bias cancels in every line-vs-bound difference; only the conservative
+// extents peel it off again, so floor is (y - 128) >> 8 and ceil is
+// (y + 127) >> 8.
 
 // y plus or minus g*dx: the add saturates on carry out, the subtract clamps
 // at the screen top (a toggle pushed past the top is still active at row 0).
@@ -89,27 +99,24 @@ static uint16_t row_step(uint16_t y, uint16_t g, uint8_t dx)
     return s < y ? 0xFFFF : s;
 }
 
-static uint8_t row_of(uint16_t y_q8)
+// The nearest row to a biased u8.8 value: the high byte.
+static uint8_t row_of(uint16_t y_b)
 {
-    uint8_t row = (uint8_t)(y_q8 >> 8);
+    uint8_t row = (uint8_t)(y_b >> 8);
     return row > PT_SCREEN_HEIGHT ? PT_SCREEN_HEIGHT : row;
 }
 
-// The row a u8.8 value rounds up into, for conservative extents.
-static uint8_t row_of_ceil(uint16_t y_q8)
+// The row a biased u8.8 value truncates into, for conservative extents.
+static uint8_t row_of_floor(uint16_t y_b)
 {
-    uint16_t s = (uint16_t)(y_q8 + 255);
-    return row_of(s < y_q8 ? 0xFFFF : s);
+    return row_of(y_b < 128 ? 0 : (uint16_t)(y_b - 128));
 }
 
-// The nearest row to a u8.8 value. Re-anchoring a line at a new column keeps
-// only the integer row, so it must round rather than truncate: truncation
-// always loses row fraction in the same direction, and chained splits would
-// compound the drift beyond the one-row slack the parity property absorbs.
-static uint8_t row_of_round(uint16_t y_q8)
+// The row a biased u8.8 value rounds up into, for conservative extents.
+static uint8_t row_of_ceil(uint16_t y_b)
 {
-    uint16_t s = (uint16_t)(y_q8 + 128);
-    return row_of(s < y_q8 ? 0xFFFF : s);
+    uint16_t s = (uint16_t)(y_b + 127);
+    return row_of(s < y_b ? 0xFFFF : s);
 }
 
 // ---- pool ----
@@ -130,13 +137,13 @@ static uint16_t piece_y(const pt_render *r, uint8_t p, uint8_t c)
 {
     const pt_piece *pp = &r->pool[p];
     RC_ASSERT(c >= pp->x0);
-    return row_step((uint16_t)(pp->y0 << 8), pp->g, (uint8_t)(c - pp->x0));
+    return row_step((uint16_t)((pp->y0 << 8) | 128), pp->g, (uint8_t)(c - pp->x0));
 }
 
 static uint16_t line_y(const pt_line *l, uint8_t c)
 {
     RC_ASSERT(c >= l->x0);
-    return row_step((uint16_t)(l->y0 << 8), l->g, (uint8_t)(c - l->x0));
+    return row_step((uint16_t)((l->y0 << 8) | 128), l->g, (uint8_t)(c - l->x0));
 }
 
 // Split piece p at column c: p keeps [x0, c), the new piece takes [c, x1).
@@ -145,7 +152,7 @@ static void pool_split(pt_render *r, uint8_t p, uint8_t c)
     pt_piece *pp = &r->pool[p];
     RC_ASSERT(c > pp->x0 && c < pp->x1);
 
-    uint8_t y0 = row_of_round(piece_y(r, p, c));
+    uint8_t y0 = row_of(piece_y(r, p, c));
     uint8_t q = pool_alloc(r, c, pp->x1, y0, pp->g, pp->ce, pp->co);
     r->pool[q].next = pp->next;
     pp->next = q;
@@ -184,7 +191,7 @@ static void chain_append(pt_render *r, pt_chainb *cb, uint8_t q)
     uint16_t ya = piece_y(r, q, p->x0);
     uint16_t yb = piece_y(r, q, (uint8_t)(p->x1 - 1));
     uint8_t hrow = row_of_ceil(ya > yb ? ya : yb);
-    uint8_t lrow = row_of(ya < yb ? ya : yb);
+    uint8_t lrow = row_of_floor(ya < yb ? ya : yb);
     if (hrow > cb->tmax)
         cb->tmax = hrow;
     if (lrow < cb->bmin)
@@ -242,7 +249,7 @@ static void emit(pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1, uint8_t 
     pt_render *r = cx->r;
 
     if (st == ST_VISIBLE) {
-        uint8_t q = pool_alloc(r, r0, r1, row_of_round(line_y(L, r0)), L->g, L->ce, L->co);
+        uint8_t q = pool_alloc(r, r0, r1, row_of(line_y(L, r0)), L->g, L->ce, L->co);
         if (cx->build)
             chain_append(r, cx->build, q);
         return;
@@ -352,11 +359,11 @@ static void clip_line(pt_clip *cx, const pt_line *L)
     RC_ASSERT(L->x0 < L->x1);
 
     // fast path: the line lies wholly inside the row extents of the chains
-    uint16_t ya = (uint16_t)(L->y0 << 8);
+    uint16_t ya = (uint16_t)((L->y0 << 8) | 128);
     uint16_t yb = line_y(L, (uint8_t)(L->x1 - 1));
     uint16_t lo = ya < yb ? ya : yb;
     uint16_t hi = ya > yb ? ya : yb;
-    if (row_of(lo) >= cx->tmax && row_of_ceil(hi) <= cx->bmin) {
+    if (row_of_floor(lo) >= cx->tmax && row_of_ceil(hi) <= cx->bmin) {
         emit(cx, L, L->x0, L->x1, ST_VISIBLE);
         return;
     }
@@ -484,7 +491,7 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
         if (cs < e1.sx) {
             uint16_t dxq = (uint16_t)(((uint16_t)(e1.sx << 8)) - sxq);
             uint8_t fr = (uint8_t)(((uint16_t)(cs << 8)) - sxq);
-            uint16_t base = (uint16_t)(edge << 8);
+            uint16_t base = (uint16_t)((edge << 8) | 128);    // rounding bias in the anchor
             uint16_t g;
             uint16_t y0q;
             if (syf >= edge) {
@@ -503,7 +510,7 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
             // round like every other re-anchor; PT_SCREEN_HEIGHT is fine,
             // the piece comes on screen where its gradient brings the row
             // under the screen edge less a half
-            uint8_t y0 = row_of_round(y0q);
+            uint8_t y0 = row_of(y0q);
             out[n++] = (pt_line) {.x0 = cs, .x1 = e1.sx, .y0 = y0, .g = g, .ce = col.e, .co = col.o};
         }
     } else {
@@ -529,7 +536,7 @@ static bool clamp_line(pt_line *L, uint8_t xa, uint8_t xb)
     if (L->x0 < xa) {
         if (xa >= L->x1)
             return false;
-        L->y0 = row_of_round(line_y(L, xa));
+        L->y0 = row_of(line_y(L, xa));
         L->x0 = xa;
     }
     return L->x0 < L->x1;

@@ -27,7 +27,7 @@ typedef struct cand {
 } cand;
 
 // (v * f) >> 8 for an unsigned 24-bit value and a u0.8 factor (256 meaning
-// one): the 6502's u24 x u8 keep-high byte chain.
+// one, forked here; the chain itself is arith's).
 static uint32_t mul24u_frac(uint32_t v, uint16_t f)
 {
     RC_ASSERT(f <= 256);
@@ -35,19 +35,7 @@ static uint32_t mul24u_frac(uint32_t v, uint16_t f)
 
     if (f == 256)
         return v;
-    uint32_t m = (uint32_t)(pt_mulu8((uint8_t)v, (uint8_t)f) >> 8);
-    m += pt_mulu8((uint8_t)(v >> 8), (uint8_t)f);
-    m += (uint32_t)pt_mulu8((uint8_t)(v >> 16), (uint8_t)f) << 8;
-    return m;
-}
-
-// (q * s) >> 8 for an unsigned u16.8 position and a signed s0.8 component:
-// the sign of s picks the branch.
-static int32_t mulq_s8(uint32_t q, int16_t s)
-{
-    if (s < 0)
-        return -(int32_t)mul24u_frac(q, (uint16_t)-s);
-    return (int32_t)mul24u_frac(q, (uint16_t)s);
+    return pt_mulu24_frac(v, (uint8_t)f);
 }
 
 // (v * s) >> 8 for a signed s16.8 value and a signed s0.8 component: the
@@ -60,12 +48,41 @@ static int32_t muls24_s8(int32_t v, int16_t s)
     return ((v < 0) != (s < 0)) ? -(int32_t)m : (int32_t)m;
 }
 
+// ax*sx + ay*sy for s16.8 values and s0.8 components: both products stay
+// unsigned and enter the sum by add or subtract (ADC or SBC chains, the
+// opposite-signs subtraction's wraparound being the two's complement); only
+// two negative terms negate, which the 6502 sidesteps by accumulating that
+// pair from the negated-product table.
+static int32_t dot24_s8(int32_t ax, int16_t sx, int32_t ay, int16_t sy)
+{
+    uint32_t px = mul24u_frac((uint32_t)(ax < 0 ? -ax : ax), (uint16_t)(sx < 0 ? -sx : sx));
+    uint32_t py = mul24u_frac((uint32_t)(ay < 0 ? -ay : ay), (uint16_t)(sy < 0 ? -sy : sy));
+    bool nx = (ax < 0) != (sx < 0);
+    bool ny = (ay < 0) != (sy < 0);
+    if (nx != ny)
+        return nx ? (int32_t)(py - px) : (int32_t)(px - py);
+    uint32_t m = px + py;
+    return nx ? -(int32_t)m : (int32_t)m;
+}
+
 // Signed distance (s16.8) from Q to the edge's line; positive on the
-// interior side.
+// interior side. The positions are unsigned, so only the normal's
+// components fork the accumulation.
 static int32_t edge_dist(const pt_map *m, uint8_t e, uint32_t qx, uint32_t qy)
 {
     const pt_edge *ed = &m->edges[e];
-    return mulq_s8(qx, ed->nx) + mulq_s8(qy, ed->ny) - ed->d0;
+    uint32_t px = mul24u_frac(qx, (uint16_t)(ed->nx < 0 ? -ed->nx : ed->nx));
+    uint32_t py = mul24u_frac(qy, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny));
+    bool nx = ed->nx < 0;
+    bool ny = ed->ny < 0;
+    int32_t d;
+    if (nx != ny)
+        d = nx ? (int32_t)(py - px) : (int32_t)(px - py);
+    else if (nx)
+        d = -(int32_t)(px + py);
+    else
+        d = (int32_t)(px + py);
+    return d - ed->d0;
 }
 
 // Position (s16.8) of the foot of the perpendicular along the edge from V0.
@@ -74,7 +91,7 @@ static int32_t edge_t(const pt_map *m, uint8_t e, uint32_t qx, uint32_t qy)
     const pt_edge *ed = &m->edges[e];
     int32_t rx = (int32_t)(qx - ((uint32_t)m->verts[ed->v0].x << 8));
     int32_t ry = (int32_t)(qy - ((uint32_t)m->verts[ed->v0].y << 8));
-    return muls24_s8(rx, ed->ex) + muls24_s8(ry, ed->ey);
+    return dot24_s8(rx, ed->ex, ry, ed->ey);
 }
 
 // The foot of the perpendicular lies on the segment (exactly capped: the
@@ -85,13 +102,14 @@ static bool foot_in_range(const pt_map *m, uint8_t e, int32_t t)
 }
 
 // The full signed product of a s16.8 value and a small whole-unit count.
-static int32_t mul_su(int32_t a, int32_t b)
+// Step an unsigned position by an unsigned magnitude in a signed direction.
+static uint32_t step(uint32_t p, uint32_t mag, bool neg)
 {
-    uint32_t ua = (uint32_t)(a < 0 ? -a : a);
-    uint16_t ub = (uint16_t)(b < 0 ? -b : b);
-    RC_ASSERT(ua < (1u << 16) && ub <= 256);
-    uint32_t p = mul24u_frac(ua << 8, ub);
-    return ((a < 0) != (b < 0)) ? -(int32_t)p : (int32_t)p;
+    if (neg) {
+        RC_ASSERT(p >= mag);
+        return p - mag;
+    }
+    return p + mag;
 }
 
 // A solid wall endpoint as a point obstacle. When the circle overlaps the
@@ -114,19 +132,43 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
     if (d2 >= (uint16_t)(PT_CAM_RADIUS * PT_CAM_RADIUS) || d2 < 256)
         return false;    // clear of the vertex, or degenerately on top of it
 
-    int32_t dot = mul_su(*mx, ux) + mul_su(*my, uy);
-    if (dot >= 0)
+    // M . v as a sign and a magnitude: only approach gates, and the division
+    // below wants the magnitude anyway, so nothing here is ever negated
+    uint32_t wx = mul24u_frac((uint32_t)(*mx < 0 ? -*mx : *mx) << 8, (uint16_t)ax);
+    uint32_t wy = mul24u_frac((uint32_t)(*my < 0 ? -*my : *my) << 8, (uint16_t)ay);
+    RC_ASSERT(wx < (1u << 24) && wy < (1u << 24));
+    bool nx = (*mx < 0) != (ux < 0);
+    bool ny = (*my < 0) != (uy < 0);
+    uint32_t mag;
+    bool toward;
+    if (nx == ny) {
+        mag = wx + wy;
+        toward = nx;
+    } else if (wx >= wy) {
+        mag = wx - wy;
+        toward = nx;
+    } else {
+        mag = wy - wx;
+        toward = ny;
+    }
+    if (!toward || mag == 0)
         return false;    // moving away or tangent
 
-    // f = (M . v) / (v . v) in q16, then a q8 correction along v
-    uint32_t f = pt_div_q8((uint32_t)-dot, d2);
+    // f = |M . v| / (v . v) in q16, then a q8 correction along v
+    uint32_t f = pt_div_q8(mag, d2);
     f += f >> 2;
     if (f > 0xFFFF)
         f = 0xFFFF;
-    int32_t cx = (int32_t)mul24u_frac(f, (uint16_t)ax);
-    int32_t cy = (int32_t)mul24u_frac(f, (uint16_t)ay);
-    *mx += ux < 0 ? -cx : cx;
-    *my += uy < 0 ? -cy : cy;
+    uint32_t cx = mul24u_frac(f, (uint16_t)ax);
+    uint32_t cy = mul24u_frac(f, (uint16_t)ay);
+    if (ux < 0)
+        *mx -= (int32_t)cx;
+    else
+        *mx += (int32_t)cx;
+    if (uy < 0)
+        *my -= (int32_t)cy;
+    else
+        *my += (int32_t)cy;
     return true;
 }
 
@@ -214,9 +256,12 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
             continue;
         if (!foot_in_range(m, ei, edge_t(m, ei, c->x, c->y)))
             continue;
-        int32_t push = RADIUS_Q8 - d;
-        c->x = apply(c->x, muls24_s8(push, ed->nx));
-        c->y = apply(c->y, muls24_s8(push, ed->ny));
+        // the push is positive, so only the normal forks the position step
+        uint32_t push = (uint32_t)(RADIUS_Q8 - d);
+        c->x = step(c->x, mul24u_frac(push, (uint16_t)(ed->nx < 0 ? -ed->nx : ed->nx)),
+                    ed->nx < 0);
+        c->y = step(c->y, mul24u_frac(push, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny)),
+                    ed->ny < 0);
     }
     // desired displacement from the input: the facing step, whose low byte
     // is 0 so the rounded multiply is exact
@@ -276,7 +321,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
 
             // slide: keep only the component along the wall
             const pt_edge *ed = &m->edges[hit];
-            int32_t along = muls24_s8(mx, ed->ex) + muls24_s8(my, ed->ey);
+            int32_t along = dot24_s8(mx, ed->ex, my, ed->ey);
             mx = muls24_s8(along, ed->ex);
             my = muls24_s8(along, ed->ey);
             continue;

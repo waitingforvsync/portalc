@@ -520,20 +520,31 @@ static pt_vv transform(const pt_render *r, pt_vertex w)
     // sign-branched unsigned products
     int16_t rx = (int16_t)(w.x - r->cam_x);
     int16_t ry = (int16_t)(w.y - r->cam_y);
-    int16_t x = (int16_t)(pt_mul_cos(rx, r->angle) + pt_mul_sin(ry, r->angle));
-    int16_t y = (int16_t)(pt_mul_cos(ry, r->angle) - pt_mul_sin(rx, r->angle));
+    int16_t x = pt_mac_sc(rx, r->dcos, ry, r->dsin);
+    int16_t y = pt_msub_sc(ry, r->dcos, rx, r->dsin);
 
+    // the ray sums exist only here: their sign and zero states become flag
+    // bits (on the 6502, the adds' own N and Z), and only the flags persist
     int32_t a = (int32_t)x + y;
     int32_t b = (int32_t)x - y;
     RC_ASSERT(a >= INT16_MIN && a <= INT16_MAX && b >= INT16_MIN && b <= INT16_MAX);
+    uint8_t flags = 0;
+    if (a < 0)
+        flags |= PT_VF_ANEG;
+    else if (a == 0)
+        flags |= PT_VF_AZERO;
+    if (b < 0)
+        flags |= PT_VF_BNEG;
+    else if (b == 0)
+        flags |= PT_VF_BZERO;
 
     // a vertex exactly on a ray gets the exact column, so the stop tests and
     // the span columns can never disagree at the portal edges
-    pt_vv v = {.x = x, .y = y, .a = (int16_t)a, .b = (int16_t)b, .sx = 64};
-    if (v.a >= 0 && v.b >= 0) {
-        if (v.a == 0)
+    pt_vv v = {.x = x, .y = y, .sx = 64, .flags = flags};
+    if (!(flags & (PT_VF_ANEG | PT_VF_BNEG))) {
+        if (flags & PT_VF_AZERO)
             v.sx = 0;
-        else if (v.b == 0)
+        else if (flags & PT_VF_BZERO)
             v.sx = 128;
         else if (x > 0)
             v.sx = pt_project_col(y, (uint16_t)x);
@@ -545,11 +556,11 @@ static pt_vv transform(const pt_render *r, pt_vertex w)
 // as the span columns, so the walk and the spans agree.
 static bool col_gt(pt_vv v, uint8_t c)
 {
-    if (v.a >= 0 && v.b >= 0)
+    if (!(v.flags & (PT_VF_ANEG | PT_VF_BNEG)))
         return v.sx > c;
-    if (v.a < 0 && v.b >= 0)
+    if (!(v.flags & PT_VF_BNEG))
         return false;    // outside left
-    if (v.b < 0 && v.a >= 0)
+    if (!(v.flags & PT_VF_ANEG))
         return true;     // outside right
 
     // behind: mirror through the camera, project, compare the other way round
@@ -559,11 +570,11 @@ static bool col_gt(pt_vv v, uint8_t c)
 // Is the vertex's column at or right of column c?
 static bool col_ge(pt_vv v, uint8_t c)
 {
-    if (v.a >= 0 && v.b >= 0)
+    if (!(v.flags & (PT_VF_ANEG | PT_VF_BNEG)))
         return v.sx >= c;
-    if (v.a < 0 && v.b >= 0)
+    if (!(v.flags & PT_VF_BNEG))
         return false;
-    if (v.b < 0 && v.a >= 0)
+    if (!(v.flags & PT_VF_ANEG))
         return true;
     return pt_project_col((int16_t)-v.y, (uint16_t)-v.x) <= c;
 }
@@ -578,10 +589,13 @@ static uint16_t depth_of(int16_t x)
 
 static pt_ep clip_left(pt_vv v0, pt_vv v1)
 {
-    RC_ASSERT(v0.a < 0 && v1.a > 0);
+    RC_ASSERT(v0.flags & PT_VF_ANEG);
+    RC_ASSERT(!(v1.flags & (PT_VF_ANEG | PT_VF_AZERO)));
 
-    uint16_t na = (uint16_t)-v0.a;
-    uint16_t den = (uint16_t)(na + (uint16_t)v1.a);
+    // the ray magnitudes, recomputed with the signs the flags fix: -(x + y)
+    // is one subtract chain from zero, nothing is negated
+    uint16_t na = (uint16_t)(0u - (uint16_t)v0.x - (uint16_t)v0.y);
+    uint16_t den = (uint16_t)(na + (uint16_t)(v1.x + v1.y));
     RC_ASSERT(den >= na);
     uint8_t t = pt_div_t(na, den);
     uint16_t x = depth_of(pt_lerp16(v0.x, v1.x, t));
@@ -590,9 +604,10 @@ static pt_ep clip_left(pt_vv v0, pt_vv v1)
 
 static pt_ep clip_right(uint16_t x0, uint16_t b0, pt_vv v1)
 {
-    RC_ASSERT(v1.b < 0);
+    RC_ASSERT(v1.flags & PT_VF_BNEG);
 
-    uint16_t den = (uint16_t)(b0 + (uint16_t)-v1.b);
+    // -(x - y) is the reversed subtraction y - x: no negate at all
+    uint16_t den = (uint16_t)(b0 + (uint16_t)((uint16_t)v1.y - (uint16_t)v1.x));
     RC_ASSERT(den >= b0 && den > 0);
     uint8_t t = pt_div_t(b0, den);
     RC_ASSERT(x0 <= 0x7FFF);
@@ -676,26 +691,31 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     const pt_cell *ca = &m->cells[f->cell];
 
     // wholly outside one frustum ray: no columns, nothing to do
-    if (v0.a < 0 && v1.a <= 0)
+    if ((v0.flags & PT_VF_ANEG) && (v1.flags & (PT_VF_ANEG | PT_VF_AZERO)))
         return;
-    if (v1.b < 0 && v0.a >= 0 && v0.b <= 0)
+    if ((v1.flags & PT_VF_BNEG) && !(v0.flags & PT_VF_ANEG)
+        && (v0.flags & (PT_VF_BNEG | PT_VF_BZERO)))
         return;
 
     // 1. side clip and column span
     pt_ep e0;
     uint16_t b0;
-    if (v0.a < 0) {
+    if (v0.flags & PT_VF_ANEG) {
         e0 = clip_left(v0, v1);
         b0 = (uint16_t)(e0.x << 1);    // on the left ray b = 2x
+    } else if (v0.flags & PT_VF_BNEG) {
+        e0 = (pt_ep) {.x = depth_of(v0.x), .y = v0.y, .sx = 128};
+        b0 = 0;
     } else {
-        e0 = (pt_ep) {.x = depth_of(v0.x), .y = v0.y, .sx = v0.b < 0 ? 128 : v0.sx};
-        b0 = v0.b < 0 ? 0 : (uint16_t)v0.b;
+        e0 = (pt_ep) {.x = depth_of(v0.x), .y = v0.y, .sx = v0.sx};
+        b0 = (uint16_t)(int16_t)(v0.x - v0.y);
     }
     pt_ep e1;
-    if (v1.b < 0)
+    if (v1.flags & PT_VF_BNEG)
         e1 = clip_right(e0.x, b0, v1);
     else
-        e1 = (pt_ep) {.x = depth_of(v1.x), .y = v1.y, .sx = v1.a < 0 ? 0 : v1.sx};
+        e1 = (pt_ep) {.x = depth_of(v1.x), .y = v1.y,
+                      .sx = (v1.flags & PT_VF_ANEG) ? 0 : v1.sx};
 
     uint8_t xa = e0.sx > f->xl ? e0.sx : f->xl;
     uint8_t xb = e1.sx < f->xr ? e1.sx : f->xr;
@@ -841,7 +861,7 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
     uint8_t n = c->first_edge;
     pt_vv v = transform(r, m->verts[m->edges[n].v0]);
     uint8_t guard = c->num_edges;
-    while (v.a > 0) {
+    while (!(v.flags & (PT_VF_ANEG | PT_VF_AZERO))) {    // a > 0
         RC_PANIC(guard-- > 0);
         n = pt_map_ring_next(m, n);
         v = transform(r, m->verts[m->edges[n].v0]);
@@ -850,7 +870,7 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
     for (;;) {
         uint8_t nn = pt_map_ring_next(m, n);
         pt_vv w = transform(r, m->verts[m->edges[nn].v0]);
-        if (w.a > 0)
+        if (!(w.flags & (PT_VF_ANEG | PT_VF_AZERO)))    // a > 0
             break;
         n = nn;
         v = w;
@@ -920,7 +940,8 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->cam_y = cam_y;
     r->cam_cell = cell;
     r->eye_z = (uint16_t)(m->cells[cell].floor_z - PT_CAM_HEIGHT);
-    r->angle = angle;
+    r->dsin = pt_sin_resolve(angle);
+    r->dcos = pt_cos_resolve(angle);
 
     pt_mode5_clear(r->fb);
     r->pool_num = 1;

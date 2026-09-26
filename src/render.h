@@ -49,13 +49,21 @@ typedef struct pt_piece {
     uint8_t next;    // next piece in this piece's chain, 0 = end
 } pt_piece;
 
+// Frustum classification of a view vertex: the ray sums a = x + y (left ray)
+// and b = x - y (right ray) are formed once in transform and only their signs
+// kept; the rare clips recompute the magnitudes they need from x and y. The
+// negative bits sit at 7 and 6, where the 6502's BIT lands them in N and V.
+#define PT_VF_ANEG 0x80u     // a < 0: strictly outside the left ray
+#define PT_VF_BNEG 0x40u     // b < 0: strictly outside the right ray
+#define PT_VF_AZERO 0x08u    // a == 0: exactly on the left ray
+#define PT_VF_BZERO 0x04u    // b == 0: exactly on the right ray
+
 // View data of a transformed vertex; sx is valid only in the frustum.
 typedef struct pt_vv {
     int16_t x;       // depth
     int16_t y;       // lateral, right positive
-    int16_t a;       // x + y: >= 0 iff on or right of the left frustum ray
-    int16_t b;       // x - y: >= 0 iff on or left of the right frustum ray
-    uint8_t sx;      // floor(64 + 64*y/x) when a >= 0 and b >= 0
+    uint8_t sx;      // floor(64 + 64*y/x) when inside both rays
+    uint8_t flags;   // PT_VF_*
 } pt_vv;
 
 // A portal frame on the explicit walk stack.
@@ -77,7 +85,7 @@ typedef struct pt_render {
     // camera for the frame being rendered
     uint16_t cam_x, cam_y;
     uint16_t eye_z;
-    uint8_t angle;
+    pt_sincos dsin, dcos;    // the direction's sine and cosine, resolved once
     uint8_t cam_cell;
 
     pt_piece pool[PT_POOL_SIZE];

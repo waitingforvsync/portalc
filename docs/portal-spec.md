@@ -110,9 +110,12 @@ vertex between them and therefore partition the columns exactly.
 - **Multiply**: quarter-square (difference of squares) tables, with the extra
   `(x−255)²/4` tables. The table MSB pointers are set once at start-up and never
   changed.
-- **Reciprocals**: `0x10000/n` lo/hi, 256 entries. Larger `n` is normalised by
-  counting shifts into range and shifting the result down afterwards. Entries 0 and 1
-  are `0xFFFF`.
+- **Reciprocals**: one byte per entry, 128 entries: `round(0x10000/n) − 256` for
+  `n` in `[128, 255]`, a stored 0 meaning 256. Every denominator is normalised into
+  that window by counting shifts (left shifts are exact), so `1/n` is `1 + f/256`
+  at a known power of two and a division is one add plus a single fractional
+  multiply; the numerator is pre-shifted when the result scale calls for it, so
+  truncation is never amplified.
 - Prefer unsigned values of the smallest type that fits.
 
 ### 4.1 Fixed-point formats

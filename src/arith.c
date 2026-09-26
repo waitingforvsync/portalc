@@ -17,8 +17,10 @@
 static uint16_t sq1_[512];
 static uint16_t sq2_[512];
 
-// recip_[n] = 0x10000 / n; entries 0 and 1 are saturated.
-static uint16_t recip_[256];
+// recipf_[n - 128] = round(0x10000 / n) - 256 for n in [128, 255]: the
+// fractional byte of the reciprocal of a normalised denominator. The 512 at
+// n = 128 wraps to a stored 0, which therefore means 256.
+static uint8_t recipf_[128];
 
 // sin of [0, pi) in u0.8, 128 entries: every entry is positive and a stored
 // 0 means 256. The second half turn reuses the table negated, and indices 0
@@ -38,10 +40,8 @@ void pt_arith_init(void)
         sq2_[i] = (uint16_t)((d * d) / 4);
     }
 
-    recip_[0] = 0xFFFF;
-    recip_[1] = 0xFFFF;
-    for (uint32_t n = 2; n < 256; n++)
-        recip_[n] = (uint16_t)(0x10000u / n);
+    for (uint32_t n = 128; n < 256; n++)
+        recipf_[n - 128] = (uint8_t)((0x10000u + n / 2) / n - 256);
 
     sin_[0] = 0;    // never read: index 0 is special cased
     for (uint32_t i = 1; i < 128; i++) {
@@ -50,6 +50,18 @@ void pt_arith_init(void)
     }
 
     inited_ = true;
+}
+
+pt_sincos pt_sin_resolve(uint8_t angle)
+{
+    RC_ASSERT(inited_);
+
+    uint8_t i = (uint8_t)(angle & 0x7F);
+    uint8_t neg = (uint8_t)(angle >> 7);
+    if (i == 0)
+        return (pt_sincos) {.m = 0, .neg = neg};    // angles 0 and 128
+    uint8_t v = sin_[i];
+    return (pt_sincos) {.m = v == 0 ? 256 : v, .neg = neg};
 }
 
 uint16_t pt_mulu8(uint8_t a, uint8_t b)
@@ -99,25 +111,38 @@ static uint16_t mulu16_frac_round(uint16_t a, uint8_t f)
     return (uint16_t)(lo + hi);
 }
 
-int16_t pt_mul_sin(int16_t a, uint8_t angle)
+// One term of a sine multiply or accumulate: the unsigned rounded product
+// and the product's sign. Rounded to nearest, not truncated: the transform
+// sums two of these per coordinate, and a shared truncation bias would lean
+// every near-clip interpolation the same way (visible where a floor line
+// grazes the screen edge).
+static uint16_t term_sc(int16_t a, pt_sincos sc, bool *neg)
 {
-    RC_ASSERT(inited_);
+    RC_ASSERT(sc.m <= 256);
     RC_ASSERT(a != INT16_MIN);
 
-    uint8_t i = (uint8_t)(angle & 0x7F);
-    if (i == 0)
-        return 0;    // angles 0 and 128
-
-    // rounded to nearest, not truncated: the transform sums two of these per
-    // coordinate, and a shared truncation bias would lean every near-clip
-    // interpolation the same way (visible where a floor line grazes the
-    // screen edge)
     uint16_t ua = (uint16_t)(a < 0 ? -a : a);
-    uint8_t f = sin_[i];
-    uint16_t m = f == 0 ? ua : mulu16_frac_round(ua, f);    // a stored 0 means 256
-    if ((a < 0) == ((angle & 0x80) != 0))
-        return (int16_t)m;
-    return (int16_t)-m;
+    *neg = (a < 0) != (sc.neg != 0);
+    return sc.m == 256 ? ua : mulu16_frac_round(ua, (uint8_t)sc.m);
+}
+
+int16_t pt_mul_sc(int16_t a, pt_sincos sc)
+{
+    bool neg;
+    uint16_t m = term_sc(a, sc, &neg);
+    return neg ? (int16_t)-m : (int16_t)m;
+}
+
+int16_t pt_mac_sc(int16_t u, pt_sincos a, int16_t v, pt_sincos b)
+{
+    bool nu;
+    bool nv;
+    uint16_t pu = term_sc(u, a, &nu);
+    uint16_t pv = term_sc(v, b, &nv);
+    if (nu != nv)
+        return nu ? (int16_t)(pv - pu) : (int16_t)(pu - pv);
+    uint16_t s = (uint16_t)(pu + pv);
+    return nu ? (int16_t)-s : (int16_t)s;
 }
 
 int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t)
@@ -127,37 +152,63 @@ int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t)
     return (int16_t)(a - (int16_t)pt_mulu16_frac((uint16_t)(a - b), t));
 }
 
-// The one deliberately wide helper: a full 16x16 product, which on the 6502
-// is the four-partial byte chain of the quarter-square multiply; each caller
-// shifts one window out of it and the result widths below all fit u16.
-static uint32_t mulwide(uint16_t a, uint16_t b)
-{
-    uint32_t p = pt_mulu8((uint8_t)a, (uint8_t)b);
-    p += (uint32_t)pt_mulu8((uint8_t)a, (uint8_t)(b >> 8)) << 8;
-    p += (uint32_t)pt_mulu8((uint8_t)(a >> 8), (uint8_t)b) << 8;
-    p += (uint32_t)pt_mulu8((uint8_t)(a >> 8), (uint8_t)(b >> 8)) << 16;
-    return p;
-}
+// A normalised reciprocal: 2^16 / den ~= (256 + f) * 2^-s, den shifted into
+// [128, 255] (right shifts truncating, left shifts exact, s signed). f is a
+// single byte; 0 means 256 (den a power of two), the sine table's trick.
+typedef struct pt_recip {
+    uint8_t f;
+    int8_t s;
+} pt_recip;
 
-pt_recip pt_recip16(uint16_t n)
+static pt_recip recip16(uint16_t n)
 {
     RC_ASSERT(inited_);
     RC_ASSERT(n > 0);
 
-    uint8_t s = 0;
+    int8_t s = 0;
     while (n > 255) {
-        n >>= 1;
+        n >>= 1;    // truncating; costs up to n/2^s in the denominator
         s++;
     }
-    return (pt_recip) {.r = recip_[n], .s = s};
+    while (n < 128) {
+        n <<= 1;    // exact
+        s--;
+    }
+    return (pt_recip) {.f = recipf_[n - 128], .s = s};
+}
+
+uint32_t pt_mulu24_frac(uint32_t v, uint8_t f)
+{
+    // exact: only the first partial has bits below the shift, and they are
+    // the true product's own low byte
+    uint32_t m = pt_mulu8((uint8_t)v, f) >> 8;
+    m += pt_mulu8((uint8_t)(v >> 8), f);
+    m += (uint32_t)pt_mulu8((uint8_t)(v >> 16), f) << 8;
+    return m;
+}
+
+// The division core: num * 2^k / den as num * (256 + f) * 2^-(8 + s - k).
+// A net left shift is applied to num first (exact), so the fractional
+// truncation is never amplified; what remains is one add, one fractional
+// multiply and a right shift.
+static uint32_t recip_div(uint32_t num, uint16_t den, uint8_t k)
+{
+    pt_recip rc = recip16(den);
+    int8_t sh = (int8_t)(8 + rc.s - (int8_t)k);
+    if (sh < 0) {
+        num <<= -sh;
+        sh = 0;
+    }
+    RC_ASSERT(num < (1u << 24));    // every caller's domain keeps the chain u24
+    uint32_t m = rc.f == 0 ? num << 1 : num + pt_mulu24_frac(num, rc.f);
+    return m >> sh;
 }
 
 uint8_t pt_div_t(uint16_t num, uint16_t den)
 {
     RC_ASSERT(den > 0 && num <= den);
 
-    pt_recip rc = pt_recip16(den);
-    uint32_t t = mulwide(num, rc.r) >> (8 + rc.s);
+    uint32_t t = recip_div(num, den, 8);
     return t > 255 ? 255 : (uint8_t)t;
 }
 
@@ -165,8 +216,7 @@ uint8_t pt_div_cols(uint16_t num_q8, uint16_t den_q8)
 {
     RC_ASSERT(den_q8 > 0);
 
-    pt_recip rc = pt_recip16(den_q8);
-    uint32_t q = mulwide(num_q8, rc.r) >> (16 + rc.s);
+    uint32_t q = recip_div(num_q8, den_q8, 0);
     return q > 127 ? 127 : (uint8_t)q;
 }
 
@@ -175,11 +225,11 @@ uint16_t pt_div_q8(uint32_t num, uint16_t den)
     RC_ASSERT(den > 0);
     RC_ASSERT(num < (1u << 24));
 
-    // (num * r) >> (8 + s), the numerator split into high and low bytes so
-    // each partial fits the u16 x u16 chain
-    pt_recip rc = pt_recip16(den);
-    uint32_t q = (mulwide((uint16_t)(num >> 8), rc.r) >> rc.s)
-               + (mulwide((uint16_t)(num & 0xFF), rc.r) >> (8 + rc.s));
+    // an overflowing quotient saturates up front; this also caps the
+    // pre-shifted numerator within the u24 chain
+    if (num >= (uint32_t)den << 8)
+        return 0xFFFF;
+    uint32_t q = recip_div(num, den, 8);
     return q > 0xFFFF ? 0xFFFF : (uint16_t)q;
 }
 
@@ -190,7 +240,7 @@ uint16_t pt_grad_mag(uint8_t dy, uint8_t dx)
 
     if (dx == 1)
         return (uint16_t)(dy << 8);
-    uint32_t q = mulwide(dy, recip_[dx]) >> 8;
+    uint32_t q = recip_div(dy, dx, 8);
     return q > 0x7FFF ? 0x7FFF : (uint16_t)q;
 }
 
@@ -199,8 +249,7 @@ uint16_t pt_gradq8_mag(uint8_t dy, uint16_t dx_q8)
     RC_ASSERT(dx_q8 > 0);
     RC_ASSERT(dy <= 64);
 
-    pt_recip rc = pt_recip16(dx_q8);
-    uint32_t q = mulwide(dy, rc.r) >> rc.s;
+    uint32_t q = recip_div(dy, dx_q8, 16);
     return q > 0x7FFF ? 0x7FFF : (uint16_t)q;
 }
 
@@ -211,8 +260,7 @@ uint8_t pt_project_col(int16_t y, uint16_t x)
     uint16_t uy = (uint16_t)(y < 0 ? -y : y);
     RC_ASSERT(uy <= x);
 
-    pt_recip rc = pt_recip16(x);
-    uint32_t q = mulwide(uy, rc.r) >> (10 + rc.s);
+    uint32_t q = recip_div(uy, x, 6);
     if (q > 64)
         q = 64;
     return (uint8_t)(y < 0 ? 64 - q : 64 + q);
@@ -226,8 +274,7 @@ uint16_t pt_project_col_q8(int16_t y, uint16_t d)
     if (uy > d)
         uy = d;    // interpolation rounding can nudge y just past the ray
 
-    pt_recip rc = pt_recip16(d);
-    uint32_t q = mulwide(uy, rc.r) >> (2 + rc.s);
+    uint32_t q = recip_div(uy, d, 14);
     if (q > 64u << 8)
         q = 64u << 8;
     return (uint16_t)(y < 0 ? (64u << 8) - q : (64u << 8) + q);
@@ -240,8 +287,7 @@ uint8_t pt_project_row(int16_t h, uint16_t x)
     uint16_t uh = (uint16_t)(h < 0 ? -h : h);
     RC_ASSERT((uint32_t)x * PT_SCREEN_HEIGHT >= (uint32_t)uh * 128);    // on screen vertically
 
-    pt_recip rc = pt_recip16(x);
-    uint32_t q = mulwide(uh, rc.r) >> (10 + rc.s);
+    uint32_t q = recip_div(uh, x, 6);
     if (q > PT_SCREEN_HEIGHT / 2)
         q = PT_SCREEN_HEIGHT / 2;
     return (uint8_t)(h < 0 ? PT_SCREEN_HEIGHT / 2 - q : PT_SCREEN_HEIGHT / 2 + q);

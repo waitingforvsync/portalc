@@ -80,6 +80,24 @@ RC_TEST_STEP(arith, mul_sin, fix)
     }
 }
 
+RC_TEST_STEP(arith, mac_sc, fix)
+{
+    (void)fix;
+    // the accumulate must agree with the two products summed in two's
+    // complement, across every sign quadrant
+    static const int16_t us[] = {-30000, -257, -1, 0, 1, 256, 30000};
+    for (uint32_t i = 0; i < sizeof(us) / sizeof(us[0]); i++)
+        for (uint32_t j = 0; j < sizeof(us) / sizeof(us[0]); j++)
+            for (uint32_t ta = 0; ta < 256; ta += 5) {
+                pt_sincos a = pt_sin_resolve((uint8_t)ta);
+                pt_sincos b = pt_cos_resolve((uint8_t)(ta + 3 * j));
+                int16_t want = (int16_t)((int32_t)pt_mul_sc(us[i], a) + pt_mul_sc(us[j], b));
+                RC_CHECK(pt_mac_sc(us[i], a, us[j], b), ==, want);
+                int16_t wsub = (int16_t)((int32_t)pt_mul_sc(us[i], a) - pt_mul_sc(us[j], b));
+                RC_CHECK(pt_msub_sc(us[i], a, us[j], b), ==, wsub);
+            }
+}
+
 RC_TEST_STEP(arith, lerp16, fix)
 {
     (void)fix;
@@ -160,8 +178,11 @@ RC_TEST_STEP(arith, grad_mag, fix)
         for (uint32_t dx = 1; dx <= 128; dx++) {
             uint32_t exact = (dy << 8) / dx;
             uint32_t got = pt_grad_mag((uint8_t)dy, (uint8_t)dx);
+            // the byte reciprocal costs up to ~0.2% of the exact value; over
+            // a line's own dx-column span that is under a sixth of a row
             int32_t err = (int32_t)got - (int32_t)exact;
-            RC_CHECK(err >= -2 && err <= 2, ==, true);
+            int32_t slack = (int32_t)(exact / 256) + 2;
+            RC_CHECK(err >= -slack && err <= slack, ==, true);
         }
 }
 

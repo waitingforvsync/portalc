@@ -218,27 +218,28 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         c->x = apply(c->x, muls24_s8(push, ed->nx));
         c->y = apply(c->y, muls24_s8(push, ed->ny));
     }
-    // desired displacement from the input
-    int16_t dc = pt_cos(c->angle);
-    int16_t ds = pt_sin(c->angle);
+    // desired displacement from the input: the facing step, whose low byte
+    // is 0 so the rounded multiply is exact
+    int16_t fx = pt_mul_cos((int16_t)PT_CAM_MOVE_SPEED, c->angle);
+    int16_t fy = pt_mul_sin((int16_t)PT_CAM_MOVE_SPEED, c->angle);
     int32_t mx = 0;
     int32_t my = 0;
     if (input & PT_IN_FWD) {
-        mx += mulq_s8(PT_CAM_MOVE_SPEED, dc);
-        my += mulq_s8(PT_CAM_MOVE_SPEED, ds);
+        mx += fx;
+        my += fy;
     }
     if (input & PT_IN_BACK) {
-        mx -= mulq_s8(PT_CAM_MOVE_SPEED, dc);
-        my -= mulq_s8(PT_CAM_MOVE_SPEED, ds);
+        mx -= fx;
+        my -= fy;
     }
     if (input & PT_IN_RIGHT) {
         // right of facing is the direction at angle + 64: (-sin, cos)
-        mx -= mulq_s8(PT_CAM_MOVE_SPEED, ds);
-        my += mulq_s8(PT_CAM_MOVE_SPEED, dc);
+        mx -= fy;
+        my += fx;
     }
     if (input & PT_IN_LEFT) {
-        mx += mulq_s8(PT_CAM_MOVE_SPEED, ds);
-        my -= mulq_s8(PT_CAM_MOVE_SPEED, dc);
+        mx += fy;
+        my -= fx;
     }
     if (mx == 0 && my == 0)
         return;

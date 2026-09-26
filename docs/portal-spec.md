@@ -103,8 +103,10 @@ vertex between them and therefore partition the columns exactly.
 ## 4. Arithmetic and tables
 
 - **Sine table**: `sin(θ)·256`, 256 entries for 360°. Indices 0 and 128 are special
-  cased (result 0); a stored 0 means 256. Used only for the camera direction; may be
-  made coarser.
+  cased (result 0); a stored 0 means 256. Never read out as a value: multiplying by
+  `sin`/`cos` looks up the magnitude and lets the index's half turn and the other
+  operand's sign pick the positive or negated product. Used only for the camera
+  direction; may be made coarser.
 - **Multiply**: quarter-square (difference of squares) tables, with the extra
   `(x−255)²/4` tables. The table MSB pointers are set once at start-up and never
   changed.

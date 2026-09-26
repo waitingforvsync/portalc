@@ -19,16 +19,6 @@ typedef struct pt_recip {
 // Build the tables; call once before anything else (idempotent).
 void pt_arith_init(void);
 
-// sin(angle) in s0.8 for 256ths of a turn: a 128-entry table over [0, pi)
-// reused negated for the second half, with 0 and 128 special cased.
-int16_t pt_sin(uint8_t angle);
-
-// cos(angle) in s0.8.
-static inline int16_t pt_cos(uint8_t angle)
-{
-    return pt_sin((uint8_t)(angle + 64));
-}
-
 // ---- unsigned multiplies ----
 
 // a * b via the quarter-square tables; the primitive everything else builds on.
@@ -47,10 +37,19 @@ uint16_t pt_mulu16_frac_neg(uint16_t a, uint8_t f);
 // gradient magnitude (u7.8) times a column count, saturating at 0xFFFF.
 uint16_t pt_mulg_u16(uint16_t g, uint8_t dx);
 
-// (a * s) >> 8, rounded to nearest, for signed a and a sine value s in
-// [-256, 256]: the sign pair picks the positive or the negated product path.
+// a * sin(angle), rounded to nearest, for signed a and 256ths of a turn.
+// The sine is never formed as a value: the index's low 7 bits pick the
+// magnitude from a 128-entry table over [0, pi) (0 and 128 special cased to
+// a zero product, a stored 256 to a copy of a), and the sign of a together
+// with the index's top bit picks the positive or the negated product path.
 // Rounding keeps the vertex transform unbiased.
-int16_t pt_muls16_sine(int16_t a, int16_t s);
+int16_t pt_mul_sin(int16_t a, uint8_t angle);
+
+// a * cos(angle), rounded to nearest: the sine a quarter turn on.
+static inline int16_t pt_mul_cos(int16_t a, uint8_t angle)
+{
+    return pt_mul_sin(a, (uint8_t)(angle + 64));
+}
 
 // a + t * (b - a) for a u0.8 parameter t: the comparison picks the direction,
 // and the difference is multiplied unsigned.

@@ -1,6 +1,9 @@
 // test_arith.c - the table arithmetic against wide-integer references.
 
 #include "arith.h"
+
+#include <math.h>
+
 #include "mode5.h"
 #include "richc/test.h"
 
@@ -53,17 +56,28 @@ RC_TEST_STEP(arith, mulg_u16, fix)
         }
 }
 
-RC_TEST_STEP(arith, muls16_sine, fix)
+RC_TEST_STEP(arith, mul_sin, fix)
 {
     (void)fix;
     static const int16_t as[] = {-32767, -12345, -256, -1, 0, 1, 255, 256, 30000};
-    static const int16_t ss[] = {-256, -255, -181, -1, 0, 1, 100, 181, 255, 256};
-    for (uint32_t i = 0; i < sizeof(as) / sizeof(as[0]); i++)
-        for (uint32_t j = 0; j < sizeof(ss) / sizeof(ss[0]); j++) {
-            int32_t exact = ((int32_t)as[i] * ss[j]) / 256;    // trunc toward zero
-            int32_t got = pt_muls16_sine(as[i], ss[j]);
-            RC_CHECK(got - exact >= -1 && got - exact <= 1, ==, true);
+    for (uint32_t i = 0; i < sizeof(as) / sizeof(as[0]); i++) {
+        int16_t a = as[i];
+        RC_CHECK(pt_mul_sin(a, 0), ==, (int16_t)0);
+        RC_CHECK(pt_mul_sin(a, 64), ==, a);
+        RC_CHECK(pt_mul_sin(a, 128), ==, (int16_t)0);
+        RC_CHECK(pt_mul_sin(a, 192), ==, (int16_t)-a);
+        for (uint32_t t = 0; t < 256; t++) {
+            // |a| * round(256 sin), rounded half up, with the product's sign
+            long s = lround(sin((double)t * (3.14159265358979323846 / 128.0)) * 256.0);
+            int32_t ua = a < 0 ? -a : a;
+            int32_t m = (int32_t)((ua * (s < 0 ? -s : s) + 128) >> 8);
+            int32_t want = (a < 0) != (s < 0) ? -m : m;
+            RC_CHECK((int32_t)pt_mul_sin(a, (uint8_t)t), ==, want);
+            RC_CHECK(pt_mul_cos(a, (uint8_t)t), ==, pt_mul_sin(a, (uint8_t)(t + 64)));
+            // odd symmetry
+            RC_CHECK(pt_mul_sin(a, (uint8_t)t), ==, (int16_t)-pt_mul_sin(a, (uint8_t)(256 - t)));
         }
+    }
 }
 
 RC_TEST_STEP(arith, lerp16, fix)
@@ -81,21 +95,6 @@ RC_TEST_STEP(arith, lerp16, fix)
                 int32_t exact = b >= a ? a + off : a - off;
                 RC_CHECK((int32_t)pt_lerp16(as[i], bs[j], (uint8_t)t), ==, exact);
             }
-}
-
-RC_TEST_STEP(arith, sin_table, fix)
-{
-    (void)fix;
-    RC_CHECK(pt_sin(0), ==, (int16_t)0);
-    RC_CHECK(pt_sin(64), ==, (int16_t)256);
-    RC_CHECK(pt_sin(128), ==, (int16_t)0);
-    RC_CHECK(pt_sin(192), ==, (int16_t)-256);
-    for (uint32_t i = 0; i < 256; i++) {
-        RC_CHECK(pt_sin((uint8_t)i), >=, (int16_t)-256);
-        RC_CHECK(pt_sin((uint8_t)i), <=, (int16_t)256);
-        // odd symmetry
-        RC_CHECK(pt_sin((uint8_t)i), ==, (int16_t)-pt_sin((uint8_t)(256 - i)));
-    }
 }
 
 RC_TEST_STEP(arith, div_t_bounds, fix)

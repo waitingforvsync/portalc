@@ -52,18 +52,6 @@ void pt_arith_init(void)
     inited_ = true;
 }
 
-int16_t pt_sin(uint8_t angle)
-{
-    RC_ASSERT(inited_);
-
-    uint8_t i = (uint8_t)(angle & 0x7F);
-    if (i == 0)
-        return 0;    // angles 0 and 128
-    uint8_t v = sin_[i];
-    int16_t mag = v == 0 ? 256 : v;
-    return (angle & 0x80) ? (int16_t)-mag : mag;
-}
-
 uint16_t pt_mulu8(uint8_t a, uint8_t b)
 {
     RC_ASSERT(inited_);
@@ -111,24 +99,23 @@ static uint16_t mulu16_frac_round(uint16_t a, uint8_t f)
     return (uint16_t)(lo + hi);
 }
 
-int16_t pt_muls16_sine(int16_t a, int16_t s)
+int16_t pt_mul_sin(int16_t a, uint8_t angle)
 {
-    RC_ASSERT(s >= -256 && s <= 256);
+    RC_ASSERT(inited_);
     RC_ASSERT(a != INT16_MIN);
 
-    if (s == 256)
-        return a;
-    if (s == -256)
-        return (int16_t)-a;
+    uint8_t i = (uint8_t)(angle & 0x7F);
+    if (i == 0)
+        return 0;    // angles 0 and 128
 
     // rounded to nearest, not truncated: the transform sums two of these per
     // coordinate, and a shared truncation bias would lean every near-clip
     // interpolation the same way (visible where a floor line grazes the
     // screen edge)
     uint16_t ua = (uint16_t)(a < 0 ? -a : a);
-    uint8_t f = (uint8_t)(s < 0 ? -s : s);
-    uint16_t m = mulu16_frac_round(ua, f);
-    if ((a < 0) == (s < 0))
+    uint8_t f = sin_[i];
+    uint16_t m = f == 0 ? ua : mulu16_frac_round(ua, f);    // a stored 0 means 256
+    if ((a < 0) == ((angle & 0x80) != 0))
         return (int16_t)m;
     return (int16_t)-m;
 }

@@ -77,7 +77,7 @@ typedef struct pt_render {
     // camera for the frame being rendered
     uint16_t cam_x, cam_y;
     uint16_t eye_z;
-    int16_t dsin, dcos;    // s0.8
+    uint8_t angle;
     uint8_t cam_cell;
 
     pt_piece pool[PT_POOL_SIZE];

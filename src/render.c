@@ -520,8 +520,8 @@ static pt_vv transform(const pt_render *r, pt_vertex w)
     // sign-branched unsigned products
     int16_t rx = (int16_t)(w.x - r->cam_x);
     int16_t ry = (int16_t)(w.y - r->cam_y);
-    int16_t x = (int16_t)(pt_muls16_sine(rx, r->dcos) + pt_muls16_sine(ry, r->dsin));
-    int16_t y = (int16_t)(pt_muls16_sine(ry, r->dcos) - pt_muls16_sine(rx, r->dsin));
+    int16_t x = (int16_t)(pt_mul_cos(rx, r->angle) + pt_mul_sin(ry, r->angle));
+    int16_t y = (int16_t)(pt_mul_cos(ry, r->angle) - pt_mul_sin(rx, r->angle));
 
     int32_t a = (int32_t)x + y;
     int32_t b = (int32_t)x - y;
@@ -920,8 +920,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->cam_y = cam_y;
     r->cam_cell = cell;
     r->eye_z = (uint16_t)(m->cells[cell].floor_z - PT_CAM_HEIGHT);
-    r->dsin = pt_sin(angle);
-    r->dcos = pt_cos(angle);
+    r->angle = angle;
 
     pt_mode5_clear(r->fb);
     r->pool_num = 1;

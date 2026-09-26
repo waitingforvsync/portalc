@@ -151,20 +151,20 @@ RC_TEST_STEP(arith, project_col, fix)
     }
 }
 
-RC_TEST_STEP(arith, project_row, fix)
+RC_TEST_STEP(arith, project_rowd, fix)
 {
     (void)fix;
-    static const int16_t hs[] = {-400, -80, -1, 0, 1, 80, 136, 400};
+    static const uint8_t hs[] = {0, 1, 10, 17, 50, 127, 255};
     for (uint32_t i = 0; i < sizeof(hs) / sizeof(hs[0]); i++) {
-        int16_t h = hs[i];
-        uint32_t uh = (uint32_t)(h < 0 ? -h : h);
-        uint16_t d = (uint16_t)((uh * 128 + PT_SCREEN_HEIGHT - 1) / PT_SCREEN_HEIGHT);
+        uint8_t h8 = hs[i];
+        uint16_t d = (uint16_t)(((uint32_t)h8 * (8 * 128) + PT_SCREEN_HEIGHT - 1)
+                                / PT_SCREEN_HEIGHT);
         if (d == 0)
             d = 1;
-        for (uint16_t x = d; x < 8000; x = (uint16_t)(x * 2 + 1)) {
-            int32_t exact = PT_SCREEN_HEIGHT / 2 + (64 * (int32_t)h) / (int32_t)x;
-            int32_t got = pt_project_row(h, x);
-            RC_CHECK(got >= 0 && got <= PT_SCREEN_HEIGHT, ==, true);
+        for (uint32_t x = d; x < 8000; x = x * 2 + 1) {
+            int32_t exact = (64 * 8 * (int32_t)h8) / (int32_t)x;
+            int32_t got = pt_project_rowd(h8, (uint16_t)x);
+            RC_CHECK(got >= 0 && got <= PT_SCREEN_HEIGHT / 2, ==, true);
             int32_t err = got - exact;
             RC_CHECK(err >= -2 && err <= 2, ==, true);
         }

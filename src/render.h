@@ -17,7 +17,7 @@
 #define PT_POOL_SIZE 256      // piece 0 is the null link
 #define PT_MAX_DEPTH 24
 #define PT_MAX_CLOSED 8
-#define PT_CAM_HEIGHT 80      // eye height above the current cell's floor
+#define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
 
 // A gradient is a u7.8 magnitude with the sign in bit 15 (not two's
 // complement); zero is always stored positive.
@@ -84,7 +84,7 @@ typedef struct pt_render {
 
     // camera for the frame being rendered
     uint16_t cam_x, cam_y;
-    uint16_t eye_z;
+    uint8_t eye_z;           // in 8-unit z steps, like the cell heights
     pt_sincos dsin, dcos;    // the direction's sine and cosine, resolved once
     uint8_t cam_cell;
 

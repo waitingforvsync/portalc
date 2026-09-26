@@ -31,15 +31,15 @@ typedef struct pt_edge {
     pt_pattern wall;     // wall colour (walls, risers and lintels)
     int16_t ex, ey;      // unit direction s0.8
     int16_t nx, ny;      // inward unit normal s0.8
-    int32_t d0;          // dot(V0, n) in s16.8
+    int16_t d0;          // floor(dot(V0, n)) in whole units
     uint16_t len;        // edge length in world units
 } pt_edge;
 
 typedef struct pt_cell {
     uint8_t first_edge;
     uint8_t num_edges;
-    uint16_t floor_z;    // z increases downwards: floor_z > ceil_z
-    uint16_t ceil_z;
+    uint8_t floor_z;     // z in 8-unit steps, increasing downwards: floor_z > ceil_z
+    uint8_t ceil_z;
     pt_pattern floor;
     pt_pattern ceil;
 } pt_cell;

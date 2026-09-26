@@ -18,8 +18,7 @@
 #include "richc/macros.h"
 
 #define MAX_CAND 32
-#define RADIUS_Q8 ((int32_t)PT_CAM_RADIUS << 8)
-#define HIT_EPS 4    // s16.8: rounding slack for the approach test
+#define HIT_EPS 2    // whole units: truncation slack for the approach test
 
 typedef struct cand {
     uint8_t edge;
@@ -48,6 +47,17 @@ static int32_t muls24_s8(int32_t v, int16_t s)
     return ((v < 0) != (s < 0)) ? -(int32_t)m : (int32_t)m;
 }
 
+// (v * s) >> 8 for a whole-unit u16 value and a s0.8 magnitude, 256 meaning
+// one.
+static uint16_t mul16u_c8(uint16_t v, uint16_t f)
+{
+    RC_ASSERT(f <= 256);
+
+    if (f == 256)
+        return v;
+    return pt_mulu16_frac(v, (uint8_t)f);
+}
+
 // ax*sx + ay*sy for s16.8 values and s0.8 components: both products stay
 // unsigned and enter the sum by add or subtract (ADC or SBC chains, the
 // opposite-signs subtraction's wraparound being the two's complement); only
@@ -65,40 +75,61 @@ static int32_t dot24_s8(int32_t ax, int16_t sx, int32_t ay, int16_t sy)
     return nx ? -(int32_t)m : (int32_t)m;
 }
 
-// Signed distance (s16.8) from Q to the edge's line; positive on the
-// interior side. The positions are unsigned, so only the normal's
-// components fork the accumulation.
-static int32_t edge_dist(const pt_map *m, uint8_t e, uint32_t qx, uint32_t qy)
+// Every wall interaction runs in whole world units and 16-bit chains: the
+// sub-unit position fraction exists only so the move vector can accumulate
+// diagonal steps, and against a radius of PT_CAM_RADIUS units the truncated
+// unit is noise. Positions enter as their u16 whole part (the high bytes on
+// the 6502); the sums wrap mod 2^16, which is the right two's complement
+// whenever the true value fits s16.
+
+// Signed whole-unit distance from Q to the edge's line; positive on the
+// interior side, within (-2, +2) of exact. The positions are unsigned, so
+// only the normal's components fork the accumulation.
+static int16_t edge_dist(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
 {
     const pt_edge *ed = &m->edges[e];
-    uint32_t px = mul24u_frac(qx, (uint16_t)(ed->nx < 0 ? -ed->nx : ed->nx));
-    uint32_t py = mul24u_frac(qy, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny));
+    uint16_t px = mul16u_c8(x, (uint16_t)(ed->nx < 0 ? -ed->nx : ed->nx));
+    uint16_t py = mul16u_c8(y, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny));
     bool nx = ed->nx < 0;
     bool ny = ed->ny < 0;
-    int32_t d;
+    uint16_t d;
     if (nx != ny)
-        d = nx ? (int32_t)(py - px) : (int32_t)(px - py);
+        d = nx ? (uint16_t)(py - px) : (uint16_t)(px - py);
     else if (nx)
-        d = -(int32_t)(px + py);
+        d = (uint16_t)-(uint16_t)(px + py);
     else
-        d = (int32_t)(px + py);
-    return d - ed->d0;
+        d = (uint16_t)(px + py);
+    return (int16_t)(uint16_t)(d - (uint16_t)ed->d0);
 }
 
-// Position (s16.8) of the foot of the perpendicular along the edge from V0.
-static int32_t edge_t(const pt_map *m, uint8_t e, uint32_t qx, uint32_t qy)
+// ax*sx + ay*sy for whole-unit s16 values and s0.8 components: the same
+// accumulation as dot24_s8, held to 16 bits.
+static int16_t dot16_s8(int16_t ax, int16_t sx, int16_t ay, int16_t sy)
+{
+    uint16_t px = mul16u_c8((uint16_t)(ax < 0 ? -ax : ax), (uint16_t)(sx < 0 ? -sx : sx));
+    uint16_t py = mul16u_c8((uint16_t)(ay < 0 ? -ay : ay), (uint16_t)(sy < 0 ? -sy : sy));
+    bool nx = (ax < 0) != (sx < 0);
+    bool ny = (ay < 0) != (sy < 0);
+    if (nx != ny)
+        return nx ? (int16_t)(uint16_t)(py - px) : (int16_t)(uint16_t)(px - py);
+    uint16_t m = (uint16_t)(px + py);
+    return nx ? (int16_t)-m : (int16_t)m;
+}
+
+// Whole-unit position of the foot of the perpendicular along the edge from V0.
+static int16_t edge_t(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
 {
     const pt_edge *ed = &m->edges[e];
-    int32_t rx = (int32_t)(qx - ((uint32_t)m->verts[ed->v0].x << 8));
-    int32_t ry = (int32_t)(qy - ((uint32_t)m->verts[ed->v0].y << 8));
-    return dot24_s8(rx, ed->ex, ry, ed->ey);
+    int16_t rx = (int16_t)(x - m->verts[ed->v0].x);
+    int16_t ry = (int16_t)(y - m->verts[ed->v0].y);
+    return dot16_s8(rx, ed->ex, ry, ed->ey);
 }
 
 // The foot of the perpendicular lies on the segment (exactly capped: the
 // endpoint regions belong to the posts).
-static bool foot_in_range(const pt_map *m, uint8_t e, int32_t t)
+static bool foot_in_range(const pt_map *m, uint8_t e, int16_t t)
 {
-    return t >= 0 && t <= ((int32_t)m->edges[e].len << 8);
+    return t >= 0 && (uint16_t)t <= m->edges[e].len;
 }
 
 // The full signed product of a s16.8 value and a small whole-unit count.
@@ -216,7 +247,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         if (ed->adj == 0) {
             RC_ASSERT(nc < MAX_CAND);
             cands[nc++] = (cand) {.edge = ei, .capped = 0};
-        } else if (edge_dist(m, ei, c->x, c->y) < RADIUS_Q8) {
+        } else if (edge_dist(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))
+                   < PT_CAM_RADIUS) {
             const pt_cell *nb = &m->cells[ed->adj];
             for (uint8_t j = 0; j < nb->num_edges; j++) {
                 uint8_t nj = (uint8_t)(nb->first_edge + j);
@@ -249,18 +281,21 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     for (uint8_t i = 0; i < nc; i++) {
         uint8_t ei = cands[i].edge;
         const pt_edge *ed = &m->edges[ei];
-        int32_t d = edge_dist(m, ei, c->x, c->y);
-        if (d >= RADIUS_Q8)
+        uint16_t wx = (uint16_t)(c->x >> 8);
+        uint16_t wy = (uint16_t)(c->y >> 8);
+        int16_t d = edge_dist(m, ei, wx, wy);
+        if (d >= PT_CAM_RADIUS)
             continue;
         if (cands[i].capped && d < 0)
             continue;
-        if (!foot_in_range(m, ei, edge_t(m, ei, c->x, c->y)))
+        if (!foot_in_range(m, ei, edge_t(m, ei, wx, wy)))
             continue;
-        // the push is positive, so only the normal forks the position step
-        uint32_t push = (uint32_t)(RADIUS_Q8 - d);
-        c->x = step(c->x, mul24u_frac(push, (uint16_t)(ed->nx < 0 ? -ed->nx : ed->nx)),
+        // the push is positive and under a wall's reach, so only the normal
+        // forks the whole-unit position step
+        uint16_t push = (uint16_t)(PT_CAM_RADIUS - d);
+        c->x = step(c->x, (uint32_t)mul16u_c8(push, (uint16_t)(ed->nx < 0 ? -ed->nx : ed->nx)) << 8,
                     ed->nx < 0);
-        c->y = step(c->y, mul24u_frac(push, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny)),
+        c->y = step(c->y, (uint32_t)mul16u_c8(push, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny)) << 8,
                     ed->ny < 0);
     }
     // desired displacement from the input: the facing step, whose low byte
@@ -296,19 +331,19 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     // the move; the next iteration then re-checks the walls.
     bool blocked = false;
     for (uint8_t iter = 0; iter < 3; iter++) {
-        uint32_t qx = apply(c->x, mx);
-        uint32_t qy = apply(c->y, my);
-        int32_t worst = RADIUS_Q8;
+        uint16_t qx = (uint16_t)(apply(c->x, mx) >> 8);
+        uint16_t qy = (uint16_t)(apply(c->y, my) >> 8);
+        int16_t worst = PT_CAM_RADIUS;
         uint8_t hit = 0;
         bool have_hit = false;
         for (uint8_t i = 0; i < nc; i++) {
             uint8_t ei = cands[i].edge;
-            int32_t d = edge_dist(m, ei, qx, qy);
+            int16_t d = edge_dist(m, ei, qx, qy);
             if (cands[i].capped && d < 0)
                 continue;
             if (!foot_in_range(m, ei, edge_t(m, ei, qx, qy)))
                 continue;
-            if (d + HIT_EPS >= edge_dist(m, ei, c->x, c->y))
+            if (d + HIT_EPS >= edge_dist(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)))
                 continue;
             if (d < worst) {
                 worst = d;
@@ -348,7 +383,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
             uint8_t ei = (uint8_t)(cur->first_edge + k);
             if (m->edges[ei].adj == 0)
                 continue;
-            if (edge_dist(m, ei, c->x, c->y) < 0) {
+            if (edge_dist(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)) < 0) {
                 c->cell = m->edges[ei].adj;
                 crossed = true;
                 break;

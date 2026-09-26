@@ -403,24 +403,47 @@ static void clip_line(pt_clip *cx, const pt_line *L)
 
 // ---- line generation (spec 7.7) ----
 
+// A relative height: |z - eye_z|, all in the map's 8-unit z steps, the side
+// kept apart. One byte compare-and-subtract; the projections compensate for
+// the quantisation with a wider shift.
+typedef struct pt_relh {
+    uint8_t m;        // |z - eye_z|
+    uint8_t below;    // z below the eye (z increases downwards)
+} pt_relh;
+
+static pt_relh rel_h(uint8_t z, uint8_t eye_z)
+{
+    if (z >= eye_z)
+        return (pt_relh) {.m = (uint8_t)(z - eye_z), .below = 1};
+    return (pt_relh) {.m = (uint8_t)(eye_z - z), .below = 0};
+}
+
+// The screen row of a height at depth x: the centre plus or minus the
+// projected offset, the side picking the direction.
+static uint8_t row_from(pt_relh h, uint16_t x)
+{
+    uint8_t q = pt_project_rowd(h.m, x);
+    return (uint8_t)(h.below ? PT_SCREEN_HEIGHT / 2 + q : PT_SCREEN_HEIGHT / 2 - q);
+}
+
 static pt_line flat(uint8_t x0, uint8_t x1, uint8_t y, pt_pattern col)
 {
     return (pt_line) {.x0 = x0, .x1 = x1, .y0 = y, .g = 0, .ce = col.e, .co = col.o};
 }
 
 // Build one or two pieces for the edge's line at relative height h, near
-// clipping against x = 2|h|; pieces partition [e0.sx, e1.sx) left to right.
-static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, int16_t h, pt_pattern col)
+// clipping against x = 2h; pieces partition [e0.sx, e1.sx) left to right.
+static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col)
 {
     RC_ASSERT(e0.x >= 1 && e1.x >= 1);
     RC_ASSERT(e0.sx < e1.sx);
 
     // The clip plane sits exactly where the row projection reaches the
-    // screen edge: x = 128|h|/H, the 64-row screen's classic x = 2|h|
-    // (for the 80-row screen it is 8|h|/5, shifts and adds on the 6502).
-    uint16_t uh = (uint16_t)(h < 0 ? -h : h);
-    uint16_t d = (uint16_t)(((uint32_t)uh * 128 + PT_SCREEN_HEIGHT - 1) / PT_SCREEN_HEIGHT);
-    uint8_t edge = h < 0 ? 0 : PT_SCREEN_HEIGHT;
+    // screen edge: x = 128h/H, the 64-row screen's classic x = 2h = 16*h.m
+    // (for the 80-row screen it is 8h/5, shifts and adds on the 6502).
+    uint16_t d = (uint16_t)(((uint32_t)h.m * (8 * 128) + PT_SCREEN_HEIGHT - 1)
+                            / PT_SCREEN_HEIGHT);
+    uint8_t edge = h.below ? PT_SCREEN_HEIGHT : 0;
     bool near0 = e0.x < d;
     bool near1 = e1.x < d;
 
@@ -429,8 +452,8 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, int16_t h, pt_patte
         return 1;
     }
     if (!near0 && !near1) {
-        uint8_t sy0 = pt_project_row(h, e0.x);
-        uint8_t sy1 = pt_project_row(h, e1.x);
+        uint8_t sy0 = row_from(h, e0.x);
+        uint8_t sy1 = row_from(h, e1.x);
         uint8_t dx = (uint8_t)(e1.sx - e0.sx);
         uint16_t g = sy1 >= sy0 ? pt_g_make(pt_grad_mag((uint8_t)(sy1 - sy0), dx), 0)
                                 : pt_g_make(pt_grad_mag((uint8_t)(sy0 - sy1), dx), 1);
@@ -446,7 +469,7 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, int16_t h, pt_patte
     uint8_t t = pt_div_t((uint16_t)(d - nx), (uint16_t)(fx - nx));
     int16_t ys = pt_lerp16(ny, fy, t);
     uint16_t sxq = pt_project_col_q8(ys, d);
-    uint8_t syf = pt_project_row(h, fx);
+    uint8_t syf = row_from(h, fx);
 
     uint8_t cs = (uint8_t)((uint16_t)(sxq + 255) >> 8);
     if (cs < e0.sx)
@@ -731,8 +754,8 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
         return;
     }
 
-    int16_t ha_c = (int16_t)(ca->ceil_z - r->eye_z);
-    int16_t ha_f = (int16_t)(ca->floor_z - r->eye_z);
+    pt_relh ha_c = rel_h(ca->ceil_z, r->eye_z);
+    pt_relh ha_f = rel_h(ca->floor_z, r->eye_z);
     pt_line ls[2];
     uint8_t n;
 
@@ -755,8 +778,8 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     }
 
     const pt_cell *cb = &m->cells[e->adj];
-    int16_t hb_c = (int16_t)(cb->ceil_z - r->eye_z);
-    int16_t hb_f = (int16_t)(cb->floor_z - r->eye_z);
+    pt_relh hb_c = rel_h(cb->ceil_z, r->eye_z);
+    pt_relh hb_f = rel_h(cb->floor_z, r->eye_z);
     pt_pattern cbfb = pt_pattern_xor(cb->ceil, cb->floor);
 
     // 3. non-bound-forming lines first: they only recolour, and need the top
@@ -939,7 +962,8 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->cam_x = cam_x;
     r->cam_y = cam_y;
     r->cam_cell = cell;
-    r->eye_z = (uint16_t)(m->cells[cell].floor_z - PT_CAM_HEIGHT);
+    RC_ASSERT(m->cells[cell].floor_z >= PT_CAM_HEIGHT);
+    r->eye_z = (uint8_t)(m->cells[cell].floor_z - PT_CAM_HEIGHT);
     r->dsin = pt_sin_resolve(angle);
     r->dcos = pt_cos_resolve(angle);
 

@@ -36,13 +36,15 @@ static uint8_t begin_cell(builder *b, uint16_t floor_z, uint16_t ceil_z, pt_patt
     pt_map *m = b->m;
     RC_PANIC(m->num_cells < PT_MAX_CELLS);
     RC_ASSERT(ceil_z < floor_z);
+    // heights come in 8-unit steps and span a byte of them
+    RC_ASSERT((floor_z & 7) == 0 && (ceil_z & 7) == 0 && floor_z <= 8 * 255);
 
     b->cur_cell = m->num_cells++;
     m->cells[b->cur_cell] = (pt_cell) {
         .first_edge = m->num_edges,
         .num_edges = 0,
-        .floor_z = floor_z,
-        .ceil_z = ceil_z,
+        .floor_z = (uint8_t)(floor_z >> 3),
+        .ceil_z = (uint8_t)(ceil_z >> 3),
         .floor = floor,
         .ceil = ceil,
     };
@@ -108,7 +110,8 @@ static void end_map(builder *b)
         e->ey = (int16_t)lround(dy * 256.0 / len);
         e->nx = (int16_t)-e->ey;    // inward normal (-ey, ex): interior right
         e->ny = e->ex;
-        e->d0 = (int32_t)a.x * e->nx + (int32_t)a.y * e->ny;    // s16.8 exactly
+        int32_t d0q8 = (int32_t)a.x * e->nx + (int32_t)a.y * e->ny;    // s16.8 exactly
+        e->d0 = (int16_t)(d0q8 >= 0 ? d0q8 / 256 : -((-d0q8 + 255) / 256));    // floored
         e->len = (uint16_t)lround(len);
     }
 
@@ -175,8 +178,11 @@ bool pt_map_validate(const pt_map *m)
 
 int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
 {
+    // exact (s16.8), relative to the edge's own vertex: the stored d0 is
+    // floored to whole units for the camera and would bias this query
     const pt_edge *ed = &m->edges[e];
-    return (int32_t)x * ed->nx + (int32_t)y * ed->ny - ed->d0;
+    const pt_vertex *a = &m->verts[ed->v0];
+    return (int32_t)(int16_t)(x - a->x) * ed->nx + (int32_t)(int16_t)(y - a->y) * ed->ny;
 }
 
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y)

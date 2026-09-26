@@ -280,15 +280,13 @@ uint16_t pt_project_col_q8(int16_t y, uint16_t d)
     return (uint16_t)(y < 0 ? (64u << 8) - q : (64u << 8) + q);
 }
 
-uint8_t pt_project_row(int16_t h, uint16_t x)
+uint8_t pt_project_rowd(uint8_t h8, uint16_t x)
 {
     RC_ASSERT(x > 0);
+    RC_ASSERT((uint32_t)x * PT_SCREEN_HEIGHT >= (uint32_t)h8 * (8 * 128));    // on screen
 
-    uint16_t uh = (uint16_t)(h < 0 ? -h : h);
-    RC_ASSERT((uint32_t)x * PT_SCREEN_HEIGHT >= (uint32_t)uh * 128);    // on screen vertically
-
-    uint32_t q = recip_div(uh, x, 6);
+    uint32_t q = recip_div(h8, x, 9);    // 64 * 8 * h8 / x
     if (q > PT_SCREEN_HEIGHT / 2)
         q = PT_SCREEN_HEIGHT / 2;
-    return (uint8_t)(h < 0 ? PT_SCREEN_HEIGHT / 2 - q : PT_SCREEN_HEIGHT / 2 + q);
+    return (uint8_t)q;
 }

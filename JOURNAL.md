@@ -116,6 +116,53 @@ All bit-identical: the 1,076-frame sweep matches byte for byte, and a new
 `mac_sc` test pins the accumulate to the summed products across every sign
 quadrant.
 
+## 2026-09-26 (later) — Byte heights; the camera drops to whole units
+
+### Heights quantised to 8-unit steps
+
+Map heights are now constrained to multiples of 8 (the builder asserts it;
+the demo scene and PT_CAM_HEIGHT already complied), so a relative height
+|z − eye| / 8 fits a byte with room to spare (up to 2040 units). `pt_relh`
+carries that byte plus a below-the-eye flag — computed by an unsigned
+compare-and-subtract, so the height is never a signed value — and
+`make_line` forks on the side exactly where the sign used to fork: the
+screen-edge row for the near side and the centre ± offset of the projection.
+`pt_project_row` became `pt_project_rowd`, returning just the offset
+magnitude 64·8·h8/x (the ÷8 compensated by a wider shift in the reciprocal
+core, at no cost). The demo sweep is bit-identical.
+
+The cell heights themselves now live in those steps: `pt_cell.floor_z` and
+`ceil_z` are single bytes of z/8 (the builder takes world units and asserts
+the contract: multiples of 8, under 2040), `eye_z` and PT_CAM_HEIGHT follow,
+and `rel_h` collapses to a byte compare-and-subtract with no scaling at all.
+The cell struct sheds two bytes; rendering stays bit-identical.
+
+### Whole-unit wall interactions
+
+The camera's u16.8 fraction exists so the move vector can accumulate
+diagonal steps; against a 40-unit radius it is noise in every wall test. So
+`edge_dist`, `edge_t`, `foot_in_range`, the resolve push and the portal
+transition all now run in whole world units and 16-bit chains (positions
+enter as their high bytes — free on the 6502), with `pt_edge.d0` stored
+floored to whole units (s16 instead of s16.8 in the map). The multiplies
+drop from three-partial u24 chains to two-partial u16 ones, and the resolve
+push is a genuine 8-bit quantity (under the radius). Wraparound mod 2^16
+keeps the accumulations honest wherever the true value fits s15, and
+`pt_map_edge_side` computes exactly from the edge vertex instead of the
+floored d0, so the builder's convexity validation keeps its precision.
+
+Whole-unit truncation puts each distance within (−2, +2) of exact, so
+HIT_EPS became 2 whole units. What still runs at s16.8: the move vector and
+its slide projection (the accumulator itself), and `corner_deflect`'s dot —
+its post gate is already whole-unit and 8-bit, but the deflection must see
+sub-unit moves or slow diagonals could creep into a jamb.
+
+Verified: over a 40,000-tick random walk, the exact closest approach to any
+solid wall is 29.06 units against the old code's 29.03 — the truncation
+did not move the sliding invariant (both figures are corner-post overlap,
+which is by design). All 23 tests pass; render output is untouched by the
+camera change and bit-identical under the height change.
+
 ### Open questions
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a

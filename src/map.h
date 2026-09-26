@@ -27,9 +27,11 @@ typedef struct pt_vertex {
 #define PT_EDGE_SOFT 0
 #define PT_EDGE_COLOUR(shade) ((uint8_t)((shade) + 1))
 
+// An edge does not know its owning cell: edges are only ever reached through
+// a cell's [first_edge, first_edge + num_edges) ring, so every walker already
+// holds the cell and threads it into the ring functions below.
 typedef struct pt_edge {
     uint8_t v0;          // start vertex; the end is the next ring edge's v0
-    uint8_t cell;        // owning cell
     uint8_t adj;         // adjacent cell, 0 = solid wall
     uint8_t colour;      // wall shade + 1 (walls, risers and lintels); 0 = soft
     uint8_t angle;       // direction V0 -> V1 in 256ths of a turn; a twin is
@@ -56,17 +58,16 @@ typedef struct pt_map {
     uint8_t num_edges;
 } pt_map;
 
-// The ring successor of an edge (wraps within its cell).
-static inline uint8_t pt_map_ring_next(const pt_map *m, uint8_t e)
+// The ring successor of an edge of cell c (wraps within the cell).
+static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t e)
 {
-    const pt_cell *c = &m->cells[m->edges[e].cell];
     uint8_t k = (uint8_t)(e - c->first_edge + 1);
     return (uint8_t)(c->first_edge + (k == c->num_edges ? 0 : k));
 }
 
-// The twin of a portal edge: the adjacent cell's edge running the shared
-// wall the other way (it starts at our end vertex).
-uint8_t pt_map_twin(const pt_map *m, uint8_t e);
+// The twin of a portal edge of cell c: the adjacent cell's edge running the
+// shared wall the other way (it starts at our end vertex).
+uint8_t pt_map_twin(const pt_map *m, const pt_cell *c, uint8_t e);
 
 // Build the demo scene: a pentagonal room with a depressed square in the
 // centre of its floor, and a corridor to a second, square room.
@@ -79,7 +80,7 @@ bool pt_map_validate(const pt_map *m);
 
 // The signed distance of a point from an edge's line, s16.8: positive on the
 // cell's interior side.
-int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y);
+int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y);
 
 // True when the point lies inside the cell (boundary included).
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y);

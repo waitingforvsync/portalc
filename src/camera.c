@@ -25,6 +25,16 @@ typedef struct cand {
     uint8_t capped;    // neighbour's wall: only hits in front, foot on segment
 } cand;
 
+// Collect a corner vertex, keeping the list free of duplicates.
+static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
+{
+    for (uint8_t k = 0; k < *np; k++)
+        if (posts[k] == v)
+            return;
+    RC_ASSERT(*np < MAX_CAND);
+    posts[(*np)++] = v;
+}
+
 // (v * f) >> 8 for an unsigned 24-bit value and a u0.8 factor (256 meaning
 // one, forked here; the chain itself is arith's).
 static uint32_t mul24u_frac(uint32_t v, uint16_t f)
@@ -75,11 +85,12 @@ static uint16_t mul16_lo(uint16_t a, uint16_t b)
 // 2^16 and the wraparound is exact. The twin's value is the exact negation
 // about the same two vertices, so both cells always agree where the boundary
 // lies.
-static int16_t edge_cross_band(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+static int16_t edge_cross_band(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x,
+                               uint16_t y)
 {
     const pt_edge *ed = &m->edges[e];
     pt_vertex a = m->verts[ed->v0];
-    pt_vertex b = m->verts[m->edges[pt_map_ring_next(m, e)].v0];
+    pt_vertex b = m->verts[m->edges[pt_map_ring_next(c, e)].v0];
     int16_t dx = (int16_t)(b.x - a.x);
     int16_t dy = (int16_t)(b.y - a.y);
     int16_t qx = (int16_t)(x - a.x);
@@ -102,7 +113,7 @@ static int16_t edge_cross_band(const pt_map *m, uint8_t e, uint16_t x, uint16_t 
 // identically from both cells, so every point has a definite owner and the
 // hop walk can neither cycle nor stick; fan lines concur exactly at their
 // shared vertex for the same reason.
-static bool portal_crossed(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+static bool portal_crossed(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y)
 {
     pt_xy f = edge_frame(m, e, x, y);
     int16_t margin = (int16_t)(2 + ((f.x < 0 ? 0 : f.x) >> 6));
@@ -110,7 +121,7 @@ static bool portal_crossed(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
         return false;
     if (f.y < -margin)
         return true;
-    return edge_cross_band(m, e, x, y) < 0;
+    return edge_cross_band(m, c, e, x, y) < 0;
 }
 
 // The full signed product of a s16.8 value and a small whole-unit count.
@@ -207,7 +218,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     const pt_cell *cc = &m->cells[c->cell];
 
     // 0. candidate walls (ours, plus every overlapped neighbour's) and the
-    // corner vertices at their endpoints
+    // corner vertices at their endpoints, collected while the ring (and so
+    // the wall's end vertex) is in hand
     cand cands[MAX_CAND];
     uint8_t nc = 0;
     uint8_t posts[MAX_CAND];
@@ -218,6 +230,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         if (ed->adj == 0) {
             RC_ASSERT(nc < MAX_CAND);
             cands[nc++] = (cand) {.edge = ei, .capped = 0};
+            add_post(posts, &np, ed->v0);
+            add_post(posts, &np, m->edges[pt_map_ring_next(cc, ei)].v0);
         } else if (edge_frame(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)).y
                    < PT_CAM_RADIUS) {
             const pt_cell *nb = &m->cells[ed->adj];
@@ -226,22 +240,9 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
                 if (m->edges[nj].adj == 0) {
                     RC_ASSERT(nc < MAX_CAND);
                     cands[nc++] = (cand) {.edge = nj, .capped = 1};
+                    add_post(posts, &np, m->edges[nj].v0);
+                    add_post(posts, &np, m->edges[pt_map_ring_next(nb, nj)].v0);
                 }
-            }
-        }
-    }
-    for (uint8_t i = 0; i < nc; i++) {
-        uint8_t vs[2];
-        vs[0] = m->edges[cands[i].edge].v0;
-        vs[1] = m->edges[pt_map_ring_next(m, cands[i].edge)].v0;
-        for (uint8_t j = 0; j < 2; j++) {
-            uint8_t v = vs[j];
-            uint8_t k = 0;
-            while (k < np && posts[k] != v)
-                k++;
-            if (k == np) {
-                RC_ASSERT(np < MAX_CAND);
-                posts[np++] = v;
             }
         }
     }
@@ -359,7 +360,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
             uint8_t ei = (uint8_t)(cur->first_edge + k);
             if (m->edges[ei].adj == 0)
                 continue;
-            if (portal_crossed(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))) {
+            if (portal_crossed(m, cur, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))) {
                 c->cell = m->edges[ei].adj;
                 crossed = true;
                 break;

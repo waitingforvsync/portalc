@@ -675,24 +675,25 @@ static uint8_t cut(pt_render *r, uint8_t *cursor, uint8_t xa, uint8_t xb)
 
 // ---- pushing portals ----
 
-// Find the child's first edge (spec 7.4) and push its frame.
-static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t thead,
-                       uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv)
+// Find the child's first edge (spec 7.4) and push its frame; pc is the
+// parent cell, whose ring locates the portal's twin.
+static void push_child(pt_render *r, const pt_cell *pc, uint8_t ei, uint8_t xl, uint8_t xr,
+                       uint8_t thead, uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv)
 {
     RC_PANIC(r->depth < PT_MAX_DEPTH);
     const pt_map *m = r->map;
     const pt_edge *e = &m->edges[ei];
     const pt_cell *c = &m->cells[e->adj];
 
-    uint8_t n = pt_map_ring_next(m, pt_map_twin(m, ei));
+    uint8_t n = pt_map_ring_next(c, pt_map_twin(m, pc, ei));
     pt_vv v0 = pv;
     uint8_t guard = c->num_edges;
     for (;;) {
-        pt_vv v1 = transform(r, m->verts[m->edges[pt_map_ring_next(m, n)].v0]);
+        pt_vv v1 = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
         if (col_gt(v1, xl))
             break;
         v0 = v1;
-        n = pt_map_ring_next(m, n);
+        n = pt_map_ring_next(c, n);
         if (guard == 0) {
             RC_ASSERT(0);
             return;    // degenerate ring; skip the child rather than spin
@@ -759,7 +760,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     uint8_t bh = cut(r, &f->bcur, xa, xb);
 
     if (e->colour == PT_EDGE_SOFT) {
-        push_child(r, f->edge, xa, xb, th, bh, f->tmax, f->bmin, v0);
+        push_child(r, ca, f->edge, xa, xb, th, bh, f->tmax, f->bmin, v0);
         return;
     }
 
@@ -882,7 +883,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     for (uint8_t i = no; i-- > 0;) {
         uint8_t cth = piece_at(r, childt.head, ol[i]);
         uint8_t cbh = piece_at(r, childb.head, ol[i]);
-        push_child(r, f->edge, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
+        push_child(r, ca, f->edge, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
     }
 }
 
@@ -900,12 +901,12 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
     uint8_t guard = c->num_edges;
     while (!(v.flags & (PT_VF_ANEG | PT_VF_AZERO))) {    // a > 0
         RC_PANIC(guard-- > 0);
-        n = pt_map_ring_next(m, n);
+        n = pt_map_ring_next(c, n);
         v = transform(r, m->verts[m->edges[n].v0]);
     }
     guard = c->num_edges;
     for (;;) {
-        uint8_t nn = pt_map_ring_next(m, n);
+        uint8_t nn = pt_map_ring_next(c, n);
         pt_vv w = transform(r, m->verts[m->edges[nn].v0]);
         if (!(w.flags & (PT_VF_ANEG | PT_VF_AZERO)))    // a > 0
             break;
@@ -1006,7 +1007,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
         }
         f->steps--;
 
-        uint8_t nn = pt_map_ring_next(m, f->edge);
+        uint8_t nn = pt_map_ring_next(&m->cells[f->cell], f->edge);
         pt_vv v1 = transform(r, m->verts[m->edges[nn].v0]);
         bool stop = col_ge(v1, f->xr);
         process_edge(r, f, f->v0, v1);    // may push children, which run first

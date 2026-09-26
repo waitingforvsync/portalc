@@ -327,3 +327,29 @@ Rail semantics note: `row_step`'s clamps now sit at *biased* 0 and
 rows are provably identical at both rails; only a `crossing` against a
 rail-pinned value could shift by a column. The sweep says none does: all
 1,076 frames bit-identical.
+
+## 2026-09-27 — Edges no longer know their cell
+
+Rich's question — why does `pt_edge` need its owning cell? — had a short
+answer: it didn't. The only runtime consumer was `pt_map_ring_next`'s
+wrap, and every walker already arrives at an edge through some cell's
+`[first_edge, first_edge + num_edges)` range: the render walk's frames
+carry the cell, the camera loops its own cell (and named neighbours), and
+the builder and validator loop all cells. So the member is gone —
+`pt_edge` is 5 bytes (480 bytes of edge data for the demo's 96 edges) —
+and the ring functions take the cell instead: `pt_map_ring_next(c, e)`,
+`pt_map_twin(m, c, e)`, `pt_map_edge_side(m, c, e, x, y)`. On the 6502
+that is also the cheaper shape: the walker holds {first, num} in zero
+page once per ring rather than each edge re-fetching its cell record.
+
+The one caller that didn't know its cells was the camera's post-collection
+loop, which ran over the candidate array after the fact; posts are now
+collected at candidate creation, where the ring is in hand (same
+vertices, same order, same dedup — the array is identical). In the
+builder, twin matching and the angle/length pass became per-cell walks,
+and the twin-angle override folded into the same pass: `e->adj < ci`
+replaces `t < i` (equivalent, since rings are laid out in cell order and
+twins never share a cell), and an earlier cell's angles are final by the
+time a later cell reads them. Validation drops the `t->cell != e->adj`
+check — `pt_map_twin` only searches `cells[e->adj]`, so it is true by
+construction. Tests 22/22, sweep bit-identical.

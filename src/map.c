@@ -62,63 +62,73 @@ static void add_edge(builder *b, uint8_t v, uint8_t colour)
 
     m->edges[m->num_edges++] = (pt_edge) {
         .v0 = v,
-        .cell = b->cur_cell,
         .colour = colour,
     };
     c->num_edges++;
 }
 
-// The end vertex of an edge: the next ring edge's start.
-static uint8_t edge_v1(const pt_map *m, uint8_t e)
+// The end vertex of an edge of cell c: the next ring edge's start.
+static uint8_t edge_v1(const pt_map *m, const pt_cell *c, uint8_t e)
 {
-    return m->edges[pt_map_ring_next(m, e)].v0;
+    return m->edges[pt_map_ring_next(c, e)].v0;
 }
 
 // Twin matching and collision precompute; editor work, so floats are fine.
+// Edges do not record their cell, so every pass walks the cells' rings.
 static void end_map(builder *b)
 {
     pt_map *m = b->m;
 
     // match twins: the edge running v1 -> v0 in another cell
-    for (uint8_t i = 0; i < m->num_edges; i++) {
-        pt_edge *e = &m->edges[i];
-        uint8_t v1 = edge_v1(m, i);
-        for (uint8_t j = 0; j < m->num_edges; j++) {
-            if (j == i)
-                continue;
-            if (m->edges[j].v0 == v1 && edge_v1(m, j) == e->v0) {
-                RC_ASSERT(e->adj == 0);    // exactly one neighbour per edge
-                e->adj = m->edges[j].cell;
+    for (uint8_t ci = 1; ci < m->num_cells; ci++) {
+        const pt_cell *c = &m->cells[ci];
+        for (uint8_t k = 0; k < c->num_edges; k++) {
+            uint8_t i = (uint8_t)(c->first_edge + k);
+            pt_edge *e = &m->edges[i];
+            uint8_t v1 = edge_v1(m, c, i);
+            for (uint8_t cj = 1; cj < m->num_cells; cj++) {
+                if (cj == ci)
+                    continue;
+                const pt_cell *d = &m->cells[cj];
+                for (uint8_t l = 0; l < d->num_edges; l++) {
+                    uint8_t j = (uint8_t)(d->first_edge + l);
+                    if (m->edges[j].v0 == v1 && edge_v1(m, d, j) == e->v0) {
+                        RC_ASSERT(e->adj == 0);    // exactly one neighbour per edge
+                        e->adj = cj;
+                    }
+                }
             }
+            RC_ASSERT(e->colour != PT_EDGE_SOFT || e->adj != 0);
         }
-        RC_ASSERT(e->colour != PT_EDGE_SOFT || e->adj != 0);
     }
 
-    // collision data: the edge direction as an angle (the camera works in
-    // the edge's frame through pt_rot), and the quantised length
-    for (uint8_t i = 0; i < m->num_edges; i++) {
-        pt_edge *e = &m->edges[i];
-        pt_vertex a = m->verts[e->v0];
-        pt_vertex q = m->verts[edge_v1(m, i)];
-        double dx = (double)q.x - a.x;
-        double dy = (double)q.y - a.y;
-        double len = sqrt(dx * dx + dy * dy);
-        // the upper bound keeps the transition band's cross product in s16
-        // with the quantised angle's tilt included
-        RC_ASSERT(len >= 1.0 && len < 896.0);
+    for (uint8_t ci = 1; ci < m->num_cells; ci++) {
+        const pt_cell *c = &m->cells[ci];
+        for (uint8_t k = 0; k < c->num_edges; k++) {
+            uint8_t i = (uint8_t)(c->first_edge + k);
+            pt_edge *e = &m->edges[i];
 
-        e->angle = (uint8_t)lround(atan2(dy, dx) * (128.0 / 3.14159265358979323846));
-        e->len8 = (uint8_t)((uint32_t)len / 8);
-    }
+            // collision data: the edge direction as an angle (the camera
+            // works in the edge's frame through pt_rot), and the length
+            pt_vertex a = m->verts[e->v0];
+            pt_vertex q = m->verts[edge_v1(m, c, i)];
+            double dx = (double)q.x - a.x;
+            double dy = (double)q.y - a.y;
+            double len = sqrt(dx * dx + dy * dy);
+            // the upper bound keeps the transition band's cross product in
+            // s16 with the quantised angle's tilt included
+            RC_ASSERT(len >= 1.0 && len < 896.0);
 
-    // a twin's angle is exactly the reverse of its partner's, never its own
-    // independent rounding, so both sides of a portal work against one line
-    for (uint8_t i = 0; i < m->num_edges; i++) {
-        pt_edge *e = &m->edges[i];
-        if (e->adj != 0) {
-            uint8_t t = pt_map_twin(m, i);
-            if (t < i)
+            e->angle = (uint8_t)lround(atan2(dy, dx) * (128.0 / 3.14159265358979323846));
+            e->len8 = (uint8_t)((uint32_t)len / 8);
+
+            // a twin's angle is exactly the reverse of its partner's, never
+            // its own independent rounding, so both sides of a portal work
+            // against one line; twins in earlier cells are already final
+            if (e->adj != 0 && e->adj < ci) {
+                uint8_t t = pt_map_twin(m, c, i);
                 e->angle = (uint8_t)(m->edges[t].angle + 128);
+            }
         }
     }
 
@@ -137,30 +147,30 @@ bool pt_map_validate(const pt_map *m)
         for (uint8_t k = 0; k < c->num_edges; k++) {
             uint8_t ei = (uint8_t)(c->first_edge + k);
             const pt_edge *e = &m->edges[ei];
-            uint8_t en = pt_map_ring_next(m, ei);
+            uint8_t en = pt_map_ring_next(c, ei);
 
             // clockwise, convex ring (collinear split points allowed)
             pt_vertex v0 = m->verts[e->v0];
             pt_vertex v1 = m->verts[m->edges[en].v0];
-            pt_vertex v2 = m->verts[edge_v1(m, en)];
+            pt_vertex v2 = m->verts[edge_v1(m, c, en)];
             int32_t cross = ((int32_t)v1.x - v0.x) * ((int32_t)v2.y - v1.y)
                           - ((int32_t)v1.y - v0.y) * ((int32_t)v2.x - v1.x);
             if (cross < 0)
                 return false;
 
-            // twin symmetry and soft-edge attribute equality
+            // twin symmetry and soft-edge attribute equality (the twin lives
+            // in cells[e->adj] by construction of pt_map_twin's search)
             if (e->adj != 0) {
-                uint8_t ti = pt_map_twin(m, ei);
+                const pt_cell *b = &m->cells[e->adj];
+                uint8_t ti = pt_map_twin(m, c, ei);
                 const pt_edge *t = &m->edges[ti];
-                if (t->cell != e->adj || t->adj != e->cell || pt_map_twin(m, ti) != ei)
+                if (t->adj != ci || pt_map_twin(m, b, ti) != ei)
                     return false;
-                if (t->v0 != edge_v1(m, ei) || edge_v1(m, ti) != e->v0)
+                if (t->v0 != edge_v1(m, c, ei) || edge_v1(m, b, ti) != e->v0)
                     return false;
                 if (e->colour == PT_EDGE_SOFT) {
-                    const pt_cell *a = &m->cells[e->cell];
-                    const pt_cell *b = &m->cells[e->adj];
-                    if (t->colour != PT_EDGE_SOFT || a->floor_z != b->floor_z
-                        || a->ceil_z != b->ceil_z || a->floor != b->floor || a->ceil != b->ceil)
+                    if (t->colour != PT_EDGE_SOFT || c->floor_z != b->floor_z
+                        || c->ceil_z != b->ceil_z || c->floor != b->floor || c->ceil != b->ceil)
                         return false;
                 }
             }
@@ -174,7 +184,7 @@ bool pt_map_validate(const pt_map *m)
             }
             cx /= c->num_edges;
             cy /= c->num_edges;
-            if (pt_map_edge_side(m, ei, (uint16_t)cx, (uint16_t)cy) <= 0)
+            if (pt_map_edge_side(m, c, ei, (uint16_t)cx, (uint16_t)cy) <= 0)
                 return false;
         }
     }
@@ -183,28 +193,28 @@ bool pt_map_validate(const pt_map *m)
 
 // ---- queries ----
 
-int32_t pt_map_edge_side(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y)
 {
     // the exact cross product against the line through the edge's vertices:
     // the same geometry the camera's transition band test decides by, so
     // point location and transitions can never disagree
     const pt_edge *ed = &m->edges[e];
     pt_vertex a = m->verts[ed->v0];
-    pt_vertex b = m->verts[m->edges[pt_map_ring_next(m, e)].v0];
+    pt_vertex b = m->verts[m->edges[pt_map_ring_next(c, e)].v0];
     return (int32_t)((int16_t)(b.x - a.x)) * (int16_t)(y - a.y)
          - (int32_t)((int16_t)(b.y - a.y)) * (int16_t)(x - a.x);
 }
 
-uint8_t pt_map_twin(const pt_map *m, uint8_t e)
+uint8_t pt_map_twin(const pt_map *m, const pt_cell *c, uint8_t e)
 {
     RC_ASSERT(m->edges[e].adj != 0);
 
     // the twin starts at our end vertex: rings are clockwise, so the shared
     // wall runs the other way round in the neighbour
-    uint8_t v1 = m->edges[pt_map_ring_next(m, e)].v0;
-    const pt_cell *c = &m->cells[m->edges[e].adj];
-    for (uint8_t k = 0; k < c->num_edges; k++) {
-        uint8_t t = (uint8_t)(c->first_edge + k);
+    uint8_t v1 = m->edges[pt_map_ring_next(c, e)].v0;
+    const pt_cell *a = &m->cells[m->edges[e].adj];
+    for (uint8_t k = 0; k < a->num_edges; k++) {
+        uint8_t t = (uint8_t)(a->first_edge + k);
         if (m->edges[t].v0 == v1)
             return t;
     }
@@ -216,7 +226,7 @@ bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y)
 {
     const pt_cell *c = &m->cells[cell];
     for (uint8_t k = 0; k < c->num_edges; k++)
-        if (pt_map_edge_side(m, (uint8_t)(c->first_edge + k), x, y) < 0)
+        if (pt_map_edge_side(m, c, (uint8_t)(c->first_edge + k), x, y) < 0)
             return false;
     return true;
 }

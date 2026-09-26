@@ -35,14 +35,23 @@ RC_TEST(map, scene_valid)
         RC_CHECK(m.edges[t].v0, ==, m.edges[pt_map_ring_next(&m, e)].v0);
     }
 
-    // collision data: unit vectors within rounding, n perpendicular-inward
+    // collision data: rotating the edge vector by its own angle must land it
+    // along +x within the angle quantisation, and a twin's angle is exactly
+    // the reverse
     for (uint8_t e = 0; e < m.num_edges; e++) {
         const pt_edge *ed = &m.edges[e];
-        int32_t lensq = (int32_t)ed->ex * ed->ex + (int32_t)ed->ey * ed->ey;
-        RC_CHECK(lensq, >=, (int32_t)(250 * 250));
-        RC_CHECK(lensq, <=, (int32_t)(262 * 262));
-        RC_CHECK(ed->nx, ==, (int16_t)-ed->ey);
-        RC_CHECK(ed->ny, ==, ed->ex);
+        uint8_t v1 = m.edges[pt_map_ring_next(&m, e)].v0;
+        int16_t dx = (int16_t)(m.verts[v1].x - m.verts[ed->v0].x);
+        int16_t dy = (int16_t)(m.verts[v1].y - m.verts[ed->v0].y);
+        pt_xy f = pt_rot(dx, dy, ed->angle);
+        RC_CHECK(f.x, >, (int16_t)0);
+        RC_CHECK(f.x / 8, >=, (int16_t)ed->len8);
+        // |y| <= len * pi/256 plus rounding
+        int32_t tilt = (f.x / 64) + 2;
+        RC_CHECK(f.y, <=, (int16_t)tilt);
+        RC_CHECK(f.y, >=, (int16_t)-tilt);
+        if (ed->adj != 0)
+            RC_CHECK((uint8_t)(m.edges[pt_map_twin(&m, e)].angle + 128), ==, ed->angle);
     }
 
     // the point-to-cell query maps every cell's centroid back to that cell,

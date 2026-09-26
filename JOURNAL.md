@@ -255,6 +255,35 @@ where both cells contain the point and the walk keeps the cell it arrived
 from -- hysteresis that avoids eye-height popping while skimming a rim, and
 arguably more sensible than find_cell's scan order.
 
+## 2026-09-27 — Edges as angles
+
+The angle representation prototyped, and it is a different algorithm, the
+one the discussion hoped for: pt_edge's camera data is now one direction
+byte (256ths of a turn, V0 to V1) and one quantised length byte, and every
+wall interaction happens in the edge's own frame. edge_dist and edge_t
+merged into edge_frame -- one pt_rot of Q - V0 by the edge angle, the
+renderer's own primitive, giving the foot position as x and the
+interior-positive distance as y. The resolve push is pt_dir8 along
+angle + 64 (the inward normal is the direction a quarter turn on), and the
+slide is a rotation into the wall frame, keeping x, and a rotation back by
+the negated angle byte. dot24_s8, dot16_s8, muls24_s8, mul16u_c8, edge_dist,
+edge_t and step all fell away; pt_edge is 6 bytes (from 19 at yesterday's
+start), 576 bytes of map edges instead of 1824.
+
+Consistency, per the discussion's warning, rests on two supports. The
+builder writes each twin's angle as exactly its partner's + 128 (never an
+independent rounding), so both sides of a portal work against one line. And
+the transition keeps the angle-free vertex-line band test: the decisive
+margin now grows along the edge (2 + t/64) to cover the quantised angle's
+tilt about V0, which also bounds the band cross product within s16 for
+edges under 896 units (asserted; the demo's longest is 580).
+
+Numbers: the fan probe is identical to the vector build (zero penetration,
+only exact on-line ties); the 40k-tick closest approach moved 29.55 to
+29.17 units against radius 40 -- the tilt's whole cost; rendering untouched
+and bit-identical. The map test now checks the representation directly:
+rotating each edge vector by its own angle lands on +x within quantisation.
+
 ### Open questions
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a

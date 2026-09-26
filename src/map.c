@@ -94,7 +94,8 @@ static void end_map(builder *b)
         RC_ASSERT(e->colour != PT_EDGE_SOFT || e->adj != 0);
     }
 
-    // collision data: unit direction, inward normal, offset, length
+    // collision data: the edge direction as an angle (the camera works in
+    // the edge's frame through pt_rot), and the quantised length
     for (uint8_t i = 0; i < m->num_edges; i++) {
         pt_edge *e = &m->edges[i];
         pt_vertex a = m->verts[e->v0];
@@ -103,15 +104,22 @@ static void end_map(builder *b)
         double dy = (double)q.y - a.y;
         double len = sqrt(dx * dx + dy * dy);
         // the upper bound keeps the transition band's cross product in s16
-        RC_ASSERT(len >= 1.0 && len < 2048.0);
+        // with the quantised angle's tilt included
+        RC_ASSERT(len >= 1.0 && len < 896.0);
 
-        e->ex = (int16_t)lround(dx * 256.0 / len);
-        e->ey = (int16_t)lround(dy * 256.0 / len);
-        e->nx = (int16_t)-e->ey;    // inward normal (-ey, ex): interior right
-        e->ny = e->ex;
-        int32_t d0q8 = (int32_t)a.x * e->nx + (int32_t)a.y * e->ny;    // s16.8 exactly
-        e->d0 = (int16_t)(d0q8 >= 0 ? d0q8 / 256 : -((-d0q8 + 255) / 256));    // floored
-        e->len = (uint16_t)lround(len);
+        e->angle = (uint8_t)lround(atan2(dy, dx) * (128.0 / 3.14159265358979323846));
+        e->len8 = (uint8_t)((uint32_t)len / 8);
+    }
+
+    // a twin's angle is exactly the reverse of its partner's, never its own
+    // independent rounding, so both sides of a portal work against one line
+    for (uint8_t i = 0; i < m->num_edges; i++) {
+        pt_edge *e = &m->edges[i];
+        if (e->adj != 0) {
+            uint8_t t = pt_map_twin(m, i);
+            if (t < i)
+                e->angle = (uint8_t)(m->edges[t].angle + 128);
+        }
     }
 
     RC_PANIC(pt_map_validate(m));

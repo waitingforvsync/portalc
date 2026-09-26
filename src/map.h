@@ -32,10 +32,10 @@ typedef struct pt_edge {
     uint8_t cell;        // owning cell
     uint8_t adj;         // adjacent cell, 0 = solid wall
     uint8_t colour;      // wall shade + 1 (walls, risers and lintels); 0 = soft
-    int16_t ex, ey;      // unit direction s0.8
-    int16_t nx, ny;      // inward unit normal s0.8
-    int16_t d0;          // floor(dot(V0, n)) in whole units
-    uint16_t len;        // edge length in world units
+    uint8_t angle;       // direction V0 -> V1 in 256ths of a turn; a twin is
+                         // exactly this + 128, so both sides share one line
+    uint8_t len8;        // floor(len / 8): the foot cap in 8-unit steps (the
+                         // last few units of a wall belong to its post)
 } pt_edge;
 
 typedef struct pt_cell {

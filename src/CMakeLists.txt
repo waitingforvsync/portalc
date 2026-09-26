@@ -42,6 +42,16 @@ if(NOT MSVC)
     target_compile_options(portalc_dump PRIVATE -Wall -Wextra)
 endif()
 
+# ---- verification tools: byte-exact sweep dumps and the map dump ----
+
+foreach(tool sweep fb2ppm mapdump)
+    add_executable(portalc_${tool} tools/${tool}.c)
+    target_link_libraries(portalc_${tool} PRIVATE portal)
+    if(NOT MSVC)
+        target_compile_options(portalc_${tool} PRIVATE -Wall -Wextra)
+    endif()
+endforeach()
+
 # ---- tests ----
 
 add_subdirectory(test)

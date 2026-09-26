@@ -353,3 +353,23 @@ twins never share a cell), and an earlier cell's angles are final by the
 time a later cell reads them. Validation drops the `t->cell != e->adj`
 check — `pt_map_twin` only searches `cells[e->adj]`, so it is true by
 construction. Tests 22/22, sweep bit-identical.
+
+### The verification kit joins the repo
+
+The scratchpad harnesses that every refactor has leaned on are now real
+parts of the tree. The two with ground truth became tests in
+`src/test/probes/`, running with the suite: `probe.fan_crossings` drives
+the camera over every portal-only fan vertex from all 256 directions and
+asserts a cell mismatch against exact point location only ever happens
+dead on a boundary line (penetration exactly zero), and
+`probe.collision_distance` walks 40,000 pseudo-random ticks asserting the
+exact closest approach to a solid wall stays above 28 units (29.17
+observed, radius 40). The rest became tools beside the frame dumper:
+`portalc_sweep` (the byte-exact before/after framebuffer dump - 576
+centroid frames plus a 500-frame walkthrough; two builds' outputs compare
+with cmp), `portalc_fb2ppm` (extract one sweep frame as a PPM) and
+`portalc_mapdump` (the semantic map dump for diffing map data). The
+sweep's dumps stay outside the repo - the tool regenerates them; only
+the generators are versioned. Earlier probe iterations (three older fan
+probes, the palette generators, a stale field-lister) stay retired in
+the scratchpad.

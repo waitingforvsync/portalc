@@ -7,6 +7,8 @@ add_executable(portalc_test
     test_mode5.c
     test_palette.c
     test_render.c
+    probes/probe_collision.c
+    probes/probe_fan.c
 )
 
 target_link_libraries(portalc_test PRIVATE portal)

@@ -933,19 +933,20 @@ static void plot(pt_render *r)
         if ((uint8_t)(p->ce | p->co) == 0)
             continue;
         pt_pattern pat = {.e = p->ce, .o = p->co};
-        uint16_t y = (uint16_t)(p->y0 << 8);
+        // rounding bias folded in once: the row is then just the high byte
+        uint16_t y = (uint16_t)((p->y0 << 8) | 128);
         uint16_t gm = pt_g_mag(p->g);
         if (!pt_g_isneg(p->g)) {
             for (uint8_t c = p->x0; c < p->x1; c++) {
-                uint8_t row = row_of_round(y);
+                uint8_t row = (uint8_t)(y >> 8);
                 if (row >= PT_SCREEN_HEIGHT)
                     break;    // rows only grow; the rest is below the screen
                 pt_mode5_plot(r->fb, c, row, pat);
-                y = (uint16_t)(y + gm);
+                y = (uint16_t)(y + gm);    // row < 64 here, so no wrap
             }
         } else {
             for (uint8_t c = p->x0; c < p->x1; c++) {
-                uint8_t row = row_of_round(y);
+                uint8_t row = (uint8_t)(y >> 8);
                 if (row < PT_SCREEN_HEIGHT)
                     pt_mode5_plot(r->fb, c, row, pat);
                 // clamp at the screen top: the toggle stays live at row 0

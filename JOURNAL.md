@@ -288,5 +288,22 @@ rotating each edge vector by its own angle lands on +x within quantisation.
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a
   port-time zero-page caching matter, not worth contorting the C for.
-- `edge_dist` in the camera multiplies full u24 positions; cell-relative
-  coordinates would narrow it but cost map data.
+  (An earlier note about `edge_dist`'s u24 positions is resolved: the edge
+  frame works in 16-bit vertex-relative coordinates.)
+
+## 2026-09-27 — Rounding bias folded into the plot DDA
+
+Rich's observation: `plot` was calling `row_of_round` per column — an add
+of 128 with an overflow saturate — when the bias could simply be folded
+into the starting `y` once and the row read off by truncation. Only +128 is
+ever needed: round-to-nearest is `(y + 128) >> 8` whichever way the line
+runs, because the gradient's sign decides whether `gm` is added or
+subtracted, never how the value rounds. The DDA holds exactly
+`y0*256 +/- c*gm`, so one bias up front equals a bias at every column, and
+the sweep is bit-identical.
+
+The saturate goes too: the ascending loop breaks once the row reaches 64,
+so the biased accumulator sits below 0x4000 at the top of the loop and
+adding `gm <= 0x7FFF` cannot wrap; the descending loop already clamps at
+zero. On the 6502 the row is now literally the high byte of the
+accumulator after the 16-bit add — no per-pixel adjustment at all.

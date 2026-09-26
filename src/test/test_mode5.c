@@ -22,7 +22,7 @@ RC_TEST(mode5, plot_and_fill)
 
     // a solid red span from row 10 down to row 20 in pixel column 5:
     // toggle red on at row 10 and off at row 20
-    pt_pattern red = pt_pattern_solid(PT_RED);
+    pt_pattern red = pt_shade(PT_SH_RRRR);
     pt_mode5_plot(fb, 5, 10, red);
     pt_mode5_plot(fb, 5, 20, red);
     pt_mode5_fill(fb);
@@ -52,7 +52,8 @@ RC_TEST(mode5, dither_alignment)
     pt_mode5_clear(fb);
 
     // a red/green checker from row 0: even scanlines lead red
-    pt_pattern chk = pt_pattern_check(PT_RED, PT_GREEN);
+    pt_pattern chk = {PT_PX4(PT_RED, PT_GREEN, PT_RED, PT_GREEN),
+                      PT_PX4(PT_GREEN, PT_RED, PT_GREEN, PT_RED)};
     pt_mode5_plot(fb, 0, 0, chk);
     pt_mode5_plot(fb, 1, 0, chk);
     pt_mode5_fill(fb);

@@ -266,33 +266,34 @@ void pt_scene_init(pt_map *m)
     // of the range, and the pit floor stays the only pure saturated green.
 
     // horizontal surfaces
-    pt_pattern main_floor = pt_pattern_blend(PT_BLACK, PT_RED, 6);
-    pt_pattern main_ceil = pt_pattern_blend(PT_BLACK, PT_BLUE, 2);
-    pt_pattern pit_floor = pt_pattern_solid(PT_GREEN);    // the one pure green
-    pt_pattern corr_ceil = pt_pattern_blend(PT_BLACK, PT_RED, 4);
-    pt_pattern end_ceil = pt_pattern_blend(PT_BLACK, PT_RED, 2);
-    pt_pattern room2_floor = pt_pattern_blend(PT_BLACK, PT_GREEN, 4);
+    pt_pattern main_floor = pt_shade(PT_SH_KRRR);
+    pt_pattern main_ceil = pt_shade(PT_SH_KKKB);
+    pt_pattern pit_floor = pt_shade(PT_SH_GGGG);    // the one pure green
+    pt_pattern corr_ceil = pt_shade(PT_SH_KKRR);
+    pt_pattern end_ceil = pt_shade(PT_SH_KKKR);
+    pt_pattern room2_floor = pt_shade(PT_SH_KKGG);
 
     // walls by facing, darkest (away from the light) to brightest (toward)
-    pt_pattern pit_dark = pt_pattern_solid(PT_BLACK);              // small face only
-    pt_pattern lit_shadow = pt_pattern_blend(PT_BLACK, PT_BLUE, 4);
-    pt_pattern lit_se = pt_pattern_solid(PT_BLUE);
-    pt_pattern lit_w = pt_pattern_blend(PT_BLACK, PT_BLUE, 6);
-    pt_pattern lit_wnw = pt_pattern_blend(PT_BLUE, PT_RED, 2);
-    pt_pattern lit_e = pt_pattern_blend(PT_BLUE, PT_RED, 4);
-    pt_pattern lit_e2 = pt_pattern_blend(PT_BLUE, PT_RED, 6);
-    pt_pattern lit_ene = pt_pattern_solid(PT_RED);
-    pt_pattern lit_n = pt_pattern_blend(PT_RED, PT_GREEN, 4);      // fully lit
-    pt_pattern lintel2 = pt_pattern_blend(PT_BLACK, PT_RED, 4);
+    pt_pattern pit_dark = pt_shade(PT_SH_KKKK);           // small face only
+    pt_pattern lit_shadow = pt_shade(PT_SH_KKBB);
+    pt_pattern lit_se = pt_shade(PT_SH_BBBB);
+    pt_pattern lit_w = pt_shade(PT_SH_KBBB);
+    pt_pattern lit_wnw = pt_shade(PT_SH_BBBR);
+    pt_pattern lit_e = pt_shade(PT_SH_BBRR);
+    pt_pattern lit_e2 = pt_shade(PT_SH_BRRR);
+    pt_pattern room2_far = pt_shade(PT_SH_KBRR);          // room 2's far wall only
+    pt_pattern lit_ene = pt_shade(PT_SH_RRRR);
+    pt_pattern lit_n = pt_shade(PT_SH_RRGG);              // fully lit
+    pt_pattern lintel2 = pt_shade(PT_SH_KKRR);
     pt_pattern none = {0};
 
     // The staircase, elbow and end room use shades of blue only: the four
     // quarter-density rungs, darkest for the treads and ceilings, brightest
     // for the south walls facing the light.
-    pt_pattern blue25 = pt_pattern_blend(PT_BLACK, PT_BLUE, 2);
-    pt_pattern blue50 = pt_pattern_blend(PT_BLACK, PT_BLUE, 4);
-    pt_pattern blue75 = pt_pattern_blend(PT_BLACK, PT_BLUE, 6);
-    pt_pattern blue100 = pt_pattern_solid(PT_BLUE);
+    pt_pattern blue25 = pt_shade(PT_SH_KKKB);
+    pt_pattern blue50 = pt_shade(PT_SH_KKBB);
+    pt_pattern blue75 = pt_shade(PT_SH_KBBB);
+    pt_pattern blue100 = pt_shade(PT_SH_BBBB);
 
     // Cell 1: the depressed central square (floor 24 units below the ring's);
     // its edge colours are the riser faces seen from inside the pit, lit like
@@ -358,7 +359,7 @@ void pt_scene_init(pt_map *m)
     add_edge(&b, w1, lintel2, false);       // portal back to the corridor (lintel)
     add_edge(&b, w0, lit_shadow, false);
     add_edge(&b, r3, lit_wnw, false);       // east wall, faces west
-    add_edge(&b, r4, lit_e, false);         // far wall (red-blue check)
+    add_edge(&b, r4, room2_far, false);     // far wall (black-blue-red mix)
     add_edge(&b, r5, lit_e2, false);        // west wall up to the stair doorway
     add_edge(&b, sv[0], blue75, false);     // stair doorway (first riser face)
     add_edge(&b, nv[0], lit_e2, false);     // west wall beyond the doorway

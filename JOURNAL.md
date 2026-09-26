@@ -163,6 +163,34 @@ did not move the sliding invariant (both figures are corner-post overlap,
 which is by design). All 23 tests pass; render output is untouched by the
 camera change and bit-identical under the height change.
 
+## 2026-09-26 (later still) — The shade catalogue hardcoded
+
+palette.c no longer builds anything: the 35 shades are a hardcoded table of
+byte pairs, each tile written out pixel by pixel through PT_PX4 (a
+compile-time four-pixels-to-scanline-byte macro in palette.h, kept so every
+entry stays inspectable), with the construction rules recorded as the table's
+comment. The builders (solid/check/cell/blend and their helpers) are gone;
+the demo map picks its colours from the catalogue by mix name (PT_SH_KRRR
+and friends), which every one of its solids and quarter blends already was.
+The test derives the expected catalogue from the rules — enumerating the
+multisets in luminance order — and checks each tile's content, ordering and
+the every-scanline-carries-every-hue property. Bit-identical, and exactly
+the shape the 6502 build wants: 70 bytes of data, no code.
+
+## 2026-09-26 (evening) — Dither shapes regularised
+
+Rich reshaped shades 2, 9, 12 and 14 by hand; the rest of the catalogue now
+follows the same rules. Every 2+2 mix is the single-pixel checkerboard with
+the darkest colour top left (21, 26, 31 flipped to match 2, 9, 14). Every
+three-colour mix follows shade 12's shape: a checkerboard between the pair
+colour on one phase and the two singles on the other, the singles
+alternating line by line with the darker on the even line — and where the
+pair itself is the darkest hue (5, 11, 15, 20), it takes the top-left phase
+so the darkest-top-left convention holds throughout. The old
+every-scanline-carries-every-hue rule survives only for the quarter fills
+and the full mix; the skipped catalogue test is re-enabled, deriving the
+exact expected tile for both checker classes from the rules.
+
 ### Open questions
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a

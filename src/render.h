@@ -85,7 +85,7 @@ typedef struct pt_render {
     // camera for the frame being rendered
     uint16_t cam_x, cam_y;
     uint8_t eye_z;           // in 8-unit z steps, like the cell heights
-    pt_sincos dsin, dcos;    // the direction's sine and cosine, resolved once
+    uint8_t angle;           // facing, in 256ths of a turn
     uint8_t cam_cell;
 
     pt_piece pool[PT_POOL_SIZE];

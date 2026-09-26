@@ -10,7 +10,7 @@
 #include "map.h"
 
 #define PT_CAM_RADIUS 40
-#define PT_CAM_MOVE_SPEED (8u << 8)    // units per tick, u16.8
+#define PT_CAM_MOVE_SPEED 8    // whole units per tick
 #define PT_CAM_TURN_SPEED 2            // 256ths of a turn per tick
 
 // the start pose in the demo scene

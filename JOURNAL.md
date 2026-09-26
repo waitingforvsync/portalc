@@ -191,6 +191,19 @@ every-scanline-carries-every-hue rule survives only for the quarter fills
 and the full mix; the skipped catalogue test is re-enabled, deriving the
 exact expected tile for both checker classes from the rules.
 
+## 2026-09-26 (night) — Sines restricted to rotation
+
+Every sine use turned out to be a component of one 2D rotation: the vertex
+transform is the pair x' = x c + y s, y' = y c - x s, and the camera's
+facing step is (speed, 0) rotated back into the world (the sine's sign
+flipped on the way in). So the whole sine-multiply family (pt_mul_sc,
+pt_mac_sc, pt_msub_sc, pt_mul_sin, pt_mul_cos) collapsed into pt_sin_resolve
+plus one pt_rot that produces both components: the two magnitude/sign splits
+and the four unsigned rounded products are shared, where the paired
+operations split each operand twice over. Bit-identical against a
+HEAD-baseline sweep; the rot test checks both components against wide
+references at every angle across the sign quadrants.
+
 ### Open questions
 
 - `resolve_block`/`emit` recompute `line_y`/`piece_y` at shared columns — a

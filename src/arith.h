@@ -10,57 +10,31 @@
 
 #include <stdint.h>
 
-// The sign and magnitude of sin(angle), resolved once (per frame for the
-// camera direction): m in [0, 256] with the sign kept apart, so a signed
-// sine value is never formed.
-typedef struct pt_sincos {
-    uint16_t m;
-    uint8_t neg;
-} pt_sincos;
-
 // Build the tables; call once before anything else (idempotent).
 void pt_arith_init(void);
 
-// Resolve sin(angle) for 256ths of a turn: the index's low 7 bits pick the
-// magnitude from a 128-entry table over [0, pi) (0 and 128 special cased to
-// zero, a stored 0 to 256), the top bit is the sign.
-pt_sincos pt_sin_resolve(uint8_t angle);
+// A rotated vector.
+typedef struct pt_xy {
+    int16_t x, y;
+} pt_xy;
 
-// cos(angle): the sine a quarter turn on.
-static inline pt_sincos pt_cos_resolve(uint8_t angle)
-{
-    return pt_sin_resolve((uint8_t)(angle + 64));
-}
+// Rotate (x, y) into the frame of an angle in 256ths of a turn:
+// x' = x cos + y sin, y' = y cos - x sin, each product rounded to nearest.
+// A sine value never exists: each angle's low 7 bits index the magnitude
+// table (index 0 forking to a zero term, a stored 0 to a copy) and its top
+// bit is the sign, decided at the point of use. The two magnitude/sign
+// splits and the four unsigned products are shared between the components,
+// and every product enters its sum by add or subtract -- opposite signs are
+// one subtraction whose wraparound is the two's complement, and only two
+// negative terms negate at all (once, of the finished sum), which the 6502
+// sidesteps by accumulating that pair from the negated-product table
+// (pt_mulu8_neg).
+pt_xy pt_rot(int16_t x, int16_t y, uint8_t angle);
 
-// a times a resolved sine, rounded to nearest: the resolved sign and the
-// sign of a pick the positive or the negated product path. Rounding keeps
-// the vertex transform unbiased.
-int16_t pt_mul_sc(int16_t a, pt_sincos sc);
-
-// u*a + v*b for resolved sines: both products stay unsigned and enter the
-// sum by add or subtract -- opposite signs are one subtraction whose
-// wraparound is the two's complement. Only two negative terms negate at all
-// (once, of the finished sum), and the 6502 sidesteps even that by
-// accumulating the pair from the negated-product table (pt_mulu8_neg).
-int16_t pt_mac_sc(int16_t u, pt_sincos a, int16_t v, pt_sincos b);
-
-// u*a - v*b: the same accumulation with b's sign flipped on the way in.
-static inline int16_t pt_msub_sc(int16_t u, pt_sincos a, int16_t v, pt_sincos b)
-{
-    b.neg ^= 1;
-    return pt_mac_sc(u, a, v, b);
-}
-
-// a * sin(angle) / a * cos(angle) in one step, for occasional callers.
-static inline int16_t pt_mul_sin(int16_t a, uint8_t angle)
-{
-    return pt_mul_sc(a, pt_sin_resolve(angle));
-}
-
-static inline int16_t pt_mul_cos(int16_t a, uint8_t angle)
-{
-    return pt_mul_sc(a, pt_cos_resolve(angle));
-}
+// The world direction of an angle scaled by a whole-unit magnitude:
+// (mag cos, mag sin) in s8.8, one exact 8-bit product per component (the
+// camera's facing step).
+pt_xy pt_dir8(uint8_t mag, uint8_t angle);
 
 // ---- unsigned multiplies ----
 

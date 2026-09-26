@@ -543,8 +543,9 @@ static pt_vv transform(const pt_render *r, pt_vertex w)
     // sign-branched unsigned products
     int16_t rx = (int16_t)(w.x - r->cam_x);
     int16_t ry = (int16_t)(w.y - r->cam_y);
-    int16_t x = pt_mac_sc(rx, r->dcos, ry, r->dsin);
-    int16_t y = pt_msub_sc(ry, r->dcos, rx, r->dsin);
+    pt_xy rv = pt_rot(rx, ry, r->angle);
+    int16_t x = rv.x;
+    int16_t y = rv.y;
 
     // the ray sums exist only here: their sign and zero states become flag
     // bits (on the 6502, the adds' own N and Z), and only the flags persist
@@ -964,8 +965,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->cam_cell = cell;
     RC_ASSERT(m->cells[cell].floor_z >= PT_CAM_HEIGHT);
     r->eye_z = (uint8_t)(m->cells[cell].floor_z - PT_CAM_HEIGHT);
-    r->dsin = pt_sin_resolve(angle);
-    r->dcos = pt_cos_resolve(angle);
+    r->angle = angle;
 
     pt_mode5_clear(r->fb);
     r->pool_num = 1;

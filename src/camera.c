@@ -298,10 +298,11 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         c->y = step(c->y, (uint32_t)mul16u_c8(push, (uint16_t)(ed->ny < 0 ? -ed->ny : ed->ny)) << 8,
                     ed->ny < 0);
     }
-    // desired displacement from the input: the facing step, whose low byte
-    // is 0 so the rounded multiply is exact
-    int16_t fx = pt_mul_cos((int16_t)PT_CAM_MOVE_SPEED, c->angle);
-    int16_t fy = pt_mul_sin((int16_t)PT_CAM_MOVE_SPEED, c->angle);
+    // desired displacement from the input: the facing step, one exact 8-bit
+    // product per component
+    pt_xy f = pt_dir8(PT_CAM_MOVE_SPEED, c->angle);
+    int16_t fx = f.x;
+    int16_t fy = f.y;
     int32_t mx = 0;
     int32_t my = 0;
     if (input & PT_IN_FWD) {

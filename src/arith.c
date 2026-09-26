@@ -52,18 +52,6 @@ void pt_arith_init(void)
     inited_ = true;
 }
 
-pt_sincos pt_sin_resolve(uint8_t angle)
-{
-    RC_ASSERT(inited_);
-
-    uint8_t i = (uint8_t)(angle & 0x7F);
-    uint8_t neg = (uint8_t)(angle >> 7);
-    if (i == 0)
-        return (pt_sincos) {.m = 0, .neg = neg};    // angles 0 and 128
-    uint8_t v = sin_[i];
-    return (pt_sincos) {.m = v == 0 ? 256 : v, .neg = neg};
-}
-
 uint16_t pt_mulu8(uint8_t a, uint8_t b)
 {
     RC_ASSERT(inited_);
@@ -111,38 +99,78 @@ static uint16_t mulu16_frac_round(uint16_t a, uint8_t f)
     return (uint16_t)(lo + hi);
 }
 
-// One term of a sine multiply or accumulate: the unsigned rounded product
-// and the product's sign. Rounded to nearest, not truncated: the transform
-// sums two of these per coordinate, and a shared truncation bias would lean
-// every near-clip interpolation the same way (visible where a floor line
-// grazes the screen edge).
-static uint16_t term_sc(int16_t a, pt_sincos sc, bool *neg)
+// One rotation term: the unsigned rounded product of a magnitude and the
+// sine at table index i (index 0 is zero, a stored 0 means 256).
+static uint16_t rot_term(uint16_t ua, uint8_t i, uint8_t v)
 {
-    RC_ASSERT(sc.m <= 256);
-    RC_ASSERT(a != INT16_MIN);
-
-    uint16_t ua = (uint16_t)(a < 0 ? -a : a);
-    *neg = (a < 0) != (sc.neg != 0);
-    return sc.m == 256 ? ua : mulu16_frac_round(ua, (uint8_t)sc.m);
+    if (i == 0)
+        return 0;
+    if (v == 0)
+        return ua;
+    return mulu16_frac_round(ua, v);
 }
 
-int16_t pt_mul_sc(int16_t a, pt_sincos sc)
+// pa with sign na plus pb with sign nb, in two's complement: opposite signs
+// are one subtraction whose wraparound is the answer; only two negative
+// terms negate (or accumulate from the negated-product table on the 6502).
+static int16_t acc2(uint16_t pa, bool na, uint16_t pb, bool nb)
 {
-    bool neg;
-    uint16_t m = term_sc(a, sc, &neg);
-    return neg ? (int16_t)-m : (int16_t)m;
+    if (na != nb)
+        return na ? (int16_t)(pb - pa) : (int16_t)(pa - pb);
+    uint16_t s = (uint16_t)(pa + pb);
+    return na ? (int16_t)-s : (int16_t)s;
 }
 
-int16_t pt_mac_sc(int16_t u, pt_sincos a, int16_t v, pt_sincos b)
+pt_xy pt_rot(int16_t x, int16_t y, uint8_t angle)
 {
-    bool nu;
-    bool nv;
-    uint16_t pu = term_sc(u, a, &nu);
-    uint16_t pv = term_sc(v, b, &nv);
-    if (nu != nv)
-        return nu ? (int16_t)(pv - pu) : (int16_t)(pu - pv);
-    uint16_t s = (uint16_t)(pu + pv);
-    return nu ? (int16_t)-s : (int16_t)s;
+    RC_ASSERT(inited_);
+    RC_ASSERT(x != INT16_MIN && y != INT16_MIN);
+
+    uint8_t si = (uint8_t)(angle & 0x7F);
+    uint8_t sv = sin_[si];
+    bool sneg = (angle & 0x80) != 0;
+    uint8_t ca = (uint8_t)(angle + 64);
+    uint8_t ci = (uint8_t)(ca & 0x7F);
+    uint8_t cv = sin_[ci];
+    bool cneg = (ca & 0x80) != 0;
+
+    // the magnitude/sign splits and the four products are shared between the
+    // two components. Rounded to nearest, not truncated: each component sums
+    // two products, and a shared truncation bias would lean every near-clip
+    // interpolation the same way (visible where a floor line grazes the
+    // screen edge).
+    uint16_t ux = (uint16_t)(x < 0 ? -x : x);
+    uint16_t uy = (uint16_t)(y < 0 ? -y : y);
+    bool nx = x < 0;
+    bool ny = y < 0;
+    return (pt_xy) {
+        .x = acc2(rot_term(ux, ci, cv), nx != cneg, rot_term(uy, si, sv), ny != sneg),
+        .y = acc2(rot_term(uy, ci, cv), ny != cneg, rot_term(ux, si, sv), nx == sneg),
+    };
+}
+
+// One direction component: mag times the sine at index i, exact (an 8-bit
+// product lands on the s8.8 scale directly), with the half turn's sign.
+static int16_t dir_term(uint8_t mag, uint8_t i, uint8_t v, bool neg)
+{
+    if (i == 0)
+        return 0;
+    uint16_t p = v == 0 ? (uint16_t)((uint16_t)mag << 8) : pt_mulu8(mag, v);
+    return neg ? (int16_t)-p : (int16_t)p;
+}
+
+pt_xy pt_dir8(uint8_t mag, uint8_t angle)
+{
+    RC_ASSERT(inited_);
+    RC_ASSERT(mag <= 127);
+
+    uint8_t si = (uint8_t)(angle & 0x7F);
+    uint8_t ca = (uint8_t)(angle + 64);
+    uint8_t ci = (uint8_t)(ca & 0x7F);
+    return (pt_xy) {
+        .x = dir_term(mag, ci, sin_[ci], (ca & 0x80) != 0),
+        .y = dir_term(mag, si, sin_[si], (angle & 0x80) != 0),
+    };
 }
 
 int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t)

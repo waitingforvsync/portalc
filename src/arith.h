@@ -36,6 +36,15 @@ pt_xy pt_rot(int16_t x, int16_t y, uint8_t angle);
 // camera's facing step).
 pt_xy pt_dir8(uint8_t mag, uint8_t angle);
 
+// The angle's ray basis for exact frustum-side tests: k1 = C - S and
+// k2 = C + S, where C and S are the angle's cosine and sine at scale 256 --
+// exactly the signed values pt_rot's terms round. The ray sums of a vertex
+// at world offset (x, y) are then, unrounded and linear in the offset,
+//   a * 256 = x * k1 + y * k2        b * 256 = x * k2 - y * k1
+// so their signs are exact. Used only by push_root's retry when the rounded
+// winding search fails, never in per-vertex code.
+void pt_ray_basis(uint8_t angle, int16_t *k1, int16_t *k2);
+
 // ---- unsigned multiplies ----
 
 // a * b via the quarter-square tables; the primitive everything else builds on.

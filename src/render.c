@@ -544,6 +544,19 @@ static bool clamp_line(pt_line *L, uint8_t xa, uint8_t xb)
 
 // ---- vertex transform and classification (spec 3.2, 7.3) ----
 
+// The classification is rounded, and the walk is built to survive that. The
+// camera may legitimately stand ON its cell's boundary (the transition's
+// exact tie rule can park it on a portal line, even on a fan vertex), where
+// vertex sums near zero can round to either side. Nothing here needs to be
+// exact, because every consumer is robust by structure: child frames start
+// from the twin, spans are clamped to the cursors' frontier in process_edge
+// (a vertex projected left of its predecessor yields an empty span, never a
+// cut regression), and a ring that never fires its stop burns its steps and
+// closes the frame. The one load-bearing consumer of these signs is
+// push_root's winding search on the CAMERA's cell - and that, once per
+// frame at most, retries with exact sums when the rounded ones fail. At an
+// exact boundary tie a frame may therefore carry a one-column sliver where
+// perfection would need exact spans; it never traps.
 static pt_vv transform(const pt_render *r, pt_vertex w)
 {
     // camera-relative position and the rotation: two's complement sums of
@@ -568,6 +581,16 @@ static pt_vv transform(const pt_render *r, pt_vertex w)
         flags |= PT_VF_BNEG;
     else if (b == 0)
         flags |= PT_VF_BZERO;
+
+    // the ray sums are also zero on the rays' backward extensions, where the
+    // zero flags would wrongly read as "exactly on the (forward) ray" - no
+    // right clip, no stop, and the walk would wrap. A vertex on a seam of
+    // the behind quadrant counts as behind (rare: the branches sit behind
+    // the zero tests, and on the 6502 behind the adds' own Z)
+    if ((flags & PT_VF_ANEG) && (flags & PT_VF_BZERO))
+        flags |= PT_VF_BNEG;
+    if ((flags & PT_VF_BNEG) && (flags & PT_VF_AZERO))
+        flags |= PT_VF_ANEG;
 
     // a vertex exactly on a ray gets the exact column, so the stop tests and
     // the span columns can never disagree at the portal edges
@@ -752,6 +775,19 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
 
     uint8_t xa = e0.sx > f->xl ? e0.sx : f->xl;
     uint8_t xb = e1.sx < f->xr ? e1.sx : f->xr;
+
+    // ownership only ever moves right: clamp the span to the cursors'
+    // frontier. A healthy ring is contiguous (a shared vertex projects to
+    // one column in both roles), so this never bites; it is the backstop
+    // that turns a degenerate ring's wrap - or rounding projecting a vertex
+    // left of its predecessor - into empty spans instead of a cut
+    // regression. An exhausted cursor (0) means the whole span is owned.
+    if (f->tcur == 0 || f->bcur == 0)
+        return;
+    uint8_t front = r->pool[f->tcur].x0 > r->pool[f->bcur].x0 ? r->pool[f->tcur].x0
+                                                              : r->pool[f->bcur].x0;
+    if (xa < front)
+        xa = front;
     if (xa >= xb)
         return;
 
@@ -889,8 +925,50 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
 
 // ---- the frame (spec 7.1, 7.4, 7.5) ----
 
+// The exact retry behind push_root: the rounded winding search can fail
+// when the eye rests on (or within pt_rot's rounding of) its cell's
+// boundary with an aligned facing - every sum's true magnitude is then
+// smaller than the rounding error, and the ring can read one-sided. The
+// exact ray sums are linear in the world offsets (pt_ray_basis), so
+// convexity guarantees them a transition for any eye in its closed cell:
+// find the edge whose start is strictly left of the left ray and whose end
+// is not. The one case with no strictly-negative vertex is the eye standing
+// ON a ring vertex with the whole cell to its right; that vertex's sums are
+// exactly zero and it is the root - column 0 begins at it, and the edge it
+// opens (a through-the-eye portal, or a wall seen end-on) spans rightward.
+// Cold code, entered at most once per frame, and only at boundary poses.
+static uint8_t root_exact(const pt_render *r, const pt_cell *c)
+{
+    const pt_map *m = r->map;
+    int16_t k1, k2;
+    pt_ray_basis(r->angle, &k1, &k2);
+
+    int32_t prev = 0;
+    uint8_t zero = 0xFF;
+    uint8_t root = 0xFF;
+    for (uint8_t k = 0; k <= c->num_edges; k++) {
+        uint8_t n = (uint8_t)(c->first_edge + (k == c->num_edges ? 0 : k));
+        int16_t rx = (int16_t)(m->verts[m->edges[n].v0].x - r->cam_x);
+        int16_t ry = (int16_t)(m->verts[m->edges[n].v0].y - r->cam_y);
+        int32_t a = (int32_t)rx * k1 + (int32_t)ry * k2;
+        if (a == 0)
+            zero = n;
+        if (k > 0 && prev < 0 && a >= 0)
+            root = (uint8_t)(c->first_edge + k - 1);
+        prev = a;
+    }
+    if (root != 0xFF)
+        return root;
+    RC_ASSERT(zero != 0xFF);    // neither a transition nor the eye-vertex:
+    return zero;                // broken map (falls back to the ring start)
+}
+
 // Find the camera cell's first edge (where a goes from <= 0 to > 0) and push
-// the root portal frame.
+// the root portal frame. The searches are guarded: with the eye on the
+// cell's boundary the rounded sums can read one-sided, and the exact retry
+// decides instead (see root_exact). A ring the retry roots at a zero vertex
+// has no closing column, so the walk ends by its steps - accepted, not an
+// error.
 static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
 {
     const pt_map *m = r->map;
@@ -900,7 +978,11 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
     pt_vv v = transform(r, m->verts[m->edges[n].v0]);
     uint8_t guard = c->num_edges;
     while (!(v.flags & (PT_VF_ANEG | PT_VF_AZERO))) {    // a > 0
-        RC_PANIC(guard-- > 0);
+        if (guard-- == 0) {
+            n = root_exact(r, c);
+            v = transform(r, m->verts[m->edges[n].v0]);
+            goto rooted;
+        }
         n = pt_map_ring_next(c, n);
         v = transform(r, m->verts[m->edges[n].v0]);
     }
@@ -912,8 +994,13 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
             break;
         n = nn;
         v = w;
-        RC_PANIC(guard-- > 0);
+        if (guard-- == 0) {
+            n = root_exact(r, c);
+            v = transform(r, m->verts[m->edges[n].v0]);
+            break;
+        }
     }
+rooted:;
 
     r->stack[r->depth++] = (pt_pframe) {
         .cell = r->cam_cell,
@@ -1000,7 +1087,10 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
             r->depth--;
             continue;
         }
-        RC_ASSERT(f->steps > 0);
+        // a healthy ring stops on col_ge before its steps run out; a ring
+        // rooted at a zero vertex (the eye on it) has no closing column, no
+        // stop fires, and the walk wraps through empty clamped spans until
+        // the steps end the frame here - an accepted outcome, not an error
         if (f->steps == 0) {
             f->done = 1;
             continue;

@@ -373,3 +373,57 @@ sweep's dumps stay outside the repo - the tool regenerates them; only
 the generators are versioned. Earlier probe iterations (three older fan
 probes, the palette generators, a stale field-lister) stay retired in
 the scratchpad.
+
+## 2026-09-27 — Boundary poses: robustness contained
+
+Rich asked whether the transition tie rules could leave the camera
+rendering from outside, or exactly on, its claimed cell's boundary - and
+they can: the tie rule parks the centre exactly on portal lines (integer
+positions, axis moves), and the old prefilter margin only grew along
+positive t while the quantised angle's tilt grows with |t|, so poses on a
+line's backward extension could hop falsely or not at all (a probe
+measured 65 false and 129 missed hops out to |t| = 432). A directed
+render probe then faulted 152 of 181 legitimate on-boundary poses, three
+mechanisms deep: rounded ray sums flipping near-zero signs (push_root's
+winding search exhausts), an eye-coincident vertex transforming to view
+(0, 0) with no direction (the ring's stop test never fires and the walk
+wraps into a cut regression), and a latent seam bug - a behind vertex
+exactly on a frustum ray's backward extension read as "on the forward
+ray". In exact arithmetic none of this is structural: the walk already
+handles an on-line eye perfectly (the root search picks the through-the-
+eye portal, clip_left maps the eye-crossing to column 0, and the capture
+pulls the neighbour in over exactly its half of the view).
+
+After a costlier intermediate design (camera nudged off lines; exact
+classification of every vertex), the fix contracted to Rich's framing:
+only the camera's cell needs care, children may misproject as long as the
+walk survives it. The whole thing is now five small pieces:
+
+- camera.c: the prefilter margin is symmetric in |t| (one abs). The
+  transition loop is otherwise untouched; ties on the line remain, and
+  both their claiming cells render the same correct view.
+- transform: rounded flags as ever, plus the seam rule - a vertex on a
+  backward-ray seam counts as behind (two branches hidden behind the
+  zero tests, which the 6502 gets from the adds' own Z).
+- process_edge: spans clamp to the cursors' frontier - ownership only
+  moves right, so any wrap or misordered projection becomes empty spans,
+  never a cut regression. One compare per edge.
+- push_root: the rounded winding search, when it exhausts (at most once
+  per frame, only at boundary poses), retries with exact ray sums -
+  pt_ray_basis gives k1 = C - S, k2 = C + S, and a * 256 = x k1 + y k2
+  is linear in the world offset, so convexity guarantees a transition
+  for any eye in its closed cell; the sole exception (eye ON a ring
+  vertex, cell wholly to its right) roots at that zero vertex, whose
+  ring then ends by its steps instead of a stop column - accepted.
+- The walk's steps-out ending is an outcome, not an assert.
+
+Verification: the boundary probe passes 181/181 poses at all 256 facings
+(renders may carry a one-column sliver at exact ties - the accepted price
+of rounded spans); the fan drive's 49,152 reachable-state renders are
+clean; the extension probe reads 0/0; collision and fan ground truth are
+unchanged (29.17 units closest, 101 exact-tie mismatches, zero
+penetration); and the full sweep is BYTE-IDENTICAL to the pre-work
+baseline - the robustness layer is invisible until a degenerate pose
+needs it. probe_walk joined the suite (25 tests). Map data stays
+unconstrained; a 45-degree-grid map would let the margin collapse to a
+constant and the length bound relax, noted for the future.

@@ -9,6 +9,7 @@ add_executable(portalc_test
     test_render.c
     probes/probe_collision.c
     probes/probe_fan.c
+    probes/probe_walk.c
 )
 
 target_link_libraries(portalc_test PRIVATE portal)

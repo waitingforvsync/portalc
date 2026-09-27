@@ -149,6 +149,26 @@ pt_xy pt_rot(int16_t x, int16_t y, uint8_t angle)
     };
 }
 
+// The signed sine of an angle at scale 256, decoded exactly as pt_rot's
+// terms decode it: index 0 is zero, a stored 0 means 256, bit 7 the sign.
+static int16_t sin256(uint8_t angle)
+{
+    uint8_t i = (uint8_t)(angle & 0x7F);
+    if (i == 0)
+        return 0;
+    int16_t v = sin_[i] == 0 ? 256 : (int16_t)sin_[i];
+    return (angle & 0x80) ? (int16_t)-v : v;
+}
+
+void pt_ray_basis(uint8_t angle, int16_t *k1, int16_t *k2)
+{
+    RC_ASSERT(inited_);
+    int16_t s = sin256(angle);
+    int16_t c = sin256((uint8_t)(angle + 64));
+    *k1 = (int16_t)(c - s);
+    *k2 = (int16_t)(c + s);
+}
+
 // One direction component: mag times the sine at index i, exact (an 8-bit
 // product lands on the s8.8 scale directly), with the half turn's sign.
 static int16_t dir_term(uint8_t mag, uint8_t i, uint8_t v, bool neg)

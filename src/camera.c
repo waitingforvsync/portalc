@@ -108,15 +108,18 @@ static int16_t edge_cross_band(const pt_map *m, const pt_cell *c, uint8_t e, uin
 
 // Has the centre crossed this portal? Away from the line the frame distance
 // is decisive: the margin covers its rounding plus the quantised angle's
-// tilt about V0, which grows along the edge (t/64 dominates the tilt's
-// pi/256 per unit). Within the band the exact vertex-line side decides,
-// identically from both cells, so every point has a definite owner and the
-// hop walk can neither cycle nor stick; fan lines concur exactly at their
-// shared vertex for the same reason.
+// tilt about V0, which grows with the distance |t| along the line in BOTH
+// directions (t/64 dominates the tilt's pi/256 per unit) - on the backward
+// extension as much as on the edge, or a pose out there could hop, or fail
+// to hop, against the exact truth. Within the band the exact vertex-line
+// side decides, identically from both cells, so every point has a definite
+// owner and the hop walk can neither cycle nor stick; fan lines concur
+// exactly at their shared vertex for the same reason.
 static bool portal_crossed(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y)
 {
     pt_xy f = edge_frame(m, e, x, y);
-    int16_t margin = (int16_t)(2 + ((f.x < 0 ? 0 : f.x) >> 6));
+    int16_t ax = f.x < 0 ? (int16_t)-f.x : f.x;
+    int16_t margin = (int16_t)(2 + (ax >> 6));
     if (f.y >= margin)
         return false;
     if (f.y < -margin)

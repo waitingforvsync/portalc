@@ -17,6 +17,7 @@
 #define PT_POOL_SIZE 256      // piece 0 is the null link
 #define PT_MAX_DEPTH 24
 #define PT_MAX_CLOSED 8
+#define PT_MAX_VISITS PT_MAX_CELLS    // distinct cells one frame may visit; entry 0 is null
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
 
 // A gradient is a u7.8 magnitude with the sign in bit 15 (not two's
@@ -69,17 +70,47 @@ typedef struct pt_vv {
                      // projection at this vertex
 } pt_vv;
 
-// A portal frame on the explicit walk stack.
+// The lines an edge can generate, one slot each (a solid wall uses the two
+// outer ones): a line keeps its slot on every visit, which is how a visible
+// piece finds the piece it continues.
+enum {
+    PT_SLOT_CEIL,          // at the cell's own ceiling: wall top, or top ceiling
+    PT_SLOT_CEIL_BOUND,    // the child's top bound
+    PT_SLOT_FLOOR_BOUND,   // the child's bottom bound
+    PT_SLOT_FLOOR,         // at the cell's own floor: wall bottom, or bottom floor
+    PT_NUM_SLOTS,
+};
+
+// A visited cell, created on its first visit of a frame and shared by every
+// later visit. Visits of one cell run in increasing x and never nest (a ray
+// crosses a convex cell once), so the ring cursor lives here rather than in
+// the frame: a later visit resumes from the edge the previous one ended on,
+// and a line continuing across the seam extends its piece.
+typedef struct pt_visit {
+    uint8_t cell;         // back-reference, to clear the cell's index at frame end
+    uint8_t k;            // the current edge, as a ring index 0..num_edges-1
+    uint8_t live;         // a frame of this cell is walking
+    uint8_t last_xr;      // right column of the last finished visit; 0xFF: none
+    pt_vv v0;             // view data of the current edge's start vertex
+    pt_vv v1;             // and of its end vertex
+    uint8_t act_k;        // the edge the active pieces belong to; 0xFF: none
+    uint8_t active[PT_NUM_SLOTS];    // last visible piece of each of its lines
+} pt_visit;
+
+// A portal frame on the explicit walk stack. A frame is pushed pending and
+// finds its first edge when it starts, so siblings of one cell pushed
+// together each start from the cursor the previous one left.
 typedef struct pt_pframe {
-    uint8_t cell;
+    uint8_t visit;        // the cell's visit record
     uint8_t xl, xr;       // column span
     uint8_t tcur, bcur;   // current piece of the top / bottom bound chain
     uint8_t tmax, bmin;   // conservative row extents over [xl, xr)
-    uint8_t edge;         // the edge being walked
+    uint8_t k0;           // the edge starting at pv, where a search from the
+                          // portal begins (ring index)
     uint8_t steps;        // safety: edges left before the ring must have ended
+    uint8_t started;
     uint8_t done;
-    pt_vv v0;             // view data of the edge's start vertex
-    pt_vv v1;             // and of its end vertex
+    pt_vv pv;             // view data of the portal's start vertex P
 } pt_pframe;
 
 typedef struct pt_render {
@@ -98,6 +129,11 @@ typedef struct pt_render {
 
     pt_pframe stack[PT_MAX_DEPTH];
     uint8_t depth;
+
+    pt_visit visits[PT_MAX_VISITS];
+    uint8_t num_visits;
+    uint8_t visits_high;             // high-water mark across frames, for stats
+    uint8_t cell_visit[PT_MAX_CELLS];    // each cell's visit record, 0 = none
 } pt_render;
 
 // Bind the renderer to a map.

@@ -68,6 +68,8 @@ typedef struct pt_clip {
     pt_chainb *build;
     pt_pattern cbfb;    // child ceiling ^ child floor, the closed-range stand-in
     pt_closedl *closed;
+    pt_visit *vis;      // the cell's visit: its active pieces
+    uint8_t slot;       // which of the edge's lines is being clipped
 
     // Walk cursors, persistent across the pieces of one logical line: a merge
     // may relink a bound piece into a child chain, severing the chain behind
@@ -179,7 +181,23 @@ static uint8_t piece_at(const pt_render *r, uint8_t head, uint8_t c)
 
 // ---- chain building ----
 
-static void chain_append(pt_render *r, pt_chainb *cb, uint8_t q)
+// Widen a chain's conservative row extents by piece q over columns [c0, c1),
+// from the endpoint rows.
+static void chain_extents(pt_render *r, pt_chainb *cb, uint8_t q, uint8_t c0, uint8_t c1)
+{
+    uint16_t ya = piece_y(r, q, c0);
+    uint16_t yb = piece_y(r, q, (uint8_t)(c1 - 1));
+    uint8_t hrow = row_of_ceil(ya > yb ? ya : yb);
+    uint8_t lrow = row_of_floor(ya < yb ? ya : yb);
+    if (hrow > cb->tmax)
+        cb->tmax = hrow;
+    if (lrow < cb->bmin)
+        cb->bmin = lrow;
+}
+
+// Link q as the chain's new tail; its columns from c0 on count toward the
+// extents (a piece extended from an earlier visit starts left of the span).
+static void chain_append(pt_render *r, pt_chainb *cb, uint8_t q, uint8_t c0)
 {
     pt_piece *p = &r->pool[q];
 
@@ -191,16 +209,7 @@ static void chain_append(pt_render *r, pt_chainb *cb, uint8_t q)
         cb->head = q;
     }
     cb->tail = q;
-
-    // maintain the conservative row extents from the endpoint rows
-    uint16_t ya = piece_y(r, q, p->x0);
-    uint16_t yb = piece_y(r, q, (uint8_t)(p->x1 - 1));
-    uint8_t hrow = row_of_ceil(ya > yb ? ya : yb);
-    uint8_t lrow = row_of_floor(ya < yb ? ya : yb);
-    if (hrow > cb->tmax)
-        cb->tmax = hrow;
-    if (lrow < cb->bmin)
-        cb->bmin = lrow;
+    chain_extents(r, cb, q, c0, p->x1);
 }
 
 static void closed_add(pt_closedl *cl, uint8_t l, uint8_t r)
@@ -254,9 +263,29 @@ static void emit(pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1, uint8_t 
     pt_render *r = cx->r;
 
     if (st == ST_VISIBLE) {
-        uint8_t q = pool_alloc(r, r0, r1, row_of(line_y(L, r0)), L->g, L->ce, L->co);
-        if (cx->build)
-            chain_append(r, cx->build, q);
+        // The line's previous visible piece ending exactly here is the same
+        // line continuing - the next block of this clip, or the seam with
+        // the cell's previous visit - so it just grows, keeping its anchor.
+        // Its gradient and colour must still match: splits and merges of
+        // bound pieces (by the child walks between visits) change x1 or the
+        // colour, and then a fresh piece starts. A piece carried over from
+        // an earlier visit can only open the chain being built (it ends at
+        // this visit's first column), never follow its tail.
+        pt_chainb *cb = cx->build;
+        uint8_t q = cx->vis->active[cx->slot];
+        if (q && r->pool[q].x1 == r0 && r->pool[q].g == L->g && r->pool[q].ce == L->ce
+            && r->pool[q].co == L->co && (!cb || cb->tail == q || cb->tail == 0)) {
+            r->pool[q].x1 = r1;
+            if (cb && cb->tail == q)
+                chain_extents(r, cb, q, r0, r1);
+            else if (cb)
+                chain_append(r, cb, q, r0);
+            return;
+        }
+        q = pool_alloc(r, r0, r1, row_of(line_y(L, r0)), L->g, L->ce, L->co);
+        cx->vis->active[cx->slot] = q;
+        if (cb)
+            chain_append(r, cb, q, r0);
         return;
     }
 
@@ -289,7 +318,7 @@ static void emit(pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1, uint8_t 
         closed_add(cx->closed, r0, r1);
         *pp = p;    // stays in its chain; the walk steps past via x1
     } else if (cx->build) {
-        chain_append(r, cx->build, p);
+        chain_append(r, cx->build, p, r0);
         *pp = cont ? cont : p;
     } else {
         *pp = p;
@@ -553,10 +582,12 @@ static bool clamp_line(pt_line *L, uint8_t xa, uint8_t xb)
 // exact tie rule can park it on a portal line, even on a fan vertex), where
 // vertex sums near zero can round to either side. Nothing here needs to be
 // exact, because every consumer is robust by structure: child frames start
-// from the twin, spans are clamped to the cursors' frontier in process_edge
-// (a vertex projected left of its predecessor yields an empty span, never a
-// cut regression), and a ring that never fires its stop burns its steps and
-// closes the frame. The one load-bearing consumer of these signs is
+// from the portal (or resume a finished visit's edge), spans are clamped to
+// the cursors' frontier in process_edge (a vertex projected left of its
+// predecessor yields an empty span, never a cut regression), a ring that
+// never fires its stop burns its steps and closes the frame (its visit then
+// forgets its cursor), and a nested visit of a cell already walking is
+// skipped. The one load-bearing consumer of these signs is
 // push_root's winding search on the CAMERA's cell - and that, once per
 // frame at most, retries with exact sums when the rounded ones fail. At an
 // exact boundary tie a frame may therefore carry a one-column sliver where
@@ -715,55 +746,110 @@ static uint8_t cut(pt_render *r, uint8_t *cursor, uint8_t xa, uint8_t xb)
 
 // ---- pushing portals ----
 
-// Find the child's first edge (spec 7.4) and push its frame; pc is the
-// parent cell, whose ring locates the portal's twin.
-static void push_child(pt_render *r, const pt_cell *pc, uint8_t ei, uint8_t xl, uint8_t xr,
-                       uint8_t thead, uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv)
+// The ring successor of ring index k.
+static uint8_t ring_k_next(const pt_cell *c, uint8_t k)
+{
+    return (uint8_t)(k + 1 == c->num_edges ? 0 : k + 1);
+}
+
+// The start vertex of the cell's edge at ring index k.
+static pt_vertex ring_vertex(const pt_map *m, const pt_cell *c, uint8_t k)
+{
+    return m->verts[m->edges[c->first_edge + k].v0];
+}
+
+// The cell's visit record, created on its first visit of the frame.
+static uint8_t visit_of(pt_render *r, uint8_t cell)
+{
+    uint8_t i = r->cell_visit[cell];
+    if (i)
+        return i;
+    RC_PANIC(r->num_visits < PT_MAX_VISITS);
+    i = r->num_visits++;
+    r->visits[i] = (pt_visit) {.cell = cell, .last_xr = 0xFF, .act_k = 0xFF};
+    r->cell_visit[cell] = i;
+    return i;
+}
+
+// Push a pending child frame through portal edge ei; it finds its first
+// edge when it starts. pv is P, the portal's start vertex, where a search
+// from the portal begins: its edge is the twin's ring successor.
+static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t thead,
+                       uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv)
 {
     RC_PANIC(r->depth < PT_MAX_DEPTH);
     const pt_map *m = r->map;
-    const pt_edge *e = &m->edges[ei];
-    const pt_cell *c = &m->cells[e->adj];
-
-    uint8_t n = pt_map_ring_next(c, pt_map_twin(m, pc, ei));
-    pt_vv v0 = pv;
-    pt_vv v1;
-    uint8_t guard = c->num_edges;
-    for (;;) {
-        v1 = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
-        if (col_gt(v1, xl))
-            break;
-        v0 = v1;
-        n = pt_map_ring_next(c, n);
-        if (guard == 0) {
-            RC_ASSERT(0);
-            return;    // degenerate ring; skip the child rather than spin
-        }
-        guard--;
-    }
+    uint8_t cell = m->edges[ei].adj;
+    const pt_cell *c = &m->cells[cell];
 
     r->stack[r->depth++] = (pt_pframe) {
-        .cell = e->adj,
+        .visit = visit_of(r, cell),
         .xl = xl,
         .xr = xr,
         .tcur = thead,
         .bcur = bhead,
         .tmax = tmax,
         .bmin = bmin,
-        .edge = n,
+        .k0 = ring_k_next(c, (uint8_t)(pt_map_twin(m, ei) - c->first_edge)),
         .steps = (uint8_t)(c->num_edges + 1),
-        .v0 = v0,
-        .v1 = v1,
+        .pv = pv,
     };
+}
+
+// Find a starting frame's first edge (spec 7.4): the first whose end vertex
+// is strictly right of xl. A cell visited before resumes from the edge its
+// last visit ended on - every earlier edge ends left of that visit's xr, so
+// none can be first - with that edge's vertices already in hand; otherwise
+// the search begins at P. False when the frame must not walk: a degenerate
+// ring, or a nested visit of a cell already walking (reachable only through
+// boundary rounding; that child is skipped).
+static bool start_frame(pt_render *r, pt_pframe *f)
+{
+    const pt_map *m = r->map;
+    pt_visit *vs = &r->visits[f->visit];
+    const pt_cell *c = &m->cells[vs->cell];
+
+    if (vs->live)
+        return false;
+    if (vs->last_xr > f->xl) {
+        vs->k = f->k0;
+        vs->v0 = f->pv;
+        vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, f->k0)));
+    }
+    uint8_t guard = c->num_edges;
+    while (!col_gt(vs->v1, f->xl)) {
+        if (guard-- == 0) {
+            RC_ASSERT(0);
+            return false;    // degenerate ring; skip the child rather than spin
+        }
+        vs->k = ring_k_next(c, vs->k);
+        vs->v0 = vs->v1;
+        vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, vs->k)));
+    }
+    vs->live = 1;
+    return true;
 }
 
 // ---- one edge of the walk (spec 7.8) ----
 
-static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
+static void process_edge(pt_render *r, pt_pframe *f)
 {
     const pt_map *m = r->map;
-    const pt_edge *e = &m->edges[f->edge];
-    const pt_cell *ca = &m->cells[f->cell];
+    pt_visit *vs = &r->visits[f->visit];
+    const pt_cell *ca = &m->cells[vs->cell];
+    uint8_t ei = (uint8_t)(ca->first_edge + vs->k);
+    const pt_edge *e = &m->edges[ei];
+    pt_vv v0 = vs->v0;
+    pt_vv v1 = vs->v1;
+
+    // the active pieces belong to one edge: a new edge starts its lines
+    // afresh, while a visit resuming on the previous visit's last edge
+    // keeps them, so its lines can extend across the seam
+    if (vs->act_k != vs->k) {
+        vs->act_k = vs->k;
+        for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
+            vs->active[i] = 0;
+    }
 
     // wholly outside one frustum ray: no columns, nothing to do
     if ((v0.flags & PT_VF_ANEG) && (v1.flags & (PT_VF_ANEG | PT_VF_AZERO)))
@@ -814,7 +900,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     uint8_t bh = cut(r, &f->bcur, xa, xb);
 
     if (e->colour == PT_EDGE_SOFT) {
-        push_child(r, ca, f->edge, xa, xb, th, bh, f->tmax, f->bmin, v0);
+        push_child(r, ei, xa, xb, th, bh, f->tmax, f->bmin, v0);
         return;
     }
 
@@ -830,13 +916,14 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
         // solid wall: ceiling line and floor line, recolour only; each line
         // gets fresh cursors (role NONE never severs the chains)
         pt_clip cx = {.r = r, .thead = th, .bhead = bh, .tmax = f->tmax, .bmin = f->bmin,
-                      .role = ROLE_NONE};
+                      .role = ROLE_NONE, .vis = vs, .slot = PT_SLOT_CEIL};
         n = make_line(ls, e0, e1, ha_c, pt_pattern_xor(ca_ceil, wall));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
                 clip_line(&cx, &ls[i]);
         cx.tp = 0;
         cx.bp_set = false;
+        cx.slot = PT_SLOT_FLOOR;
         n = make_line(ls, e0, e1, ha_f, pt_pattern_xor(wall, ca_floor));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
@@ -854,7 +941,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     // 3. non-bound-forming lines first: they only recolour, and need the top
     // and bottom chains intact
     pt_clip cxn = {.r = r, .thead = th, .bhead = bh, .tmax = f->tmax, .bmin = f->bmin,
-                   .role = ROLE_NONE};
+                   .role = ROLE_NONE, .vis = vs, .slot = PT_SLOT_CEIL};
     if (cb->ceil_z > ca->ceil_z) {
         n = make_line(ls, e0, e1, ha_c, pt_pattern_xor(ca_ceil, wall));
         for (uint8_t i = 0; i < n; i++)
@@ -864,6 +951,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
         cxn.bp_set = false;
     }
     if (cb->floor_z < ca->floor_z) {
+        cxn.slot = PT_SLOT_FLOOR;
         n = make_line(ls, e0, e1, ha_f, pt_pattern_xor(wall, ca_floor));
         for (uint8_t i = 0; i < n; i++)
             if (clamp_line(&ls[i], xa, xb))
@@ -887,14 +975,15 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
                      : make_line(cl, e0, e1, ha_c, pt_pattern_xor(ca_ceil, cb_ceil));
 
     pt_clip cxf = {.r = r, .thead = th, .bhead = bh, .tmax = f->tmax, .bmin = f->bmin,
-                   .role = ROLE_BOTTOM, .build = &childb, .cbfb = cbfb, .closed = &closed};
+                   .role = ROLE_BOTTOM, .build = &childb, .cbfb = cbfb, .closed = &closed,
+                   .vis = vs, .slot = PT_SLOT_FLOOR_BOUND};
     for (uint8_t i = 0; i < nf; i++)
         if (clamp_line(&fl[i], xa, xb))
             clip_line(&cxf, &fl[i]);
 
     pt_clip cxc = {.r = r, .thead = th, .bhead = childb.head, .tmax = f->tmax,
                    .bmin = childb.head ? childb.bmin : 0, .role = ROLE_TOP, .build = &childt,
-                   .cbfb = cbfb, .closed = &closed};
+                   .cbfb = cbfb, .closed = &closed, .vis = vs, .slot = PT_SLOT_CEIL_BOUND};
     for (uint8_t i = 0; i < nc; i++)
         if (clamp_line(&cl[i], xa, xb))
             clip_line(&cxc, &cl[i]);
@@ -937,7 +1026,7 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
     for (uint8_t i = no; i-- > 0;) {
         uint8_t cth = piece_at(r, childt.head, ol[i]);
         uint8_t cbh = piece_at(r, childb.head, ol[i]);
-        push_child(r, ca, f->edge, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
+        push_child(r, ei, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
     }
 }
 
@@ -1019,18 +1108,24 @@ exact:
     w = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
 rooted:;
 
+    // the camera's cell is never revisited (every ray starts in it), so its
+    // visit is simply begun here, already started on the root edge
+    uint8_t vi = visit_of(r, r->cam_cell);
+    pt_visit *vs = &r->visits[vi];
+    vs->k = (uint8_t)(n - c->first_edge);
+    vs->v0 = v;
+    vs->v1 = w;
+    vs->live = 1;
     r->stack[r->depth++] = (pt_pframe) {
-        .cell = r->cam_cell,
+        .visit = vi,
         .xl = 0,
         .xr = 128,
         .tcur = roott,
         .bcur = rootb,
         .tmax = 0,
         .bmin = PT_SCREEN_HEIGHT,
-        .edge = n,
         .steps = (uint8_t)(c->num_edges + 1),
-        .v0 = v,
-        .v1 = w,
+        .started = 1,
     };
 }
 
@@ -1091,6 +1186,7 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->pool_num = 1;
     r->pool[0] = (pt_piece) {0};
     r->depth = 0;
+    r->num_visits = 1;
 
     // the root portal: a plotted top bound seeding the fill with the camera
     // cell's ceiling, and a dummy off-screen bottom bound
@@ -1101,9 +1197,19 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
 
     while (r->depth) {
         pt_pframe *f = &r->stack[r->depth - 1];
+        pt_visit *vs = &r->visits[f->visit];
         if (f->done) {
+            if (f->started)
+                vs->live = 0;
             r->depth--;
             continue;
+        }
+        if (!f->started) {
+            if (!start_frame(r, f)) {
+                f->done = 1;
+                continue;
+            }
+            f->started = 1;
         }
         // a healthy ring stops on col_ge before its steps run out; a ring
         // rooted at a zero vertex (the eye on it) has no closing column, no
@@ -1111,22 +1217,24 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
         // the steps end the frame here - an accepted outcome, not an error
         if (f->steps == 0) {
             f->done = 1;
+            vs->last_xr = 0xFF;    // the cursor is anywhere: later visits search
             continue;
         }
         f->steps--;
 
-        // the frame holds both vertices of its current edge: each vertex is
+        // the visit holds both vertices of its current edge: each vertex is
         // transformed once, as the end of one edge, and carried on as the
         // start of the next
-        bool stop = col_ge(f->v1, f->xr);
-        process_edge(r, f, f->v0, f->v1);    // may push children, which run first
+        bool stop = col_ge(vs->v1, f->xr);
+        process_edge(r, f);    // may push children, which run first
         if (stop) {
             f->done = 1;
+            vs->last_xr = f->xr;    // the cursor stays on this edge for a resume
         } else {
-            const pt_cell *fc = &m->cells[f->cell];
-            f->edge = pt_map_ring_next(fc, f->edge);
-            f->v0 = f->v1;
-            f->v1 = transform(r, m->verts[m->edges[pt_map_ring_next(fc, f->edge)].v0]);
+            const pt_cell *fc = &m->cells[vs->cell];
+            vs->k = ring_k_next(fc, vs->k);
+            vs->v0 = vs->v1;
+            vs->v1 = transform(r, ring_vertex(m, fc, ring_k_next(fc, vs->k)));
         }
     }
 
@@ -1135,4 +1243,10 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
 
     if (r->pool_num > r->pool_high)
         r->pool_high = r->pool_num;
+    if (r->num_visits > r->visits_high)
+        r->visits_high = r->num_visits;
+
+    // empty the visit cache: each record clears its own cell's index
+    for (uint8_t i = 1; i < r->num_visits; i++)
+        r->cell_visit[r->visits[i].cell] = 0;
 }

@@ -427,3 +427,84 @@ baseline - the robustness layer is invisible until a degenerate pose
 needs it. probe_walk joined the suite (25 tests). Map data stays
 unconstrained; a 45-degree-grid map would let the margin collapse to a
 constant and the length bound relax, noted for the future.
+
+## 2026-09-27 — Division without u24, and the duplicate work out of the walk
+
+Rich asked whether recip_div's 24-bit multiply was necessary. It was not:
+a quotient num * 2^k / den is num * (256 + f) >> (16 + s - k), and for a
+byte numerator that product is one lookup with num added into the high
+byte - exact in 17 bits - so the left pre-shift that widened the chain is
+never needed. The core split in two: mul_recip8 (one lookup, exact) for
+byte numerators, and mul_recip16 (num + frac(num * f), the carry as a
+17th bit) for u16 ones, each caller shifting right from there. Only
+pt_gradq8_mag had really used the u24 chain (its pre-shift reached 22
+bits); it now shifts the 17-bit product either way, saturating before a
+left shift. 445M comparisons against the old routines: no mismatch.
+pt_mulu24_frac is gone, and pt_div_q8 takes a u16 numerator (den >= 128).
+
+The camera's corner deflection was the other u24 user. The move is now
+int16 (under 12 units in any direction); M . v drops to 1/64-unit steps so
+each product fits u16, and the correction is q14. The collision probe's
+closest approach moved 29.1728 -> 29.1405 (tripwire 28); the sweep's
+camera walk is unchanged. The slide loop now computes each candidate's
+current distance once, not once per iteration.
+
+Four exact savings in the renderer: push_child and push_root hand the end
+vertex they found to the frame instead of the walk transforming it again;
+a vertex's depth reciprocal is normalised once in transform and reused by
+every row projection there (pt_project_col/pt_project_rowd take it);
+row_step skips the multiply at dx = 0 or on a flat line (43% of calls
+were at dx = 0); resolve_block reuses the line rows it already has.
+Lookups per frame 494 -> 240 on the centroid sweep, transforms 20 -> 15;
+sweep byte-identical.
+
+## 2026-09-27 — Visit records, resume, line extension, and a pillar
+
+Nothing kept per-cell state across visits: every visit searched for its
+first edge from the twin and allocated fresh pieces, and §7.10's line
+extension was never built. Rich's design: a small cache of visit records,
+created on a cell's first visit of the frame (a one-byte index per cell,
+0 = none), each holding a back-reference so the frame's end can clear the
+indices by walking the cache - cost proportional to the cells actually
+seen. The record carries the walk cursor as a ring index 0..num_edges-1
+with the current edge's two vertices, the last finished visit's right
+column, a live flag, and the active piece of each of the edge's four line
+slots. Visits of one cell never nest, so the cursor lives there and the
+frame shrinks to span, chains, and a pending start. The per-cell index
+sits in pt_render (cell_visit[]) rather than pt_cell, so the map stays
+read-only to the renderer; the 6502 code is the same byte table either way.
+
+Resume: a later visit's first edge can be no earlier than the edge the
+last visit stopped on (every edge before it ends left of that visit's xr,
+which is at or left of the new xl), so the search continues from there,
+usually stopping at once. Frames are now pushed pending and search when
+they start: an edge split by closed columns pushes several children of
+one cell together, and starting late lets each resume from the cursor
+its left sibling left. The live flag skips a nested visit should boundary
+rounding ever produce one. The map now stores each edge's twin (the spec
+always said so; pt_map_twin had been searching the neighbour's ring).
+
+Extension: a visible range starting exactly where the same slot's active
+piece ends, with the same gradient and colour, only moves x1 - across
+clip blocks within a visit and across the seam between visits. The
+checks catch splits and merges the child walks make to bound pieces in
+between; a piece carried over from a previous visit can only open the
+chain being built, never follow its tail.
+
+The demo gained a thin (24-unit) pillar in the middle of room 2, the room
+split into four convex quarters by soft diagonals from its corners to the
+pillar's so both doorways stay whole (cells 8 and 19..21; 21 cells now).
+
+Verification: with extension disabled the sweep is byte-identical to the
+pillar-map baseline, and across 66,157 resumes in the sweep and tests the
+resumed edge always matched the search from the portal. With extension,
+273 of 1172 sweep frames change by one-row shifts, and the worst are
+fixes: a shallow wall edge split at a clip block used to drop its
+fraction at the re-anchor and meet the next wall a row off; extended, it
+steps at the right column and joins exactly. On this map extension is a
+modest saving (pieces 25.9 -> 24.6 per frame, plotted 18.1 -> 16.9, pool
+high-water 123 -> 103): most lines take the fast path whole, and round
+the pillar the visits leave gaps. Up to 17 cells are visited in a frame
+here, so PT_MAX_VISITS is the full cell count for now; the 6502 cap wants
+sizing from real maps. The spec's §7.1, 7.2, 7.4, 7.5 and 7.10 describe
+the new walk.

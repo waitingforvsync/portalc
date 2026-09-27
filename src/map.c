@@ -95,6 +95,7 @@ static void end_map(builder *b)
                     if (m->edges[j].v0 == v1 && edge_v1(m, d, j) == e->v0) {
                         RC_ASSERT(e->adj == 0);    // exactly one neighbour per edge
                         e->adj = cj;
+                        e->twin = j;
                     }
                 }
             }
@@ -126,7 +127,7 @@ static void end_map(builder *b)
             // its own independent rounding, so both sides of a portal work
             // against one line; twins in earlier cells are already final
             if (e->adj != 0 && e->adj < ci) {
-                uint8_t t = pt_map_twin(m, c, i);
+                uint8_t t = pt_map_twin(m, i);
                 e->angle = (uint8_t)(m->edges[t].angle + 128);
             }
         }
@@ -158,13 +159,14 @@ bool pt_map_validate(const pt_map *m)
             if (cross < 0)
                 return false;
 
-            // twin symmetry and soft-edge attribute equality (the twin lives
-            // in cells[e->adj] by construction of pt_map_twin's search)
+            // twin symmetry and soft-edge attribute equality
             if (e->adj != 0) {
                 const pt_cell *b = &m->cells[e->adj];
-                uint8_t ti = pt_map_twin(m, c, ei);
+                uint8_t ti = pt_map_twin(m, ei);
+                if (ti < b->first_edge || ti >= b->first_edge + b->num_edges)
+                    return false;
                 const pt_edge *t = &m->edges[ti];
-                if (t->adj != ci || pt_map_twin(m, b, ti) != ei)
+                if (t->adj != ci || pt_map_twin(m, ti) != ei)
                     return false;
                 if (t->v0 != edge_v1(m, c, ei) || edge_v1(m, b, ti) != e->v0)
                     return false;
@@ -203,23 +205,6 @@ int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t 
     pt_vertex b = m->verts[m->edges[pt_map_ring_next(c, e)].v0];
     return (int32_t)((int16_t)(b.x - a.x)) * (int16_t)(y - a.y)
          - (int32_t)((int16_t)(b.y - a.y)) * (int16_t)(x - a.x);
-}
-
-uint8_t pt_map_twin(const pt_map *m, const pt_cell *c, uint8_t e)
-{
-    RC_ASSERT(m->edges[e].adj != 0);
-
-    // the twin starts at our end vertex: rings are clockwise, so the shared
-    // wall runs the other way round in the neighbour
-    uint8_t v1 = m->edges[pt_map_ring_next(c, e)].v0;
-    const pt_cell *a = &m->cells[m->edges[e].adj];
-    for (uint8_t k = 0; k < a->num_edges; k++) {
-        uint8_t t = (uint8_t)(a->first_edge + k);
-        if (m->edges[t].v0 == v1)
-            return t;
-    }
-    RC_PANIC(0);
-    return 0;
 }
 
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y)
@@ -264,6 +249,13 @@ void pt_scene_init(pt_map *m)
     uint8_t r3 = add_vert(&b, 912, 1736);
     uint8_t r4 = add_vert(&b, 512, 1736);
     uint8_t r5 = add_vert(&b, 512, 1336);
+
+    // A thin square pillar in the middle of the second room, in line with
+    // both the corridor and the stair doorway.
+    uint8_t pnw = add_vert(&b, 724, 1524);
+    uint8_t pne = add_vert(&b, 724, 1548);
+    uint8_t pse = add_vert(&b, 700, 1548);
+    uint8_t psw = add_vert(&b, 700, 1524);
 
     // The staircase shaft out of the second room's west wall: seven cell
     // boundaries at 40-unit intervals, on the shaft's north (x 772) and
@@ -388,19 +380,20 @@ void pt_scene_init(pt_map *m)
     add_edge(&b, w0, none);       // portal into room 2 (never drawn)
     add_edge(&b, w1, lit_e);      // west wall, faces east
 
-    // Cell 8: the second room, floor a step down from the corridor; its
-    // portal edge colours both the lintel over the way in and the riser of
-    // the step back up. The north wall faces away from the light, so the
-    // room darkens toward the way in.
+    // Cell 8: the second room's north quarter, floor a step down from the
+    // corridor; its portal edge colours both the lintel over the way in and
+    // the riser of the step back up. The north wall faces away from the
+    // light, so the room darkens toward the way in. The room is split round
+    // its pillar into four convex quarters by soft diagonals from the room's
+    // corners to the pillar's (cells 8 and 19..21), leaving both doorways
+    // whole; each pillar face is lit by its facing like the room's walls.
     begin_cell(&b, 544, 352, room2_floor, main_ceil);
     add_edge(&b, r0, lit_shadow);    // north wall, faces south
     add_edge(&b, w1, lintel2);       // portal back to the corridor (lintel)
     add_edge(&b, w0, lit_shadow);
-    add_edge(&b, r3, lit_wnw);       // east wall, faces west
-    add_edge(&b, r4, room2_far);     // far wall (black-blue-red mix)
-    add_edge(&b, r5, lit_e2);        // west wall up to the stair doorway
-    add_edge(&b, sv[0], blue75);     // stair doorway (first riser face)
-    add_edge(&b, nv[0], lit_e2);     // west wall beyond the doorway
+    add_edge(&b, r3, PT_EDGE_SOFT);
+    add_edge(&b, pne, lit_n);        // pillar north face
+    add_edge(&b, pnw, PT_EDGE_SOFT);
 
     // Cells 9..14: the staircase, six cells climbing 16 units each toward
     // the west under one flat ceiling at the upper corridor's height; the
@@ -446,6 +439,28 @@ void pt_scene_init(pt_map *m)
     add_edge(&b, es, lit_ene);    // door wall, lit
     add_edge(&b, rb, lit_n);      // south-west wall, fully lit
     add_edge(&b, rc, PT_EDGE_COLOUR(room2_floor));    // far wall, dark green check
+
+    // Cells 19..21: the rest of the second room round the pillar (east,
+    // south and west quarters).
+    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    add_edge(&b, r3, lit_wnw);       // east wall, faces west
+    add_edge(&b, r4, PT_EDGE_SOFT);
+    add_edge(&b, pse, lit_e);        // pillar east face
+    add_edge(&b, pne, PT_EDGE_SOFT);
+
+    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    add_edge(&b, r4, room2_far);     // far wall (black-blue-red mix)
+    add_edge(&b, r5, PT_EDGE_SOFT);
+    add_edge(&b, psw, lit_shadow);   // pillar south face
+    add_edge(&b, pse, PT_EDGE_SOFT);
+
+    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    add_edge(&b, r5, lit_e2);        // west wall up to the stair doorway
+    add_edge(&b, sv[0], blue75);     // stair doorway (first riser face)
+    add_edge(&b, nv[0], lit_e2);     // west wall beyond the doorway
+    add_edge(&b, r0, PT_EDGE_SOFT);
+    add_edge(&b, pnw, lit_w);        // pillar west face
+    add_edge(&b, psw, PT_EDGE_SOFT);
 
     end_map(&b);
 }

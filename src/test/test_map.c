@@ -11,8 +11,8 @@ RC_TEST(map, scene_valid)
     pt_scene_init(&m);
     RC_CHECK_TRUE(pt_map_validate(&m));
 
-    // 19 cells plus the reserved outside
-    RC_CHECK(m.num_cells, ==, (uint8_t)19);
+    // 21 cells plus the reserved outside
+    RC_CHECK(m.num_cells, ==, (uint8_t)22);
 
     // every ring stays within its cell's range and closes back on its first
     // edge; the edges partition the table between the cells
@@ -42,8 +42,10 @@ RC_TEST(map, scene_valid)
             // directions, with an angle exactly the reverse of ours
             if (ed->adj != 0) {
                 const pt_cell *bc = &m.cells[ed->adj];
-                uint8_t t = pt_map_twin(&m, cell, e);
-                RC_CHECK(pt_map_twin(&m, bc, t), ==, e);
+                uint8_t t = pt_map_twin(&m, e);
+                RC_CHECK(t, >=, bc->first_edge);
+                RC_CHECK(t, <, (uint8_t)(bc->first_edge + bc->num_edges));
+                RC_CHECK(pt_map_twin(&m, t), ==, e);
                 RC_CHECK(m.edges[t].adj, ==, c);
                 RC_CHECK(m.edges[t].v0, ==, v1);
                 RC_CHECK((uint8_t)(m.edges[t].angle + 128), ==, ed->angle);

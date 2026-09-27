@@ -33,6 +33,8 @@ typedef struct pt_vertex {
 typedef struct pt_edge {
     uint8_t v0;          // start vertex; the end is the next ring edge's v0
     uint8_t adj;         // adjacent cell, 0 = solid wall
+    uint8_t twin;        // the adjacent cell's edge running this one the
+                         // other way (a portal's twin; unused for walls)
     uint8_t colour;      // wall shade + 1 (walls, risers and lintels); 0 = soft
     uint8_t angle;       // direction V0 -> V1 in 256ths of a turn; a twin is
                          // exactly this + 128, so both sides share one line
@@ -65,12 +67,16 @@ static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t e)
     return (uint8_t)(c->first_edge + (k == c->num_edges ? 0 : k));
 }
 
-// The twin of a portal edge of cell c: the adjacent cell's edge running the
-// shared wall the other way (it starts at our end vertex).
-uint8_t pt_map_twin(const pt_map *m, const pt_cell *c, uint8_t e);
+// The twin of a portal edge: the adjacent cell's edge running the shared
+// wall the other way (it starts at our end vertex), stored by the builder.
+static inline uint8_t pt_map_twin(const pt_map *m, uint8_t e)
+{
+    return m->edges[e].twin;
+}
 
 // Build the demo scene: a pentagonal room with a depressed square in the
-// centre of its floor, and a corridor to a second, square room.
+// centre of its floor, and a corridor to a second, square room with a thin
+// pillar in its middle.
 void pt_scene_init(pt_map *m);
 
 // Check every structural invariant (twins, convexity, winding, soft-edge

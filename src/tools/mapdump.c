@@ -26,7 +26,7 @@ int main(void)
             const pt_edge *ed = &m.edges[e];
             int soft = ed->colour == PT_EDGE_SOFT;
             pt_pattern w = soft ? (pt_pattern) {0, 0} : pt_shade((uint8_t)(ed->colour - 1));
-            int twin = ed->adj ? pt_map_twin(&m, cc, e) : -1;
+            int twin = ed->adj ? pt_map_twin(&m, e) : -1;
             printf("  edge %d v0=%d adj=%d twin=%d soft=%d wall=%02X%02X angle=%d len8=%d\n",
                    e, ed->v0, ed->adj, twin, soft, w.e, w.o, ed->angle, ed->len8);
         }

@@ -227,30 +227,56 @@ render_frame():
     fill (even pass, odd pass)
 ```
 
-Recursion is an explicit stack of portal frames rather than JSR recursion:
+Recursion is an explicit stack of portal frames rather than JSR recursion. The walk
+state of a cell lives not in the frame but in the cell's **visit record** (below),
+shared by every visit of that cell in the frame:
 
 ```
 frame:
-    cell         cell index
+    visit        the cell's visit record
     xl, xr       column span
     Tcur, Bcur   current piece of the top / bottom chain (the piece containing the next column)
     Tmax, Bmin   conservative row extents of the chains over [xl, xr)   (fast path, §7.9)
-    n            index of the edge being walked
-    V0           view data (x, y, a, b) of vertex n, carried across edges
+    k0, P        the edge starting at the portal's start vertex P, and P's view data:
+                 where a search from the portal begins (§7.4)
+    started      the first edge has been found
+    steps        safety count: edges left before the ring must have ended
+
+visit:                                     // one per cell visited this frame
+    cell         back-reference to the cell
+    k            the edge being walked, as a ring index 0..num_edges-1
+    V0, V1       view data of edge k's start and end vertices
+    last_xr      right column of the last finished visit (none yet: 0xFF)
+    live         a frame of this cell is walking
+    active[4]    last VISIBLE piece of each of edge k's ≤ 4 lines (§7.10)
 ```
 
 Rendering is a depth-first, left-to-right sweep: every visit to any cell during a
 frame happens in increasing x order, which is what makes line extension (§7.10) valid
-and makes chain ownership (§7.9) safe.
+and makes chain ownership (§7.9) safe. Visits of one cell never nest (a straight ray
+crosses a convex cell once, so a cell never appears in its own subtree), which is what
+lets them share one cursor.
+
+Visit records are created on a cell's first visit of the frame, from a small cache:
+each cell has a one-byte cache index (0 = not visited), set on creation. At the end
+of the frame the cache is emptied by walking its entries and clearing each one's
+cell index through the back-reference, so the cost is proportional to the cells
+actually visited, a fraction of the map. The camera cell's record is begun by the
+root push, already started.
 
 ### 7.2 Vertex transforms
 
 No per-frame vertex cache. Each vertex is transformed when the walk reaches it, and
-the walk carries the current vertex's view data from one edge to the next. When a
-child is pushed, the parent's edge start vertex `P` is the child's start vertex, so
-its view data is passed down. A cell visited twice through different portals
-re-transforms its vertices; the arithmetic is deterministic, so both visits get
-identical numbers, which §7.10 relies on.
+the visit record carries the current edge's two vertices from one edge to the next,
+so a walk transforms each vertex once, as the end of one edge. When a child is
+pushed, the parent's edge start vertex `P` is the child's start vertex, so its view
+data is passed down. A cell visited again resumes with the vertices of the edge its
+last visit ended on (§7.4), so only the first visit's search re-transforms vertices
+a neighbouring cell already did. The arithmetic is deterministic, so any vertex
+transformed twice gets identical numbers, which §7.10 relies on.
+
+The reciprocal of a vertex's depth (normalised once, §4) is part of its view data:
+the column projection and every row projection at that vertex reuse it.
 
 ### 7.3 Classifying a vertex against a column
 
@@ -314,15 +340,44 @@ rightwards. The first end vertex right of `xl` is on the back chain. The child i
 convex, so every ray through the portal exits through the back chain exactly once:
 the edges from the first to the last are the whole visible set.
 
+**Revisited cell.** A cell visited earlier in the frame resumes instead. Its last
+visit stopped on edge `k`, the first whose end vertex was at or right of that visit's
+`xr`; every earlier edge of the back chain ends left of `xr ≤ xl`, so none of them can
+be the new first edge. The search therefore continues from `k`, with `V0` and `V1`
+already in the record, and usually stops at once:
+
+```
+start(f):
+    V = f.visit
+    if V.live: skip f                          // a nested visit: only via boundary rounding
+    if V.last_xr > f.xl:                       // no finished visit left of this span
+        V.k = f.k0 ; V.V0 = f.P ; V.V1 = transform(v[f.k0 + 1])
+    while cmp(V.V1, f.xl) ≤ 0: V.k = V.k + 1 ; V.V0 = V.V1 ; V.V1 = transform(v[V.k + 1])
+    V.live = 1
+```
+
+The search runs when the frame **starts**, not when it is pushed. An edge whose span
+is split by closed columns (§7.9.4) pushes several children of the same cell at once;
+each starts only after the one to its left has finished, and so resumes from the
+cursor that sibling left. The first-edge search from `P` stays the fallback (a first
+visit, or a cursor forgotten after a ring ran out of steps), so the resume is purely
+an optimisation: it always finds the same edge the search from `P` would.
+
+The `live` flag is set while a frame of the cell walks and cleared when it pops. In
+exact arithmetic it never matters; if boundary rounding (§7.5) ever produced a cell
+inside its own subtree, the inner frame is skipped rather than overwriting the outer
+frame's cursor.
+
 ### 7.5 The walk, the last edge, zero-width spans, termination
 
 ```
-walk(f):
+walk(f):                                   // after start(f), §7.4
+    V = f.visit
     loop:
-        V1 = transform(v[f.n + 1])
-        process_edge(f, f.n, f.V0, V1)         // §7.6–7.9; may push a child and return
-        if cmp(V1, f.xr) ≥ 0: pop(); return    // end vertex at or right of the right column
-        f.V0 = V1; f.n = f.n + 1
+        stop = cmp(V.V1, f.xr) ≥ 0             // end vertex at or right of the right column
+        process_edge(f, V.k, V.V0, V.V1)       // §7.6–7.9; may push children, which run first
+        if stop: V.last_xr = f.xr ; pop() ; return   // the cursor stays on edge k for a resume
+        V.k = V.k + 1 ; V.V0 = V.V1 ; V.V1 = transform(v[V.k + 1])
 ```
 
 For the camera cell the stop test is `b(V1) ≤ 0`.
@@ -637,32 +692,51 @@ two children.
 
 ### 7.10 Line extension across visits ("active lines")
 
-A cell can be visited several times per frame (a room seen either side of a pillar,
-or a wall split by soft-edge decomposition). Each visit produces pieces of the same
-screen lines, and because visits occur in increasing x order, the pieces from
-consecutive visits can be joined. Each cell keeps:
+A line's visible range is emitted in several pieces: once per clip block within a
+visit (the block boundaries come from the bound chains' pieces, not from the line),
+and again on each visit of a cell seen several times (a wall split by soft-edge
+decomposition, or seen through adjacent portals). Because visits occur in increasing
+x order, a range that begins exactly where the same line's last visible piece ended
+is that line continuing, and the piece simply grows: with the gradient already known,
+extension is just a new `x1`. The visit record keeps, for the edge being walked:
 
 ```
-last_edge       edge index of the previous visit's last generated lines
-last_xr         right column of the previous visit
-active[4]       last emitted VISIBLE piece of each of that edge's ≤ 4 lines (0 if none)
+active[4]       last emitted VISIBLE piece of each of the edge's ≤ 4 lines (0 if none)
 ```
 
+Each line of an edge has a fixed slot, the same on every visit: the line at the
+cell's own ceiling (a wall's top, or a portal's top ceiling), the child's top bound,
+the child's bottom bound, and the line at the cell's own floor. The slots are cleared
+when the walk moves to a new edge; a visit that resumes on the previous visit's last
+edge (§7.4) keeps them, which is what joins pieces across the seam.
+
 ```
-extend_or_alloc(r0, r1, y0, g, colour):
-    k = which of the ≤ 4 lines of this edge L is
-    q = cell.active[k]
-    if cell.last_edge == n and cell.last_xr == r0 and q != 0 and q.x1 == r0:
-        q.x1 = r1                    // same edge, same line, contiguous: extend
-        return q
-    q = alloc(r0, r1, y0, g, colour) ; cell.active[k] = q ; return q
+emit_visible(r0, r1, L):
+    q = V.active[slot(L)]
+    if q != 0 and q.x1 == r0 and q.g == L.g and q.colour == L.colour
+       and (no chain is being built, or it is empty, or q is its tail):
+        q.x1 = r1                    // the same line continuing: extend, keeping q's anchor
+        if building: widen the chain's extents over [r0, r1), appending q if it is not the tail
+        return
+    q = alloc(r0, r1, round(y_L(r0)), L.g, L.colour) ; V.active[slot(L)] = q
+    if building: append q
 ```
 
-The geometry is identical across visits because the same edge transforms to the same
-numbers (§7.2). An extended piece may have been in a previous child's chain; that
-child was popped before this visit started, so re-linking it is safe. Once a visit
-ends the cell's `last_xr` is set; a later visit that does not start exactly there
-gets fresh pieces.
+The gradient and colour checks catch what the child walks between visits can do to
+a bound-forming line's piece: a split shortens it (`x1` no longer matches), and a
+merge recolours it; either way a fresh piece starts. A piece carried over from an
+earlier visit ends at this visit's first column, so it can only open the chain being
+built, never follow its tail; it then starts left of the span, which chain walks
+tolerate (the child's first cut splits it at the child's left column). Such a piece
+was in a previous child's chain at most, and that child was popped before this visit
+started, so re-linking it is safe: pieces only ever move down into child chains,
+never up into a live ancestor's. A pillar between two visits leaves a gap, so `x1`
+does not match and the later visit gets fresh pieces.
+
+Extension keeps the piece's original anchor instead of re-rounding at every seam.
+That is more exact than splitting: each re-anchor drops up to half a row of
+fraction, and on a shallow line the drops add up to a whole row, so a split wall edge
+could meet the next wall a row off where the extended piece joins it exactly.
 
 ## 8. Rendering
 

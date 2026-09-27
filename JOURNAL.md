@@ -508,3 +508,61 @@ the pillar the visits leave gaps. Up to 17 cells are visited in a frame
 here, so PT_MAX_VISITS is the full cell count for now; the 6502 cap wants
 sizing from real maps. The spec's §7.1, 7.2, 7.4, 7.5 and 7.10 describe
 the new walk.
+
+## 2026-09-27 — Visit state slimmed to what is implied
+
+The first cut of the visit cache carried started/done/live flags, a
+last_xr, the active slots' edge index, and a stored left column per
+frame. Rich pointed out the state was all implied, and it went:
+
+- A frame's left column is its chains' frontier, max(tcur.x0, bcur.x0),
+  once the push splits the chain heads at it (the child's first cut made
+  that split anyway, so no piece is added). Without the split, a piece
+  extended from the cell's previous visit could head the chain left of
+  the span: 1927 of 262066 test starts. process_edge's span clamp is now
+  just max(e0.sx, frontier).
+- A frame has started when its cell's record holds its xr - two visits
+  of a cell never share a right column. No record means a first visit
+  (search from P); the record's xr equal to the new left column means a
+  contiguous revisit, whose active pieces carry over, and any other
+  value a gap, which clears them. The monotonic order (record xr <= new
+  left column) is a debug assert; it never failed.
+- A frame pops as its last edge begins, so that edge's children take its
+  slot: no done flag, and a shallower stack.
+- The live guard never fired (0 of 262066 starts). Should rounding ever
+  nest a cell in itself, the outer frame now sees the foreign xr when it
+  is back on top and just restarts from its own frontier.
+- Forgetting the cursor when a ring runs out of steps was moot: all 25
+  such frames in the tests were the camera's cell, never revisited.
+- The active slots are cleared whenever the cursor advances (and on a
+  gapped revisit), which replaced tracking the edge they belong to.
+
+The frame is now cell, xr, the two cursors, the extents, steps, and the
+pending start (P and its edge); the record is cell, k, xr, the edge's two
+vertices and the four active pieces. Byte-identical on the sweep and the
+pillar poses; 25/25 tests.
+
+Later the same day, Rich asked why frames were pushed pending at all.
+Only siblings needed it - several frames of one neighbour from one edge,
+when closed columns split the portal's span - and an edge pushing more
+than one frame occurred 0 times in 262066 test pushes and 4934 sweep
+pushes (it needs a V-shaped bound). Frames are now pushed ready: the
+push sets up the record's cursor (a first visit searching from P, a
+revisit resuming), so the frame loses P and its edge index (9 bytes) and
+the walk loses its per-step started test. Siblings fall out of a
+property the walk already had: a cursor that starts early is harmless,
+because every edge before a frame's true first edge ends at or left of
+its left column and clamps to an empty span. So when the left sibling is
+pushed and finds the right sibling's xr (right of its own xl) in the
+record, it just searches from P again; the right sibling later walks on
+from the cursor the left one leaves, and restores the record's xr as it
+pops. To exercise a path the map never takes, a scratch build split
+every open range of 4+ columns in two (150283 forced siblings in the
+tests, 4059 in the sweep): 25/25 tests with asserts, and renders equal
+to the unsplit ones but for one-row re-anchoring shifts at the forced
+seams. The committed pending version crashed on the same forced split:
+contiguous siblings shared a chain piece across their seam, and the right
+one's cursor followed it into the left one's relinked chains. Real
+siblings are separated by a closed range whose emits split the pieces at
+its ends, so that was latent; splitting the heads at push removes it.
+Sweep and pillar poses byte-identical.

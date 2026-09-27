@@ -584,11 +584,11 @@ static bool clamp_line(pt_line *L, uint8_t xa, uint8_t xb)
 // exact, because every consumer is robust by structure: child frames start
 // from the portal (or resume a finished visit's edge), spans are clamped to
 // the cursors' frontier in process_edge (a vertex projected left of its
-// predecessor yields an empty span, never a cut regression), a ring that
-// never fires its stop burns its steps and closes the frame (its visit then
-// forgets its cursor), and a nested visit of a cell already walking is
-// skipped. The one load-bearing consumer of these signs is
-// push_root's winding search on the CAMERA's cell - and that, once per
+// predecessor yields an empty span, never a cut regression, and a cursor
+// starting early just passes empty edges), and a ring that never fires its
+// stop burns its steps and closes the frame. The one load-bearing consumer
+// of these signs is push_root's winding search on the CAMERA's cell - and
+// that, once per
 // frame at most, retries with exact sums when the rounded ones fail. At an
 // exact boundary tie a frame may therefore carry a one-column sliver where
 // perfection would need exact spans; it never traps.
@@ -758,22 +758,54 @@ static pt_vertex ring_vertex(const pt_map *m, const pt_cell *c, uint8_t k)
     return m->verts[m->edges[c->first_edge + k].v0];
 }
 
-// The cell's visit record, created on its first visit of the frame.
-static uint8_t visit_of(pt_render *r, uint8_t cell)
+// A new visit record for a cell's first visit of the frame.
+static pt_visit *visit_new(pt_render *r, uint8_t cell)
 {
-    uint8_t i = r->cell_visit[cell];
-    if (i)
-        return i;
     RC_PANIC(r->num_visits < PT_MAX_VISITS);
-    i = r->num_visits++;
-    r->visits[i] = (pt_visit) {.cell = cell, .last_xr = 0xFF, .act_k = 0xFF};
+    uint8_t i = r->num_visits++;
+    r->visits[i] = (pt_visit) {.cell = cell};
     r->cell_visit[cell] = i;
-    return i;
+    return &r->visits[i];
 }
 
-// Push a pending child frame through portal edge ei; it finds its first
-// edge when it starts. pv is P, the portal's start vertex, where a search
-// from the portal begins: its edge is the twin's ring successor.
+// Move a visit's cursor to the next edge: its end vertex becomes the start,
+// and that edge's lines start afresh.
+static void visit_advance(pt_render *r, pt_visit *vs, const pt_cell *c)
+{
+    vs->k = ring_k_next(c, vs->k);
+    vs->v0 = vs->v1;
+    vs->v1 = transform(r, ring_vertex(r->map, c, ring_k_next(c, vs->k)));
+    for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
+        vs->active[i] = 0;
+}
+
+// A frame's current left column: where its bound chains begin. Both
+// cursors start on the frame's left column (push splits them there), and
+// cut only ever moves them right.
+static uint8_t frontier(const pt_render *r, const pt_pframe *f)
+{
+    uint8_t t = r->pool[f->tcur].x0;
+    uint8_t b = r->pool[f->bcur].x0;
+    return t > b ? t : b;
+}
+
+// Push a child frame over [xl, xr) through portal edge ei, ready to walk:
+// its cell's record gets the cursor on the child's first edge (spec 7.4),
+// the first whose end vertex is strictly right of xl. A first visit
+// searches from P (pv), the portal's start vertex, whose edge is the
+// twin's ring successor. A cell visited before resumes from the edge its
+// last visit ended on - every earlier edge ends left of that visit's xr,
+// which is at or left of xl - with that edge's vertices in hand; its
+// active pieces carry over only when the visits are contiguous. A record
+// holding an xr right of xl belongs to a sibling pushed just before (an
+// edge whose span closed columns split, pushed right to left), so the
+// search starts over from P; the sibling, running later, walks on from
+// wherever this visit leaves the cursor, and the edges it passes before its
+// own first edge end at or left of its left column and clamp to nothing.
+// The chain heads are split at xl, which the child's first cut would do
+// anyway, so that the cursors mark the left column exactly (a head may
+// start left of it: a closed range's piece, or a piece extended from the
+// cell's previous visit). A degenerate ring pushes nothing.
 static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t thead,
                        uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv)
 {
@@ -782,52 +814,49 @@ static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t
     uint8_t cell = m->edges[ei].adj;
     const pt_cell *c = &m->cells[cell];
 
+    pt_visit *vs;
+    uint8_t vi = r->cell_visit[cell];
+    if (vi != 0 && r->visits[vi].xr <= xl) {
+        vs = &r->visits[vi];
+        if (vs->xr != xl) {
+            for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
+                vs->active[i] = 0;    // a gap since the last visit: nothing extends
+        }
+    } else {
+        vs = vi != 0 ? &r->visits[vi] : visit_new(r, cell);
+        for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
+            vs->active[i] = 0;
+        vs->k = ring_k_next(c, (uint8_t)(pt_map_twin(m, ei) - c->first_edge));
+        vs->v0 = pv;
+        vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, vs->k)));
+    }
+    uint8_t guard = c->num_edges;
+    while (!col_gt(vs->v1, xl)) {
+        if (guard-- == 0) {
+            RC_ASSERT(0);
+            return;    // degenerate ring; skip the child rather than spin
+        }
+        visit_advance(r, vs, c);
+    }
+    vs->xr = xr;
+
+    if (r->pool[thead].x0 < xl) {
+        pool_split(r, thead, xl);
+        thead = r->pool[thead].next;
+    }
+    if (r->pool[bhead].x0 < xl) {
+        pool_split(r, bhead, xl);
+        bhead = r->pool[bhead].next;
+    }
     r->stack[r->depth++] = (pt_pframe) {
-        .visit = visit_of(r, cell),
-        .xl = xl,
+        .cell = cell,
         .xr = xr,
         .tcur = thead,
         .bcur = bhead,
         .tmax = tmax,
         .bmin = bmin,
-        .k0 = ring_k_next(c, (uint8_t)(pt_map_twin(m, ei) - c->first_edge)),
         .steps = (uint8_t)(c->num_edges + 1),
-        .pv = pv,
     };
-}
-
-// Find a starting frame's first edge (spec 7.4): the first whose end vertex
-// is strictly right of xl. A cell visited before resumes from the edge its
-// last visit ended on - every earlier edge ends left of that visit's xr, so
-// none can be first - with that edge's vertices already in hand; otherwise
-// the search begins at P. False when the frame must not walk: a degenerate
-// ring, or a nested visit of a cell already walking (reachable only through
-// boundary rounding; that child is skipped).
-static bool start_frame(pt_render *r, pt_pframe *f)
-{
-    const pt_map *m = r->map;
-    pt_visit *vs = &r->visits[f->visit];
-    const pt_cell *c = &m->cells[vs->cell];
-
-    if (vs->live)
-        return false;
-    if (vs->last_xr > f->xl) {
-        vs->k = f->k0;
-        vs->v0 = f->pv;
-        vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, f->k0)));
-    }
-    uint8_t guard = c->num_edges;
-    while (!col_gt(vs->v1, f->xl)) {
-        if (guard-- == 0) {
-            RC_ASSERT(0);
-            return false;    // degenerate ring; skip the child rather than spin
-        }
-        vs->k = ring_k_next(c, vs->k);
-        vs->v0 = vs->v1;
-        vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, vs->k)));
-    }
-    vs->live = 1;
-    return true;
 }
 
 // ---- one edge of the walk (spec 7.8) ----
@@ -835,21 +864,12 @@ static bool start_frame(pt_render *r, pt_pframe *f)
 static void process_edge(pt_render *r, pt_pframe *f)
 {
     const pt_map *m = r->map;
-    pt_visit *vs = &r->visits[f->visit];
-    const pt_cell *ca = &m->cells[vs->cell];
+    pt_visit *vs = &r->visits[r->cell_visit[f->cell]];
+    const pt_cell *ca = &m->cells[f->cell];
     uint8_t ei = (uint8_t)(ca->first_edge + vs->k);
     const pt_edge *e = &m->edges[ei];
     pt_vv v0 = vs->v0;
     pt_vv v1 = vs->v1;
-
-    // the active pieces belong to one edge: a new edge starts its lines
-    // afresh, while a visit resuming on the previous visit's last edge
-    // keeps them, so its lines can extend across the seam
-    if (vs->act_k != vs->k) {
-        vs->act_k = vs->k;
-        for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
-            vs->active[i] = 0;
-    }
 
     // wholly outside one frustum ray: no columns, nothing to do
     if ((v0.flags & PT_VF_ANEG) && (v1.flags & (PT_VF_ANEG | PT_VF_AZERO)))
@@ -877,21 +897,19 @@ static void process_edge(pt_render *r, pt_pframe *f)
     else
         e1 = ep_unclipped(v1, (v1.flags & PT_VF_ANEG) ? 0 : v1.sx);
 
-    uint8_t xa = e0.sx > f->xl ? e0.sx : f->xl;
-    uint8_t xb = e1.sx < f->xr ? e1.sx : f->xr;
-
-    // ownership only ever moves right: clamp the span to the cursors'
-    // frontier. A healthy ring is contiguous (a shared vertex projects to
-    // one column in both roles), so this never bites; it is the backstop
+    // The span starts no earlier than the cursors' frontier, which is the
+    // frame's left column on its first edge and where the previous edge's
+    // span ended after that: ownership only ever moves right. A healthy
+    // ring is contiguous (a shared vertex projects to one column in both
+    // roles), so after the first edge this never bites; it is the backstop
     // that turns a degenerate ring's wrap - or rounding projecting a vertex
     // left of its predecessor - into empty spans instead of a cut
     // regression. An exhausted cursor (0) means the whole span is owned.
     if (f->tcur == 0 || f->bcur == 0)
         return;
-    uint8_t front = r->pool[f->tcur].x0 > r->pool[f->bcur].x0 ? r->pool[f->tcur].x0
-                                                              : r->pool[f->bcur].x0;
-    if (xa < front)
-        xa = front;
+    uint8_t front = frontier(r, f);
+    uint8_t xa = e0.sx > front ? e0.sx : front;
+    uint8_t xb = e1.sx < f->xr ? e1.sx : f->xr;
     if (xa >= xb)
         return;
 
@@ -1110,22 +1128,19 @@ rooted:;
 
     // the camera's cell is never revisited (every ray starts in it), so its
     // visit is simply begun here, already started on the root edge
-    uint8_t vi = visit_of(r, r->cam_cell);
-    pt_visit *vs = &r->visits[vi];
+    pt_visit *vs = visit_new(r, r->cam_cell);
     vs->k = (uint8_t)(n - c->first_edge);
+    vs->xr = 128;
     vs->v0 = v;
     vs->v1 = w;
-    vs->live = 1;
     r->stack[r->depth++] = (pt_pframe) {
-        .visit = vi,
-        .xl = 0,
+        .cell = r->cam_cell,
         .xr = 128,
         .tcur = roott,
         .bcur = rootb,
         .tmax = 0,
         .bmin = PT_SCREEN_HEIGHT,
         .steps = (uint8_t)(c->num_edges + 1),
-        .started = 1,
     };
 }
 
@@ -1197,44 +1212,34 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
 
     while (r->depth) {
         pt_pframe *f = &r->stack[r->depth - 1];
-        pt_visit *vs = &r->visits[f->visit];
-        if (f->done) {
-            if (f->started)
-                vs->live = 0;
-            r->depth--;
-            continue;
-        }
-        if (!f->started) {
-            if (!start_frame(r, f)) {
-                f->done = 1;
-                continue;
-            }
-            f->started = 1;
-        }
+        pt_visit *vs = &r->visits[r->cell_visit[f->cell]];
+
         // a healthy ring stops on col_ge before its steps run out; a ring
-        // rooted at a zero vertex (the eye on it) has no closing column, no
-        // stop fires, and the walk wraps through empty clamped spans until
-        // the steps end the frame here - an accepted outcome, not an error
+        // rooted at a zero vertex (the eye on it, only ever the camera's
+        // cell) has no closing column, no stop fires, and the walk wraps
+        // through empty clamped spans until the steps end the frame here -
+        // an accepted outcome, not an error
         if (f->steps == 0) {
-            f->done = 1;
-            vs->last_xr = 0xFF;    // the cursor is anywhere: later visits search
+            r->depth--;
             continue;
         }
         f->steps--;
 
         // the visit holds both vertices of its current edge: each vertex is
         // transformed once, as the end of one edge, and carried on as the
-        // start of the next
-        bool stop = col_ge(vs->v1, f->xr);
-        process_edge(r, f);    // may push children, which run first
-        if (stop) {
-            f->done = 1;
-            vs->last_xr = f->xr;    // the cursor stays on this edge for a resume
+        // start of the next. The last edge pops the frame before it is
+        // processed, so that edge's children take its slot; the cursor
+        // stays on it for a later visit to resume from, and the record
+        // takes this visit's xr back (a sibling pushed after it may have
+        // replaced it)
+        if (col_ge(vs->v1, f->xr)) {
+            pt_pframe last = *f;
+            r->depth--;
+            vs->xr = last.xr;
+            process_edge(r, &last);
         } else {
-            const pt_cell *fc = &m->cells[vs->cell];
-            vs->k = ring_k_next(fc, vs->k);
-            vs->v0 = vs->v1;
-            vs->v1 = transform(r, ring_vertex(m, fc, ring_k_next(fc, vs->k)));
+            process_edge(r, f);    // may push children, which run first
+            visit_advance(r, vs, &m->cells[f->cell]);
         }
     }
 

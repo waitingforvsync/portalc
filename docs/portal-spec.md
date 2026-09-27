@@ -233,23 +233,27 @@ shared by every visit of that cell in the frame:
 
 ```
 frame:
-    visit        the cell's visit record
-    xl, xr       column span
+    cell         cell index
+    xr           right column bound
     Tcur, Bcur   current piece of the top / bottom chain (the piece containing the next column)
-    Tmax, Bmin   conservative row extents of the chains over [xl, xr)   (fast path, §7.9)
-    k0, P        the edge starting at the portal's start vertex P, and P's view data:
-                 where a search from the portal begins (§7.4)
-    started      the first edge has been found
+    Tmax, Bmin   conservative row extents of the chains over the span   (fast path, §7.9)
     steps        safety count: edges left before the ring must have ended
 
 visit:                                     // one per cell visited this frame
     cell         back-reference to the cell
     k            the edge being walked, as a ring index 0..num_edges-1
+    xr           right column of the latest visit pushed or ended
     V0, V1       view data of edge k's start and end vertices
-    last_xr      right column of the last finished visit (none yet: 0xFF)
-    live         a frame of this cell is walking
     active[4]    last VISIBLE piece of each of edge k's ≤ 4 lines (§7.10)
 ```
+
+The frame stores no left column: it is where the frame's bound chains begin, the
+**frontier** `max(Tcur.x0, Bcur.x0)`. A push splits the chain heads at the span's
+left column (the child's first cut would split there anyway), and cuts only move the
+cursors right, so the frontier is the frame's left column until its first edge, and
+the end of the last edge's span after that. Nor does a frame carry flags: it is
+pushed ready to walk, its cell's record already holding the cursor on its first edge
+(§7.4), and it is popped as its last edge begins (§7.5).
 
 Rendering is a depth-first, left-to-right sweep: every visit to any cell during a
 frame happens in increasing x order, which is what makes line extension (§7.10) valid
@@ -257,7 +261,7 @@ and makes chain ownership (§7.9) safe. Visits of one cell never nest (a straigh
 crosses a convex cell once, so a cell never appears in its own subtree), which is what
 lets them share one cursor.
 
-Visit records are created on a cell's first visit of the frame, from a small cache:
+Visit records are created when a cell's first visit is pushed, from a small cache:
 each cell has a one-byte cache index (0 = not visited), set on creation. At the end
 of the frame the cache is emptied by walking its entries and clearing each one's
 cell index through the back-reference, so the cost is proportional to the cells
@@ -347,37 +351,49 @@ be the new first edge. The search therefore continues from `k`, with `V0` and `V
 already in the record, and usually stops at once:
 
 ```
-start(f):
-    V = f.visit
-    if V.live: skip f                          // a nested visit: only via boundary rounding
-    if V.last_xr > f.xl:                       // no finished visit left of this span
-        V.k = f.k0 ; V.V0 = f.P ; V.V1 = transform(v[f.k0 + 1])
-    while cmp(V.V1, f.xl) ≤ 0: V.k = V.k + 1 ; V.V0 = V.V1 ; V.V1 = transform(v[V.k + 1])
-    V.live = 1
+push_child(cell, xl, xr, T, B, P):         // the cursor is set up here; the frame is pushed ready
+    V = cell's record
+    if V exists and V.xr ≤ xl:                 // an earlier visit, finished: resume
+        if V.xr != xl: clear V.active          // a gap since the last visit: nothing extends
+    else:                                      // a first visit, or a sibling's record (below)
+        V = V or new record ; clear V.active
+        V.k = edge starting at P ; V.V0 = P ; V.V1 = transform(v[V.k + 1])
+    while cmp(V.V1, xl) ≤ 0: advance V         // next edge; clears V.active
+    V.xr = xr
+    split T and B at xl                        // the child's first cut would; the frontier is then xl
+    push frame(cell, xr, T, B)
 ```
 
-The search runs when the frame **starts**, not when it is pushed. An edge whose span
-is split by closed columns (§7.9.4) pushes several children of the same cell at once;
-each starts only after the one to its left has finished, and so resumes from the
-cursor that sibling left. The first-edge search from `P` stays the fallback (a first
-visit, or a cursor forgotten after a ring ran out of steps), so the resume is purely
-an optimisation: it always finds the same edge the search from `P` would.
+The resume always finds the edge the search from `P` would (checked over every
+resume in the sweep and tests).
 
-The `live` flag is set while a frame of the cell walks and cleared when it pops. In
-exact arithmetic it never matters; if boundary rounding (§7.5) ever produced a cell
-inside its own subtree, the inner frame is skipped rather than overwriting the outer
-frame's cursor.
+**Siblings.** An edge has one neighbour, but closed columns (§7.9.4) can split its
+span into several open ranges, each pushed as its own frame of that neighbour, right
+to left. When the left one is pushed, the record already holds the right one's `xr`,
+right of this `xl`, so its search starts over from `P`. The left frame runs first and
+leaves the cursor on its last edge; the right frame then walks on from there. That
+cursor starts early, but harmlessly: every edge before the right frame's true first
+edge ends at or left of its left column, so its span clamps to empty (§7.5) and the
+walk passes it by. The right frame restores the record's `xr` when it pops. (Real
+siblings need a V-shaped bound and have not occurred in the demo; the path was
+exercised by splitting every portal in two artificially.)
+
+No guard against nested visits is needed. If boundary rounding (§7.5) ever produced
+a cell inside its own subtree, the inner visit would move the shared cursor, and the
+outer frame would walk on from wherever the inner one stopped; its steps count still
+bounds it.
 
 ### 7.5 The walk, the last edge, zero-width spans, termination
 
 ```
-walk(f):                                   // after start(f), §7.4
-    V = f.visit
-    loop:
-        stop = cmp(V.V1, f.xr) ≥ 0             // end vertex at or right of the right column
+step():                                    // one edge of the frame on top
+    f = top ; V = f.cell's record
+    if cmp(V.V1, f.xr) ≥ 0:                    // the last edge: end vertex at or right of xr
+        pop() ; V.xr = f.xr                    // before processing, so its children take f's slot
+        process_edge(f, V.k, V.V0, V.V1)       // the cursor stays on edge k for a resume
+    else:
         process_edge(f, V.k, V.V0, V.V1)       // §7.6–7.9; may push children, which run first
-        if stop: V.last_xr = f.xr ; pop() ; return   // the cursor stays on edge k for a resume
-        V.k = V.k + 1 ; V.V0 = V.V1 ; V.V1 = transform(v[V.k + 1])
+        advance V                              // V.k + 1, V0 = V1, V1 = transform(v[V.k + 1])
 ```
 
 For the camera cell the stop test is `b(V1) ≤ 0`.
@@ -707,8 +723,10 @@ active[4]       last emitted VISIBLE piece of each of the edge's ≤ 4 lines (0 
 Each line of an edge has a fixed slot, the same on every visit: the line at the
 cell's own ceiling (a wall's top, or a portal's top ceiling), the child's top bound,
 the child's bottom bound, and the line at the cell's own floor. The slots are cleared
-when the walk moves to a new edge; a visit that resumes on the previous visit's last
-edge (§7.4) keeps them, which is what joins pieces across the seam.
+when the cursor moves to a new edge, and when a visit is pushed with a gap after the
+previous one (its left column is not the record's `xr`, §7.4); a visit that resumes
+contiguously on the previous visit's last edge keeps them, which is what joins pieces
+across the seam.
 
 ```
 emit_visible(r0, r1, L):
@@ -727,7 +745,7 @@ a bound-forming line's piece: a split shortens it (`x1` no longer matches), and 
 merge recolours it; either way a fresh piece starts. A piece carried over from an
 earlier visit ends at this visit's first column, so it can only open the chain being
 built, never follow its tail; it then starts left of the span, which chain walks
-tolerate (the child's first cut splits it at the child's left column). Such a piece
+tolerate (the push splits it at the child's left column, §7.1). Such a piece
 was in a previous child's chain at most, and that child was popped before this visit
 started, so re-linking it is safe: pieces only ever move down into child chains,
 never up into a live ancestor's. A pillar between two visits leaves a gap, so `x1`

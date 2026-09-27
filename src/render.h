@@ -81,36 +81,33 @@ enum {
     PT_NUM_SLOTS,
 };
 
-// A visited cell, created on its first visit of a frame and shared by every
-// later visit. Visits of one cell run in increasing x and never nest (a ray
-// crosses a convex cell once), so the ring cursor lives here rather than in
-// the frame: a later visit resumes from the edge the previous one ended on,
-// and a line continuing across the seam extends its piece.
+// A visited cell, created when its first visit is pushed and shared by
+// every later visit that frame. Visits of one cell run in increasing x and never
+// nest (a ray crosses a convex cell once), so the ring cursor lives here
+// rather than in the frame: a later visit resumes from the edge the
+// previous one ended on, and a line continuing across a contiguous seam
+// extends its piece.
 typedef struct pt_visit {
     uint8_t cell;         // back-reference, to clear the cell's index at frame end
     uint8_t k;            // the current edge, as a ring index 0..num_edges-1
-    uint8_t live;         // a frame of this cell is walking
-    uint8_t last_xr;      // right column of the last finished visit; 0xFF: none
+    uint8_t xr;           // right column of the latest visit pushed or ended
     pt_vv v0;             // view data of the current edge's start vertex
     pt_vv v1;             // and of its end vertex
-    uint8_t act_k;        // the edge the active pieces belong to; 0xFF: none
-    uint8_t active[PT_NUM_SLOTS];    // last visible piece of each of its lines
+    uint8_t active[PT_NUM_SLOTS];    // last visible piece of each of edge k's
+                                     // lines, cleared when the cursor moves on
 } pt_visit;
 
-// A portal frame on the explicit walk stack. A frame is pushed pending and
-// finds its first edge when it starts, so siblings of one cell pushed
-// together each start from the cursor the previous one left.
+// A portal frame on the explicit walk stack, pushed ready to walk: its
+// cell's record already holds the cursor on its first edge. Its left column
+// is not stored: it is where its bound chains begin (the cursors'
+// frontier). A frame is popped as its last edge starts, so that edge's
+// children take its slot.
 typedef struct pt_pframe {
-    uint8_t visit;        // the cell's visit record
-    uint8_t xl, xr;       // column span
+    uint8_t cell;
+    uint8_t xr;           // right column bound
     uint8_t tcur, bcur;   // current piece of the top / bottom bound chain
-    uint8_t tmax, bmin;   // conservative row extents over [xl, xr)
-    uint8_t k0;           // the edge starting at pv, where a search from the
-                          // portal begins (ring index)
+    uint8_t tmax, bmin;   // conservative row extents over the span
     uint8_t steps;        // safety: edges left before the ring must have ended
-    uint8_t started;
-    uint8_t done;
-    pt_vv pv;             // view data of the portal's start vertex P
 } pt_pframe;
 
 typedef struct pt_render {

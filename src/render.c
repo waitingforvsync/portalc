@@ -796,13 +796,10 @@ static uint8_t frontier(const pt_render *r, const pt_pframe *f)
 // twin's ring successor. A cell visited before resumes from the edge its
 // last visit ended on - every earlier edge ends left of that visit's xr,
 // which is at or left of xl - with that edge's vertices in hand; its
-// active pieces carry over only when the visits are contiguous. A record
-// holding an xr right of xl belongs to a sibling pushed just before (an
-// edge whose span closed columns split, pushed right to left), so the
-// search starts over from P; the sibling, running later, walks on from
-// wherever this visit leaves the cursor, and the edges it passes before its
-// own first edge end at or left of its left column and clamp to nothing.
-// The chain heads are split at xl, which the child's first cut would do
+// active pieces carry over only when the visits are contiguous. (A record
+// holding an xr right of xl could only come from boundary rounding nesting
+// the cell inside its own visit; the search then starts over from P.) The
+// chain heads are split at xl, which the child's first cut would do
 // anyway, so that the cursors mark the left column exactly (a head may
 // start left of it: a closed range's piece, or a piece extended from the
 // cell's previous visit). A degenerate ring pushes nothing.
@@ -857,6 +854,53 @@ static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t
         .bmin = bmin,
         .steps = (uint8_t)(c->num_edges + 1),
     };
+}
+
+// The next open range of [*c, xb) left to right: skip the closed ranges
+// covering *c, then run to the next closed range's start (or xb). False
+// when nothing is left; *c moves past the range returned.
+static bool next_open(const pt_closedl *cl, uint8_t *c, uint8_t xb, uint8_t *ol, uint8_t *orr)
+{
+    uint8_t s = *c;
+    for (bool moved = true; moved;) {
+        moved = false;
+        for (uint8_t j = 0; j < cl->num; j++) {
+            if (cl->l[j] <= s && s < cl->r[j]) {
+                s = cl->r[j];
+                moved = true;
+            }
+        }
+    }
+    if (s >= xb)
+        return false;
+    uint8_t e = xb;
+    for (uint8_t j = 0; j < cl->num; j++)
+        if (cl->l[j] > s && cl->l[j] < e)
+            e = cl->l[j];
+    *ol = s;
+    *orr = e;
+    *c = e;
+    return true;
+}
+
+// Close open columns [l, r) after the fact (a pinched sliver that is not
+// the child's portal): the child's whole stack there telescopes to
+// ceiling ^ floor, EORed into its bottom chain's pieces over exactly those
+// columns, as emit does for a closed range.
+static void close_columns(pt_render *r, uint8_t head, uint8_t l, uint8_t rr, pt_pattern cbfb)
+{
+    uint8_t p = piece_at(r, head, l);
+    if (r->pool[p].x0 < l) {
+        pool_split(r, p, l);
+        p = r->pool[p].next;
+    }
+    while (p && r->pool[p].x0 < rr) {
+        if (r->pool[p].x1 > rr)
+            pool_split(r, p, rr);
+        r->pool[p].ce ^= cbfb.e;
+        r->pool[p].co ^= cbfb.o;
+        p = r->pool[p].next;
+    }
 }
 
 // ---- one edge of the walk (spec 7.8) ----
@@ -1006,46 +1050,29 @@ static void process_edge(pt_render *r, pt_pframe *f)
         if (clamp_line(&cl[i], xa, xb))
             clip_line(&cxc, &cl[i]);
 
-    // 5. one child portal per open sub-range of [xa, xb), pushed right to
-    // left so the leftmost runs first
-    uint8_t ol[PT_MAX_CLOSED + 1];
-    uint8_t orr[PT_MAX_CLOSED + 1];
-    uint8_t no = 0;
-
-    // insertion sort the closed ranges by left edge (floor and ceiling ranges
-    // may interleave)
-    for (uint8_t i = 1; i < closed.num; i++) {
-        uint8_t l = closed.l[i];
-        uint8_t rr = closed.r[i];
-        uint8_t j = i;
-        while (j > 0 && closed.l[j - 1] > l) {
-            closed.l[j] = closed.l[j - 1];
-            closed.r[j] = closed.r[j - 1];
-            j--;
+    // 5. the child portal. Every portal opening is convex on screen (spec
+    // 7.9.4), so the open columns form one interval and closed ranges only
+    // trim the span's ends. Rounding can still pinch a sliver-thin opening
+    // (under two rows) shut somewhere in the middle; then the widest open
+    // range is the portal, and the other open columns are closed too, with
+    // the same fix-up.
+    uint8_t pl = 0;
+    uint8_t pr = 0;
+    uint8_t ol, orr;
+    for (uint8_t c = xa; next_open(&closed, &c, xb, &ol, &orr);) {
+        if (orr - ol > pr - pl) {
+            pl = ol;
+            pr = orr;
         }
-        closed.l[j] = l;
-        closed.r[j] = rr;
     }
-    uint8_t cur = xa;
-    for (uint8_t i = 0; i < closed.num; i++) {
-        if (closed.l[i] > cur) {
-            ol[no] = cur;
-            orr[no] = closed.l[i];
-            no++;
-        }
-        if (closed.r[i] > cur)
-            cur = closed.r[i];
+    if (closed.num) {
+        for (uint8_t c = xa; next_open(&closed, &c, xb, &ol, &orr);)
+            if (ol != pl)
+                close_columns(r, childb.head, ol, orr, cbfb);    // only ever on a pinch
     }
-    if (cur < xb) {
-        ol[no] = cur;
-        orr[no] = xb;
-        no++;
-    }
-    for (uint8_t i = no; i-- > 0;) {
-        uint8_t cth = piece_at(r, childt.head, ol[i]);
-        uint8_t cbh = piece_at(r, childb.head, ol[i]);
-        push_child(r, ei, ol[i], orr[i], cth, cbh, childt.tmax, childb.bmin, v0);
-    }
+    if (pl < pr)
+        push_child(r, ei, pl, pr, piece_at(r, childt.head, pl), piece_at(r, childb.head, pl),
+                   childt.tmax, childb.bmin, v0);
 }
 
 // ---- the frame (spec 7.1, 7.4, 7.5) ----
@@ -1229,13 +1256,10 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
         // transformed once, as the end of one edge, and carried on as the
         // start of the next. The last edge pops the frame before it is
         // processed, so that edge's children take its slot; the cursor
-        // stays on it for a later visit to resume from, and the record
-        // takes this visit's xr back (a sibling pushed after it may have
-        // replaced it)
+        // stays on it for a later visit to resume from
         if (col_ge(vs->v1, f->xr)) {
             pt_pframe last = *f;
             r->depth--;
-            vs->xr = last.xr;
             process_edge(r, &last);
         } else {
             process_edge(r, f);    // may push children, which run first

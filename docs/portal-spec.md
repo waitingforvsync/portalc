@@ -367,21 +367,13 @@ push_child(cell, xl, xr, T, B, P):         // the cursor is set up here; the fra
 The resume always finds the edge the search from `P` would (checked over every
 resume in the sweep and tests).
 
-**Siblings.** An edge has one neighbour, but closed columns (§7.9.4) can split its
-span into several open ranges, each pushed as its own frame of that neighbour, right
-to left. When the left one is pushed, the record already holds the right one's `xr`,
-right of this `xl`, so its search starts over from `P`. The left frame runs first and
-leaves the cursor on its last edge; the right frame then walks on from there. That
-cursor starts early, but harmlessly: every edge before the right frame's true first
-edge ends at or left of its left column, so its span clamps to empty (§7.5) and the
-walk passes it by. The right frame restores the record's `xr` when it pops. (Real
-siblings need a V-shaped bound and have not occurred in the demo; the path was
-exercised by splitting every portal in two artificially.)
-
-No guard against nested visits is needed. If boundary rounding (§7.5) ever produced
-a cell inside its own subtree, the inner visit would move the shared cursor, and the
-outer frame would walk on from wherever the inner one stopped; its steps count still
-bounds it.
+Since each edge pushes at most one child (§7.8), there is never more than one frame
+of a cell on the stack, so a push always finds the cell's record finished. No guard
+against nested visits is needed either. If boundary rounding (§7.5) ever produced a
+cell inside its own subtree, the inner push would find the record holding an `xr`
+right of its `xl` and search from `P` instead of resuming; the outer frame would
+then walk on from wherever the inner one stopped, its steps count still bounding
+it.
 
 ### 7.5 The walk, the last edge, zero-width spans, termination
 
@@ -534,15 +526,15 @@ process_edge(f, n, V0, V1):
     closed = [] ; childB = chain() ; childT = chain()
     for L in F: clip(L, T, B,      build=childB, role=BOTTOM)
     for L in C: clip(L, T, childB, build=childT, role=TOP)
-    // 5. one child portal per open sub-range of [xa, xb)   (§7.9.4)
-    for (l, r) in open_ranges(xa, xb, closed):
-        push_child(e.adj, l, r, piece_at(childT, l), piece_at(childB, l), P=V0)
+    // 5. the child portal: [xa, xb) less its closed ends   (§7.9.4)
+    (l, r) = widest open range of [xa, xb) ; close any other open columns
+    if l < r: push_child(e.adj, l, r, piece_at(childT, l), piece_at(childB, l), P=V0)
 ```
 
 `cut` and `clip` are in §7.9. The child's start vertex is `P = V0`, the parent edge's
-start vertex; its first edge is found by `first_edge_child` (§7.4). Where the span is
-split by closed columns the children are pushed right to left so that the leftmost
-runs first, keeping the frame's left-to-right order.
+start vertex; its first edge is found by `first_edge_child` (§7.4). An edge pushes at
+most one child: a portal is a single column span, and the vertical extent is all
+clamping to the bounds.
 
 ### 7.9 Clipping lines against the portal bounds
 
@@ -689,10 +681,9 @@ cannot express. So:
 **Closed columns are never part of a child span.** `emit` records each closed range
 and leaves the piece in the chain it is already in, so the chain being built has a
 gap there (which the second bound-forming line's walk steps over, see `clip`). The
-child span `[xa, xb)` minus the closed ranges is a set of open sub-ranges, and one
-child portal is pushed per sub-range, its chain heads found by column in `childT` and
-`childB`. Within any sub-range both chains are contiguous. A span that is closed
-everywhere pushes nothing.
+child portal is the span `[xa, xb)` less its closed ranges, its chain heads found by
+column in `childT` and `childB`; over it both chains are contiguous. A span that is
+closed everywhere pushes nothing.
 
 Skipping the recursion in closed columns is only correct with one fix-up. Every line
 the child's subtree would have generated there is hidden and would merge into the
@@ -701,10 +692,27 @@ telescopes to `ceiling ^ floor`. So `emit` EORs `CB ^ FB` into the piece when it
 detects closure; this is exactly what the skipped subtree would have contributed
 (checked in §13).
 
-Most spans have no closed columns; a partly closed span is typically closed at one
-end (a step rising into a lintel at the far end of a doorway), giving one child.
-Closure in the middle of a span needs a V-shaped bound and is rare; it simply gives
-two children.
+Most spans have no closed columns; a partly closed span is closed at one or both
+ends (a step rising into a lintel at the far end of a doorway). Closure can never
+split a span in the middle, because every portal opening is **convex** on screen: the
+root is the whole screen, and a child's opening is its parent's intersected with the
+region between the edge's two bound-forming lines, which are straight (a straight
+edge at constant height projects to a straight line; near clipping only clamps them
+to the screen edge, `max(line, 0)` or `min(line, H)`). The child's chains are exactly
+that intersection, top `max(C, T)` and bottom `min(F, B)`, so by induction every
+opening is convex, and a convex region's columns are one interval. (A top bound is a
+maximum of lines in rows, so it can only bow upward on screen; the "V" a middle
+closure would need is the opposite curvature.)
+
+Rounding can still disagree on a nearly shut opening: the chains are within about half
+a row of the true lines, so an opening under a row or two tall can read as closed in
+its middle columns. The opening's height is concave along x (largest in the middle),
+so a pinch in the middle means the whole opening is under about two rows. The portal
+is then the widest open range, and any other open columns are closed after the fact
+with the same fix-up (`CB ^ FB` EORed into the bottom chain's pieces over exactly
+those columns): at most a two-row sliver shows flat colour, which the parity property
+absorbs. (Neither case has occurred in the demo; the fix-up path was exercised by
+force.)
 
 ### 7.10 Line extension across visits ("active lines")
 

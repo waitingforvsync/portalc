@@ -566,3 +566,23 @@ one's cursor followed it into the left one's relinked chains. Real
 siblings are separated by a closed range whose emits split the pieces at
 its ends, so that was latent; splitting the heads at push removes it.
 Sweep and pillar poses byte-identical.
+
+Then the premise went too. Rich could not picture how one edge would push
+two frames, and rightly: the spec's "closure in the middle needs a
+V-shaped bound" was wrong, because such a bound cannot arise. Every
+portal opening is convex on screen - the root is the screen, and a
+child's opening is the parent's intersected with the region between the
+edge's two straight bound-forming lines, the chains being exactly
+max(C, T) and min(F, B) - so its open columns are one interval, and
+closed columns only trim a span's ends. Only rounding on an opening
+under about two rows tall can pinch it in the middle. So an edge now
+pushes at most one child: the widest open range, with any other open
+columns closed after the fact by the same CB ^ FB fix-up EORed into the
+bottom chain over exactly those columns (a sliver of flat colour at
+worst). The open-range arrays, the insertion sort, the sibling search
+restart and the xr restore at pop are gone; step 5 is a left-to-right
+walk over the open ranges (next_open) plus a push. The pinch has never
+occurred; a scratch build closing the right half of every portal
+exercised the fix-up (flat child-ceiling colour in the closed halves,
+everything below them intact). Sweep and pillar poses byte-identical;
+25/25 tests.

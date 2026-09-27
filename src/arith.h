@@ -60,10 +60,6 @@ uint16_t pt_mulu16_frac(uint16_t a, uint8_t f);
 // -((a * f) >> 8) as two's complement, from the negated-product partials.
 uint16_t pt_mulu16_frac_neg(uint16_t a, uint8_t f);
 
-// (v * f) >> 8 for a u24 value: the keep-high byte chain, three lookups
-// (fewer when v's top bytes are zero); exact like pt_mulu16_frac.
-uint32_t pt_mulu24_frac(uint32_t v, uint8_t f);
-
 // gradient magnitude (u7.8) times a column count, saturating at 0xFFFF.
 uint16_t pt_mulg_u16(uint16_t g, uint8_t dx);
 
@@ -72,11 +68,25 @@ uint16_t pt_mulg_u16(uint16_t g, uint8_t dx);
 int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t);
 
 // ---- reciprocal-table divisions ----
-// Each is num * 2^k / den for its own k: den is normalised, the numerator is
-// pre-shifted when the result scale calls for it, and the product is one add
-// plus a single u24 x u8 fractional multiply (at most three table lookups,
-// fewer when the numerator's top bytes are zero). Error stays within ~0.2%
-// of the result plus a count of truncation.
+// Each is num * 2^k / den for its own k. den is normalised to n in [128, 255]
+// with a shift count s, so 2^16 / den ~= (256 + f) * 2^-s, and the quotient
+// is num * (256 + f) >> (16 + s - k). For a byte numerator that product is
+// one lookup plus num in the high byte, exact in 17 bits, so a numerator is
+// never widened by pre-shifting; a u16 numerator keeps num * (256 + f) >> 8
+// (two lookups, the carry as a 17th bit) and shifts right from there. Error
+// stays within ~0.2% of the result plus a count of truncation.
+
+// A normalised reciprocal: 2^16 / den ~= (256 + f) * 2^-s, den shifted into
+// [128, 255] (right shifts truncating, left shifts exact, s signed). f is a
+// single byte; 0 means 256 (den a power of two), the sine table's trick.
+typedef struct pt_recip {
+    uint8_t f;
+    int8_t s;
+} pt_recip;
+
+// The normalised reciprocal of n > 0. A depth's is formed once and handed
+// to every projection at that depth.
+pt_recip pt_recip16(uint16_t n);
 
 // num / den as a u0.8 clip parameter t, clamped to 255; needs num <= den.
 uint8_t pt_div_t(uint16_t num, uint16_t den);
@@ -84,8 +94,8 @@ uint8_t pt_div_t(uint16_t num, uint16_t den);
 // floor(num / den) for two u8.8 values, clamped to 127: the crossing quotient.
 uint8_t pt_div_cols(uint16_t num_q8, uint16_t den_q8);
 
-// (num << 8) / den for a numerator up to 24 bits, clamped to 0xFFFF.
-uint16_t pt_div_q8(uint32_t num, uint16_t den);
+// (num << 8) / den, clamped to 0xFFFF; needs den >= 128.
+uint16_t pt_div_q8(uint16_t num, uint16_t den);
 
 // (dy << 8) / dx: a gradient magnitude from a row delta and a column count.
 uint16_t pt_grad_mag(uint8_t dy, uint8_t dx);
@@ -96,8 +106,9 @@ uint16_t pt_gradq8_mag(uint8_t dy, uint16_t dx_q8);
 
 // ---- projections ----
 
-// floor(64 + 64*y/x): the screen column of an in-frustum vertex (|y| <= x).
-uint8_t pt_project_col(int16_t y, uint16_t x);
+// floor(64 + 64*y/x): the screen column of an in-frustum vertex (|y| <= x);
+// rx is pt_recip16(x).
+uint8_t pt_project_col(int16_t y, uint16_t x, pt_recip rx);
 
 // The same projection at depth d kept as u8.8 (the near clip's sx*).
 uint16_t pt_project_col_q8(int16_t y, uint16_t d);
@@ -106,7 +117,8 @@ uint16_t pt_project_col_q8(int16_t y, uint16_t d);
 // steps so they fit a byte): the row offset of a line endpoint from the
 // screen centre, the caller adding or subtracting by the height's side.
 // Needs the endpoint on screen vertically, x >= 128*h/PT_SCREEN_HEIGHT (the
-// 64-row screen's classic x >= 2h).
-uint8_t pt_project_rowd(uint8_t h8, uint16_t x);
+// 64-row screen's classic x >= 2h). rx is pt_recip16(x): one lookup and a
+// shift, no normalisation.
+uint8_t pt_project_rowd(uint8_t h8, uint16_t x, pt_recip rx);
 
 #endif

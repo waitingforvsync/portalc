@@ -144,7 +144,7 @@ RC_TEST_STEP(arith, project_col, fix)
         for (int32_t k = -8; k <= 8; k++) {
             int16_t y = (int16_t)(((int32_t)x * k) / 8);
             int32_t exact = 64 + (64 * (int32_t)y) / (int32_t)x;
-            int32_t got = pt_project_col(y, x);
+            int32_t got = pt_project_col(y, x, pt_recip16(x));
             RC_CHECK(got >= 0 && got <= 128, ==, true);
             int32_t err = got - exact;
             RC_CHECK(err >= -2 && err <= 2, ==, true);
@@ -164,7 +164,7 @@ RC_TEST_STEP(arith, project_rowd, fix)
             d = 1;
         for (uint32_t x = d; x < 8000; x = x * 2 + 1) {
             int32_t exact = (64 * 8 * (int32_t)h8) / (int32_t)x;
-            int32_t got = pt_project_rowd(h8, (uint16_t)x);
+            int32_t got = pt_project_rowd(h8, (uint16_t)x, pt_recip16((uint16_t)x));
             RC_CHECK(got >= 0 && got <= PT_SCREEN_HEIGHT / 2, ==, true);
             int32_t err = got - exact;
             RC_CHECK(err >= -2 && err <= 2, ==, true);
@@ -207,8 +207,8 @@ RC_TEST_STEP(arith, gradq8_mag, fix)
 RC_TEST_STEP(arith, div_q8, fix)
 {
     (void)fix;
-    static const uint32_t nums[] = {0, 1, 255, 256, 1600, 65535, 400000, 16777215};
-    static const uint16_t dens[] = {1, 3, 64, 255, 256, 900, 1600, 18000, 65535};
+    static const uint16_t nums[] = {0, 1, 255, 256, 1600, 40960, 65535};
+    static const uint16_t dens[] = {128, 129, 255, 256, 900, 1600, 18000, 65535};
     for (uint32_t i = 0; i < sizeof(nums) / sizeof(nums[0]); i++)
         for (uint32_t j = 0; j < sizeof(dens) / sizeof(dens[0]); j++) {
             uint64_t exact = ((uint64_t)nums[i] << 8) / dens[j];

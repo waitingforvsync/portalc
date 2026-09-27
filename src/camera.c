@@ -35,18 +35,6 @@ static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
     posts[(*np)++] = v;
 }
 
-// (v * f) >> 8 for an unsigned 24-bit value and a u0.8 factor (256 meaning
-// one, forked here; the chain itself is arith's).
-static uint32_t mul24u_frac(uint32_t v, uint16_t f)
-{
-    RC_ASSERT(f <= 256);
-    RC_ASSERT(v < (1u << 24));
-
-    if (f == 256)
-        return v;
-    return pt_mulu24_frac(v, (uint8_t)f);
-}
-
 // Every wall interaction happens in the edge's own frame, in whole world
 // units: rotating Q - V0 by the edge angle (the renderer's own primitive)
 // gives the foot position along the edge as x and the interior-positive
@@ -127,20 +115,26 @@ static bool portal_crossed(const pt_map *m, const pt_cell *c, uint8_t e, uint16_
     return edge_cross_band(m, c, e, x, y) < 0;
 }
 
-// The full signed product of a s16.8 value and a small whole-unit count.
+// a * b mod 2^16 for a byte b: two lookups, the high partial's own high
+// byte dropped. Exact whenever the product is known to fit.
+static uint16_t mulu16x8_lo(uint16_t a, uint8_t b)
+{
+    return (uint16_t)(pt_mulu8((uint8_t)a, b) + (pt_mulu8((uint8_t)(a >> 8), b) << 8));
+}
+
 // A solid wall endpoint as a point obstacle. When the circle overlaps the
 // vertex and the move approaches it, remove the move's radial component
 // (overcorrected by a quarter, so a grazing arc drifts back out instead of
 // grinding in chord by chord): the rest is tangent to the circle round the
 // corner. False when the vertex leaves the move alone.
 static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
-                           int32_t *mx, int32_t *my)
+                           int16_t *mx, int16_t *my)
 {
     // whole units are plenty here: the offset only matters within the radius
-    int32_t ux = (int32_t)(px >> 8) - m->verts[v].x;
-    int32_t uy = (int32_t)(py >> 8) - m->verts[v].y;
-    int32_t ax = ux < 0 ? -ux : ux;
-    int32_t ay = uy < 0 ? -uy : uy;
+    int16_t ux = (int16_t)((uint16_t)(px >> 8) - m->verts[v].x);
+    int16_t uy = (int16_t)((uint16_t)(py >> 8) - m->verts[v].y);
+    uint16_t ax = (uint16_t)(ux < 0 ? -ux : ux);
+    uint16_t ay = (uint16_t)(uy < 0 ? -uy : uy);
     if (ax >= PT_CAM_RADIUS || ay >= PT_CAM_RADIUS)
         return false;
     uint16_t d2 = (uint16_t)(pt_mulu8((uint8_t)ax, (uint8_t)ax)
@@ -149,53 +143,51 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
         return false;    // clear of the vertex, or degenerately on top of it
 
     // M . v as a sign and a magnitude: only approach gates, and the division
-    // below wants the magnitude anyway, so nothing here is ever negated
-    uint32_t wx = mul24u_frac((uint32_t)(*mx < 0 ? -*mx : *mx) << 8, (uint16_t)ax);
-    uint32_t wy = mul24u_frac((uint32_t)(*my < 0 ? -*my : *my) << 8, (uint16_t)ay);
-    RC_ASSERT(wx < (1u << 24) && wy < (1u << 24));
+    // below wants the magnitude anyway, so nothing here is ever negated. The
+    // move drops to 1/64-unit steps so each product fits u16 (|M| < 16
+    // units makes it 10 bits, times a byte), and so does the sum: by
+    // Cauchy-Schwarz it is at most |M| * |v| / 4 < 1024 * 40
+    RC_ASSERT(*mx > -4096 && *mx < 4096 && *my > -4096 && *my < 4096);
+    uint16_t wx = mulu16x8_lo((uint16_t)((*mx < 0 ? -*mx : *mx) >> 2), (uint8_t)ax);
+    uint16_t wy = mulu16x8_lo((uint16_t)((*my < 0 ? -*my : *my) >> 2), (uint8_t)ay);
     bool nx = (*mx < 0) != (ux < 0);
     bool ny = (*my < 0) != (uy < 0);
-    uint32_t mag;
+    uint16_t mag;
     bool toward;
     if (nx == ny) {
-        mag = wx + wy;
+        mag = (uint16_t)(wx + wy);
         toward = nx;
     } else if (wx >= wy) {
-        mag = wx - wy;
+        mag = (uint16_t)(wx - wy);
         toward = nx;
     } else {
-        mag = wy - wx;
+        mag = (uint16_t)(wy - wx);
         toward = ny;
     }
     if (!toward || mag == 0)
         return false;    // moving away or tangent
 
-    // f = |M . v| / (v . v) in q16, then a q8 correction along v
-    uint32_t f = pt_div_q8(mag, d2);
-    f += f >> 2;
-    if (f > 0xFFFF)
-        f = 0xFFFF;
-    uint32_t cx = mul24u_frac(f, (uint16_t)ax);
-    uint32_t cy = mul24u_frac(f, (uint16_t)ay);
-    if (ux < 0)
-        *mx -= (int32_t)cx;
-    else
-        *mx += (int32_t)cx;
-    if (uy < 0)
-        *my -= (int32_t)cy;
-    else
-        *my += (int32_t)cy;
+    // f = |M . v| / (v . v) in q14 (d2 >= 256, so the division stays within
+    // its den >= 128 domain), overcorrected by a quarter: under 0.71 * 1.25
+    // of 2^14 for any move this slow. The correction along v is f * a / 64
+    // in s.8, one fractional multiply by 4a (a < 40, so a byte)
+    uint16_t f = pt_div_q8(mag, d2);
+    f = (uint16_t)(f + (f >> 2));
+    int16_t cx = (int16_t)pt_mulu16_frac(f, (uint8_t)(ax << 2));
+    int16_t cy = (int16_t)pt_mulu16_frac(f, (uint8_t)(ay << 2));
+    *mx = (int16_t)(ux < 0 ? *mx - cx : *mx + cx);
+    *my = (int16_t)(uy < 0 ? *my - cy : *my + cy);
     return true;
 }
 
 // Move an unsigned position by a signed displacement.
-static uint32_t apply(uint32_t p, int32_t d)
+static uint32_t apply(uint32_t p, int16_t d)
 {
     if (d < 0) {
-        RC_ASSERT(p >= (uint32_t)-d);
-        return p - (uint32_t)-d;
+        RC_ASSERT(p >= (uint32_t)(uint16_t)-d);
+        return p - (uint16_t)-d;
     }
-    return p + (uint32_t)d;
+    return p + (uint16_t)d;
 }
 
 void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8_t angle)
@@ -275,24 +267,24 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     pt_xy f = pt_dir8(PT_CAM_MOVE_SPEED, c->angle);
     int16_t fx = f.x;
     int16_t fy = f.y;
-    int32_t mx = 0;
-    int32_t my = 0;
+    int16_t mx = 0;    // s.8, under 12 units in any direction
+    int16_t my = 0;
     if (input & PT_IN_FWD) {
-        mx += fx;
-        my += fy;
+        mx = (int16_t)(mx + fx);
+        my = (int16_t)(my + fy);
     }
     if (input & PT_IN_BACK) {
-        mx -= fx;
-        my -= fy;
+        mx = (int16_t)(mx - fx);
+        my = (int16_t)(my - fy);
     }
     if (input & PT_IN_RIGHT) {
         // right of facing is the direction at angle + 64: (-sin, cos)
-        mx -= fy;
-        my += fx;
+        mx = (int16_t)(mx - fy);
+        my = (int16_t)(my + fx);
     }
     if (input & PT_IN_LEFT) {
-        mx += fy;
-        my -= fx;
+        mx = (int16_t)(mx + fy);
+        my = (int16_t)(my - fx);
     }
     if (mx == 0 && my == 0)
         return;
@@ -302,6 +294,12 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     // brings the centre closer than it already is, so a tangent graze never
     // wedges. With no wall in the way, a corner vertex may still deflect
     // the move; the next iteration then re-checks the walls.
+    // Each candidate's distance at the current position is fixed through the
+    // slide iterations: computed on first need, then reused (INT16_MIN
+    // marks not yet computed; no distance comes near it)
+    int16_t cur_y[MAX_CAND];
+    for (uint8_t i = 0; i < nc; i++)
+        cur_y[i] = INT16_MIN;
     bool blocked = false;
     for (uint8_t iter = 0; iter < 3; iter++) {
         uint16_t qx = (uint16_t)(apply(c->x, mx) >> 8);
@@ -316,13 +314,15 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
                 continue;
             if (!foot_in_range(m, ei, f.x))
                 continue;
-            if (f.y + HIT_EPS >= edge_frame(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)).y)
+            if (f.y >= worst)
                 continue;
-            if (f.y < worst) {
-                worst = f.y;
-                hit = ei;
-                have_hit = true;
-            }
+            if (cur_y[i] == INT16_MIN)
+                cur_y[i] = edge_frame(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)).y;
+            if (f.y + HIT_EPS >= cur_y[i])
+                continue;
+            worst = f.y;
+            hit = ei;
+            have_hit = true;
         }
         if (have_hit) {
             blocked = true;
@@ -330,9 +330,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
             // slide: the move in the wall's frame keeps only its along
             // component, rotated back out (the reverse angle)
             const pt_edge *ed = &m->edges[hit];
-            RC_ASSERT(mx > INT16_MIN && mx <= INT16_MAX);
-            RC_ASSERT(my > INT16_MIN && my <= INT16_MAX);
-            int16_t along = pt_rot((int16_t)mx, (int16_t)my, ed->angle).x;
+            RC_ASSERT(mx > INT16_MIN && my > INT16_MIN);
+            int16_t along = pt_rot(mx, my, ed->angle).x;
             pt_xy mv = pt_rot(along, 0, (uint8_t)-ed->angle);
             mx = mv.x;
             my = mv.y;

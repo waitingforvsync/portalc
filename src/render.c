@@ -32,11 +32,13 @@ typedef struct pt_line {
     uint8_t co;
 } pt_line;
 
-// A side-clipped edge endpoint: depth, lateral, and screen column.
+// A side-clipped edge endpoint: depth, lateral, screen column, and the
+// depth's reciprocal for the row projections.
 typedef struct pt_ep {
     uint16_t x;
     int16_t y;
     uint8_t sx;
+    pt_recip rx;
 } pt_ep;
 
 // A chain under construction (childT or childB) with its row extents.
@@ -92,6 +94,9 @@ typedef struct pt_clip {
 // at the screen top (a toggle pushed past the top is still active at row 0).
 static uint16_t row_step(uint16_t y, uint16_t g, uint8_t dx)
 {
+    // at the anchor column or on a flat line there is nothing to multiply
+    if (dx == 0 || pt_g_mag(g) == 0)
+        return y;
     uint16_t d = pt_mulg_u16(pt_g_mag(g), dx);
     if (pt_g_isneg(g))
         return d > y ? 0 : (uint16_t)(y - d);
@@ -332,8 +337,9 @@ static void resolve_block(pt_clip *cx, const pt_line *L, uint8_t c, uint8_t e)
         }
         uint8_t r0 = rs[i].r0;
         uint8_t r1 = rs[i].r1;
-        uint16_t l0 = line_y(L, r0);
-        uint16_t l1 = line_y(L, (uint8_t)(r1 - 1));
+        // an open range sharing an end with the block reuses its line row
+        uint16_t l0 = r0 == c ? yl0 : line_y(L, r0);
+        uint16_t l1 = r1 == e ? yl1 : line_y(L, (uint8_t)(r1 - 1));
         uint16_t b0 = piece_y(r, cx->bp, r0);
         uint16_t b1 = piece_y(r, cx->bp, (uint8_t)(r1 - 1));
         if (l0 >= b0 && l1 >= b1) {
@@ -425,11 +431,11 @@ static pt_relh rel_h(uint8_t z, uint8_t eye_z)
     return (pt_relh) {.m = (uint8_t)(eye_z - z), .below = 0};
 }
 
-// The screen row of a height at depth x: the centre plus or minus the
-// projected offset, the side picking the direction.
-static uint8_t row_from(pt_relh h, uint16_t x)
+// The screen row of a height at an endpoint's depth: the centre plus or
+// minus the projected offset, the side picking the direction.
+static uint8_t row_from(pt_relh h, const pt_ep *e)
 {
-    uint8_t q = pt_project_rowd(h.m, x);
+    uint8_t q = pt_project_rowd(h.m, e->x, e->rx);
     return (uint8_t)(h.below ? PT_SCREEN_HEIGHT / 2 + q : PT_SCREEN_HEIGHT / 2 - q);
 }
 
@@ -459,8 +465,8 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
         return 1;
     }
     if (!near0 && !near1) {
-        uint8_t sy0 = row_from(h, e0.x);
-        uint8_t sy1 = row_from(h, e1.x);
+        uint8_t sy0 = row_from(h, &e0);
+        uint8_t sy1 = row_from(h, &e1);
         uint8_t dx = (uint8_t)(e1.sx - e0.sx);
         uint16_t g = sy1 >= sy0 ? pt_g_make(pt_grad_mag((uint8_t)(sy1 - sy0), dx), 0)
                                 : pt_g_make(pt_grad_mag((uint8_t)(sy0 - sy1), dx), 1);
@@ -469,14 +475,12 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
     }
 
     // exactly one endpoint too close: clip the edge at depth d
-    uint16_t nx = near0 ? e0.x : e1.x;
-    uint16_t fx = near0 ? e1.x : e0.x;
-    int16_t ny = near0 ? e0.y : e1.y;
-    int16_t fy = near0 ? e1.y : e0.y;
-    uint8_t t = pt_div_t((uint16_t)(d - nx), (uint16_t)(fx - nx));
-    int16_t ys = pt_lerp16(ny, fy, t);
+    const pt_ep *ne = near0 ? &e0 : &e1;
+    const pt_ep *fe = near0 ? &e1 : &e0;
+    uint8_t t = pt_div_t((uint16_t)(d - ne->x), (uint16_t)(fe->x - ne->x));
+    int16_t ys = pt_lerp16(ne->y, fe->y, t);
     uint16_t sxq = pt_project_col_q8(ys, d);
-    uint8_t syf = row_from(h, fx);
+    uint8_t syf = row_from(h, fe);
 
     uint8_t cs = (uint8_t)((uint16_t)(sxq + 255) >> 8);
     if (cs < e0.sx)
@@ -593,15 +597,18 @@ static pt_vv transform(const pt_render *r, pt_vertex w)
         flags |= PT_VF_ANEG;
 
     // a vertex exactly on a ray gets the exact column, so the stop tests and
-    // the span columns can never disagree at the portal edges
+    // the span columns can never disagree at the portal edges. The depth's
+    // reciprocal is normalised once here and reused by every row projection
+    // at this vertex (the eye vertex, x = 0, takes depth 1 like depth_of)
     pt_vv v = {.x = x, .y = y, .sx = 64, .flags = flags};
     if (!(flags & (PT_VF_ANEG | PT_VF_BNEG))) {
+        v.rx = pt_recip16(x > 0 ? (uint16_t)x : 1);
         if (flags & PT_VF_AZERO)
             v.sx = 0;
         else if (flags & PT_VF_BZERO)
             v.sx = 128;
         else if (x > 0)
-            v.sx = pt_project_col(y, (uint16_t)x);
+            v.sx = pt_project_col(y, (uint16_t)x, v.rx);
     }
     return v;
 }
@@ -618,7 +625,7 @@ static bool col_gt(pt_vv v, uint8_t c)
         return true;     // outside right
 
     // behind: mirror through the camera, project, compare the other way round
-    return pt_project_col((int16_t)-v.y, (uint16_t)-v.x) < c;
+    return pt_project_col((int16_t)-v.y, (uint16_t)-v.x, pt_recip16((uint16_t)-v.x)) < c;
 }
 
 // Is the vertex's column at or right of column c?
@@ -630,7 +637,7 @@ static bool col_ge(pt_vv v, uint8_t c)
         return false;
     if (!(v.flags & PT_VF_ANEG))
         return true;
-    return pt_project_col((int16_t)-v.y, (uint16_t)-v.x) <= c;
+    return pt_project_col((int16_t)-v.y, (uint16_t)-v.x, pt_recip16((uint16_t)-v.x)) <= c;
 }
 
 // ---- frustum side clips (spec 7.6) ----
@@ -639,6 +646,16 @@ static bool col_ge(pt_vv v, uint8_t c)
 static uint16_t depth_of(int16_t x)
 {
     return x < 1 ? 1 : (uint16_t)x;
+}
+
+// An endpoint left where the vertex is. An in-frustum vertex brings its
+// reciprocal; one outside a ray (an edge's far end that no clip claimed,
+// rare) normalises its own.
+static pt_ep ep_unclipped(pt_vv v, uint8_t sx)
+{
+    uint16_t x = depth_of(v.x);
+    pt_recip rx = (v.flags & (PT_VF_ANEG | PT_VF_BNEG)) ? pt_recip16(x) : v.rx;
+    return (pt_ep) {.x = x, .y = v.y, .sx = sx, .rx = rx};
 }
 
 static pt_ep clip_left(pt_vv v0, pt_vv v1)
@@ -653,7 +670,7 @@ static pt_ep clip_left(pt_vv v0, pt_vv v1)
     RC_ASSERT(den >= na);
     uint8_t t = pt_div_t(na, den);
     uint16_t x = depth_of(pt_lerp16(v0.x, v1.x, t));
-    return (pt_ep) {.x = x, .y = (int16_t)-x, .sx = 0};
+    return (pt_ep) {.x = x, .y = (int16_t)-x, .sx = 0, .rx = pt_recip16(x)};
 }
 
 static pt_ep clip_right(uint16_t x0, uint16_t b0, pt_vv v1)
@@ -666,7 +683,7 @@ static pt_ep clip_right(uint16_t x0, uint16_t b0, pt_vv v1)
     uint8_t t = pt_div_t(b0, den);
     RC_ASSERT(x0 <= 0x7FFF);
     uint16_t x = depth_of(pt_lerp16((int16_t)x0, v1.x, t));
-    return (pt_ep) {.x = x, .y = (int16_t)x, .sx = 128};
+    return (pt_ep) {.x = x, .y = (int16_t)x, .sx = 128, .rx = pt_recip16(x)};
 }
 
 // ---- chains: taking ownership of a span (spec 7.9.2) ----
@@ -710,9 +727,10 @@ static void push_child(pt_render *r, const pt_cell *pc, uint8_t ei, uint8_t xl, 
 
     uint8_t n = pt_map_ring_next(c, pt_map_twin(m, pc, ei));
     pt_vv v0 = pv;
+    pt_vv v1;
     uint8_t guard = c->num_edges;
     for (;;) {
-        pt_vv v1 = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
+        v1 = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
         if (col_gt(v1, xl))
             break;
         v0 = v1;
@@ -735,6 +753,7 @@ static void push_child(pt_render *r, const pt_cell *pc, uint8_t ei, uint8_t xl, 
         .edge = n,
         .steps = (uint8_t)(c->num_edges + 1),
         .v0 = v0,
+        .v1 = v1,
     };
 }
 
@@ -760,18 +779,17 @@ static void process_edge(pt_render *r, pt_pframe *f, pt_vv v0, pt_vv v1)
         e0 = clip_left(v0, v1);
         b0 = (uint16_t)(e0.x << 1);    // on the left ray b = 2x
     } else if (v0.flags & PT_VF_BNEG) {
-        e0 = (pt_ep) {.x = depth_of(v0.x), .y = v0.y, .sx = 128};
+        e0 = ep_unclipped(v0, 128);
         b0 = 0;
     } else {
-        e0 = (pt_ep) {.x = depth_of(v0.x), .y = v0.y, .sx = v0.sx};
+        e0 = ep_unclipped(v0, v0.sx);
         b0 = (uint16_t)(int16_t)(v0.x - v0.y);
     }
     pt_ep e1;
     if (v1.flags & PT_VF_BNEG)
         e1 = clip_right(e0.x, b0, v1);
     else
-        e1 = (pt_ep) {.x = depth_of(v1.x), .y = v1.y,
-                      .sx = (v1.flags & PT_VF_ANEG) ? 0 : v1.sx};
+        e1 = ep_unclipped(v1, (v1.flags & PT_VF_ANEG) ? 0 : v1.sx);
 
     uint8_t xa = e0.sx > f->xl ? e0.sx : f->xl;
     uint8_t xb = e1.sx < f->xr ? e1.sx : f->xr;
@@ -976,30 +994,29 @@ static void push_root(pt_render *r, uint8_t roott, uint8_t rootb)
 
     uint8_t n = c->first_edge;
     pt_vv v = transform(r, m->verts[m->edges[n].v0]);
+    pt_vv w;    // the root edge's end vertex, handed to the frame
     uint8_t guard = c->num_edges;
     while (!(v.flags & (PT_VF_ANEG | PT_VF_AZERO))) {    // a > 0
-        if (guard-- == 0) {
-            n = root_exact(r, c);
-            v = transform(r, m->verts[m->edges[n].v0]);
-            goto rooted;
-        }
+        if (guard-- == 0)
+            goto exact;
         n = pt_map_ring_next(c, n);
         v = transform(r, m->verts[m->edges[n].v0]);
     }
     guard = c->num_edges;
     for (;;) {
         uint8_t nn = pt_map_ring_next(c, n);
-        pt_vv w = transform(r, m->verts[m->edges[nn].v0]);
+        w = transform(r, m->verts[m->edges[nn].v0]);
         if (!(w.flags & (PT_VF_ANEG | PT_VF_AZERO)))    // a > 0
-            break;
+            goto rooted;
         n = nn;
         v = w;
-        if (guard-- == 0) {
-            n = root_exact(r, c);
-            v = transform(r, m->verts[m->edges[n].v0]);
-            break;
-        }
+        if (guard-- == 0)
+            goto exact;
     }
+exact:
+    n = root_exact(r, c);
+    v = transform(r, m->verts[m->edges[n].v0]);
+    w = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
 rooted:;
 
     r->stack[r->depth++] = (pt_pframe) {
@@ -1013,6 +1030,7 @@ rooted:;
         .edge = n,
         .steps = (uint8_t)(c->num_edges + 1),
         .v0 = v,
+        .v1 = w,
     };
 }
 
@@ -1097,15 +1115,18 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
         }
         f->steps--;
 
-        uint8_t nn = pt_map_ring_next(&m->cells[f->cell], f->edge);
-        pt_vv v1 = transform(r, m->verts[m->edges[nn].v0]);
-        bool stop = col_ge(v1, f->xr);
-        process_edge(r, f, f->v0, v1);    // may push children, which run first
+        // the frame holds both vertices of its current edge: each vertex is
+        // transformed once, as the end of one edge, and carried on as the
+        // start of the next
+        bool stop = col_ge(f->v1, f->xr);
+        process_edge(r, f, f->v0, f->v1);    // may push children, which run first
         if (stop) {
             f->done = 1;
         } else {
-            f->v0 = v1;
-            f->edge = nn;
+            const pt_cell *fc = &m->cells[f->cell];
+            f->edge = pt_map_ring_next(fc, f->edge);
+            f->v0 = f->v1;
+            f->v1 = transform(r, m->verts[m->edges[pt_map_ring_next(fc, f->edge)].v0]);
         }
     }
 

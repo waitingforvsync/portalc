@@ -58,12 +58,15 @@ typedef struct pt_piece {
 #define PT_VF_AZERO 0x08u    // a == 0: exactly on the left ray
 #define PT_VF_BZERO 0x04u    // b == 0: exactly on the right ray
 
-// View data of a transformed vertex; sx is valid only in the frustum.
+// View data of a transformed vertex; sx and rx are valid only in the
+// frustum.
 typedef struct pt_vv {
     int16_t x;       // depth
     int16_t y;       // lateral, right positive
     uint8_t sx;      // floor(64 + 64*y/x) when inside both rays
     uint8_t flags;   // PT_VF_*
+    pt_recip rx;     // reciprocal of the depth (at least 1), for every
+                     // projection at this vertex
 } pt_vv;
 
 // A portal frame on the explicit walk stack.
@@ -76,6 +79,7 @@ typedef struct pt_pframe {
     uint8_t steps;        // safety: edges left before the ring must have ended
     uint8_t done;
     pt_vv v0;             // view data of the edge's start vertex
+    pt_vv v1;             // and of its end vertex
 } pt_pframe;
 
 typedef struct pt_render {

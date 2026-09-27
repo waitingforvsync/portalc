@@ -353,10 +353,10 @@ already in the record, and usually stops at once:
 ```
 push_child(cell, xl, xr, T, B, P):         // the cursor is set up here; the frame is pushed ready
     V = cell's record
-    if V exists and V.xr ≤ xl:                 // an earlier visit, finished: resume
-        if V.xr != xl: clear V.active          // a gap since the last visit: nothing extends
-    else:                                      // a first visit, or a sibling's record (below)
-        V = V or new record ; clear V.active
+    if V exists:                               // an earlier visit, finished: resume
+        if V.xr != xl: clear V.active          // V.xr < xl, a gap: nothing extends
+    else:                                      // a first visit: search from P
+        V = new record
         V.k = edge starting at P ; V.V0 = P ; V.V1 = transform(v[V.k + 1])
     while cmp(V.V1, xl) ≤ 0: advance V         // next edge; clears V.active
     V.xr = xr
@@ -368,12 +368,10 @@ The resume always finds the edge the search from `P` would (checked over every
 resume in the sweep and tests).
 
 Since each edge pushes at most one child (§7.8), there is never more than one frame
-of a cell on the stack, so a push always finds the cell's record finished. No guard
-against nested visits is needed either. If boundary rounding (§7.5) ever produced a
-cell inside its own subtree, the inner push would find the record holding an `xr`
-right of its `xl` and search from `P` instead of resuming; the outer frame would
-then walk on from wherever the inner one stopped, its steps count still bounding
-it.
+of a cell on the stack, so a push always finds the cell's record finished. Portals
+never overlap horizontally and each new one starts at or right of the last, so a
+revisit's `xl` is never left of the record's `xr`: equal means contiguous, greater
+means a gap. There is no fallback for anything else.
 
 ### 7.5 The walk, the last edge, zero-width spans, termination
 

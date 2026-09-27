@@ -796,9 +796,7 @@ static uint8_t frontier(const pt_render *r, const pt_pframe *f)
 // twin's ring successor. A cell visited before resumes from the edge its
 // last visit ended on - every earlier edge ends left of that visit's xr,
 // which is at or left of xl - with that edge's vertices in hand; its
-// active pieces carry over only when the visits are contiguous. (A record
-// holding an xr right of xl could only come from boundary rounding nesting
-// the cell inside its own visit; the search then starts over from P.) The
+// active pieces carry over only when the visits are contiguous. The
 // chain heads are split at xl, which the child's first cut would do
 // anyway, so that the cursors mark the left column exactly (a head may
 // start left of it: a closed range's piece, or a piece extended from the
@@ -813,16 +811,15 @@ static void push_child(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t
 
     pt_visit *vs;
     uint8_t vi = r->cell_visit[cell];
-    if (vi != 0 && r->visits[vi].xr <= xl) {
+    if (vi != 0) {
         vs = &r->visits[vi];
+        RC_ASSERT(vs->xr <= xl);    // portals never overlap: visits run left to right
         if (vs->xr != xl) {
             for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
                 vs->active[i] = 0;    // a gap since the last visit: nothing extends
         }
     } else {
-        vs = vi != 0 ? &r->visits[vi] : visit_new(r, cell);
-        for (uint8_t i = 0; i < PT_NUM_SLOTS; i++)
-            vs->active[i] = 0;
+        vs = visit_new(r, cell);
         vs->k = ring_k_next(c, (uint8_t)(pt_map_twin(m, ei) - c->first_edge));
         vs->v0 = pv;
         vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, vs->k)));

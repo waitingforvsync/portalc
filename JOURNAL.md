@@ -586,3 +586,7 @@ occurred; a scratch build closing the right half of every portal
 exercised the fix-up (flat child-ceiling colour in the closed halves,
 everything below them intact). Sweep and pillar poses byte-identical;
 25/25 tests.
+The last fallback went with it: push_child no longer searches from P when
+a record's xr lies right of the new xl. Portals never overlap
+horizontally and each starts at or right of the last, so a revisit
+always resumes; the order is a debug assert.

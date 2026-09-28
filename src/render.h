@@ -39,12 +39,15 @@ static inline uint8_t pt_g_isneg(uint16_t g)
     return (uint8_t)(g >> 15);
 }
 
-// A line piece (8 bytes): a screen-space line over columns [x0, x1), row
+// A line piece (9 bytes): a screen-space line over columns [x0, x1), row
 // y0 +- (c - x0) * g, colour (ce, co), chained by pool index.
 typedef struct pt_piece {
     uint8_t x0;
     uint8_t x1;
-    uint8_t y0;      // row at x0; PT_SCREEN_HEIGHT marks off screen (flat floor markers)
+    uint16_t y0;     // row at x0 in u8.8, biased by +128 so the nearest row is
+                     // the high byte; kept exact, so splitting or continuing a
+                     // piece never re-rounds its line. PT_SCREEN_HEIGHT rows
+                     // mark off screen (flat floor markers)
     uint16_t g;      // gradient, sign bit + u7.8 magnitude, rows per column
     uint8_t ce;      // colour patterns; ce | co == 0 means unplotted
     uint8_t co;
@@ -95,7 +98,11 @@ typedef struct pt_visit {
     pt_vv v0;             // view data of the current edge's start vertex
     pt_vv v1;             // and of its end vertex
     uint8_t active[PT_NUM_SLOTS];    // last visible piece of each of edge k's
-                                     // lines, cleared when the cursor moves on
+                                     // lines (0 = none), cleared when the
+                                     // cursor moves on: extended by a
+                                     // contiguous visit, and the line itself
+                                     // for any later one (a piece's x0, y0
+                                     // and g never change)
 } pt_visit;
 
 // A portal being walked: the state the recursive walk keeps across a

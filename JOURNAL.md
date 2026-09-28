@@ -645,3 +645,35 @@ opening); a scratch build with the cap at 3 showed exactly that. The
 parent's cursor now advances after its child's walk instead of before -
 independent work, so the sweep and pillar poses stay byte-identical;
 25/25 tests, with the render test now checking the cap is never reached.
+
+## 2026-09-28 — Lines generated once per edge; exact anchors
+
+Rich wanted a revisit to reuse an edge's lines rather than reproject
+them. Only a revisit's resumed edge can ever be generated twice (every
+other edge of a cell falls inside one visit), and that cost 9-14% of the
+frame's divisions. The visit record's active pieces already are those
+lines: a piece's x0, y0 and g never change, and a line runs on to the
+edge's end column, which the end vertex gives without clipping. So a
+resumed edge's line is (piece.x0, end column, piece.y0, piece.g), started
+at the new span by clamp_line; a slot with no active piece (0) is
+generated as before, the side clip now running only then. The active
+pieces are no longer cleared on a gapped revisit - they are the
+references past the gap, and x1 == r0 already refuses to extend across it.
+
+For that to be exact, pt_piece.y0 (and pt_line's) became u8.8, 9 bytes a
+piece. Clipping and plotting still use only the row, the high byte; the
+fraction serves only new starts along a line - splits, clamps and these
+reused lines - which therefore never re-round (127 sweep frames shifted
+by a row where chained re-rounding had drifted). I first ran clipping and
+plotting at full precision too, and before that had cached rows and
+gradients in the visit record and joined split pieces at plot time with
+a per-piece link and a pre-pass; Rich rejected those as more machinery
+than the design needs.
+
+Near-clipped lines need no exception, as Rich pointed out: their flat run
+on the screen edge lies on or beyond every bound (the root's rows 0 and H
+are the outermost), so it is always hidden and never the active piece,
+and the sloped part carried past the crossing clamps at row 0 or runs
+below every bottom bound, merging exactly as the flat run would. Reuse
+matches regeneration on every sweep frame. Divisions per frame: pillar
+poses 31.6 -> 27.0, sweep 20.0 -> 17.3. 25/25 tests.

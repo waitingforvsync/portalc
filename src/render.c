@@ -26,7 +26,7 @@ enum {
 typedef struct pt_line {
     uint8_t x0;
     uint8_t x1;
-    uint16_t y0;    // u8.8 row at x0, biased like a piece's
+    uint8_t y0;
     uint16_t g;    // sign bit + u7.8 magnitude
     uint8_t ce;
     uint8_t co;
@@ -85,11 +85,10 @@ typedef struct pt_clip {
 // Every reconstructed u8.8 row (piece_y, line_y, the plot DDA) carries the
 // +128 rounding bias in its anchor: seeding the low byte with 128 is a free
 // constant load, and rounding to the nearest row becomes a plain high-byte
-// read (row_of). Clipping and plotting run a line from its start row, but
-// the anchor keeps its fraction byte too, so a new start derived along the
-// line (a split, a clamp, a later piece) never compounds rounding: each is
-// within half a row of the true line, never drifting further. The bias
-// cancels in every line-vs-bound difference; only the conservative
+// read (row_of). Re-anchoring must round rather than truncate: truncation
+// always loses row fraction in the same direction, and chained splits would
+// compound the drift beyond the one-row slack the parity property absorbs.
+// The bias cancels in every line-vs-bound difference; only the conservative
 // extents peel it off again, so floor is (y - 128) >> 8 and ceil is
 // (y + 127) >> 8.
 
@@ -136,7 +135,7 @@ static uint8_t row_of_ceil(uint16_t y_b)
 
 // ---- pool ----
 
-static uint8_t pool_alloc(pt_render *r, uint8_t x0, uint8_t x1, uint16_t y0, uint16_t g,
+static uint8_t pool_alloc(pt_render *r, uint8_t x0, uint8_t x1, uint8_t y0, uint16_t g,
                           uint8_t ce, uint8_t co)
 {
     RC_PANIC(r->pool_num < PT_POOL_SIZE);
@@ -147,36 +146,18 @@ static uint8_t pool_alloc(pt_render *r, uint8_t x0, uint8_t x1, uint16_t y0, uin
     return i;
 }
 
-// A line at column c in u8.8, as clipping and plotting see it: from its
-// start row, the anchor's high byte (the low byte is only kept for new
-// anchors, below). Valid for c at or beyond x0.
+// Row of a piece at column c in u8.8; valid for c at or beyond x0.
 static uint16_t piece_y(const pt_render *r, uint8_t p, uint8_t c)
 {
     const pt_piece *pp = &r->pool[p];
     RC_ASSERT(c >= pp->x0);
-    return row_step(row_anchor((uint8_t)(pp->y0 >> 8)), pp->g, (uint8_t)(c - pp->x0));
+    return row_step(row_anchor(pp->y0), pp->g, (uint8_t)(c - pp->x0));
 }
 
 static uint16_t line_y(const pt_line *l, uint8_t c)
 {
     RC_ASSERT(c >= l->x0);
-    return row_step(row_anchor((uint8_t)(l->y0 >> 8)), l->g, (uint8_t)(c - l->x0));
-}
-
-// A line at column c from its full u8.8 anchor: the start of a new piece
-// or re-anchored line along it (a split, a clamp to a span, a later piece),
-// which then loses no fraction however often the line is restarted.
-static uint16_t piece_y_exact(const pt_render *r, uint8_t p, uint8_t c)
-{
-    const pt_piece *pp = &r->pool[p];
-    RC_ASSERT(c >= pp->x0);
-    return row_step(pp->y0, pp->g, (uint8_t)(c - pp->x0));
-}
-
-static uint16_t line_y_exact(const pt_line *l, uint8_t c)
-{
-    RC_ASSERT(c >= l->x0);
-    return row_step(l->y0, l->g, (uint8_t)(c - l->x0));
+    return row_step(row_anchor(l->y0), l->g, (uint8_t)(c - l->x0));
 }
 
 // Split piece p at column c: p keeps [x0, c), the new piece takes [c, x1).
@@ -185,7 +166,8 @@ static void pool_split(pt_render *r, uint8_t p, uint8_t c)
     pt_piece *pp = &r->pool[p];
     RC_ASSERT(c > pp->x0 && c < pp->x1);
 
-    uint8_t q = pool_alloc(r, c, pp->x1, piece_y_exact(r, p, c), pp->g, pp->ce, pp->co);
+    uint8_t y0 = row_of(piece_y(r, p, c));
+    uint8_t q = pool_alloc(r, c, pp->x1, y0, pp->g, pp->ce, pp->co);
     r->pool[q].next = pp->next;
     pp->next = q;
     pp->x1 = c;
@@ -307,7 +289,7 @@ static void emit(pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1, uint8_t 
                 chain_append(r, cb, q, r0);
             return;
         }
-        q = pool_alloc(r, r0, r1, line_y_exact(L, r0), L->g, L->ce, L->co);
+        q = pool_alloc(r, r0, r1, row_of(line_y(L, r0)), L->g, L->ce, L->co);
         cx->vis->active[cx->slot] = q;
         if (cb)
             chain_append(r, cb, q, r0);
@@ -419,7 +401,7 @@ static void clip_line(pt_clip *cx, const pt_line *L)
     RC_ASSERT(L->x0 < L->x1);
 
     // fast path: the line lies wholly inside the row extents of the chains
-    uint16_t ya = row_anchor((uint8_t)(L->y0 >> 8));
+    uint16_t ya = row_anchor(L->y0);
     uint16_t yb = line_y(L, (uint8_t)(L->x1 - 1));
     uint16_t lo = ya < yb ? ya : yb;
     uint16_t hi = ya > yb ? ya : yb;
@@ -495,7 +477,7 @@ static uint8_t row_from(pt_relh h, const pt_ep *e)
 
 static pt_line flat(uint8_t x0, uint8_t x1, uint8_t y, pt_pattern col)
 {
-    return (pt_line) {.x0 = x0, .x1 = x1, .y0 = row_anchor(y), .g = 0, .ce = col.e, .co = col.o};
+    return (pt_line) {.x0 = x0, .x1 = x1, .y0 = y, .g = 0, .ce = col.e, .co = col.o};
 }
 
 // Build one or two pieces for the edge's line at relative height h, near
@@ -524,8 +506,7 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
         uint8_t dx = (uint8_t)(e1.sx - e0.sx);
         uint16_t g = sy1 >= sy0 ? pt_g_make(pt_grad_mag((uint8_t)(sy1 - sy0), dx), 0)
                                 : pt_g_make(pt_grad_mag((uint8_t)(sy0 - sy1), dx), 1);
-        out[0] = (pt_line) {.x0 = e0.sx, .x1 = e1.sx, .y0 = row_anchor(sy0), .g = g,
-                            .ce = col.e, .co = col.o};
+        out[0] = (pt_line) {.x0 = e0.sx, .x1 = e1.sx, .y0 = sy0, .g = g, .ce = col.e, .co = col.o};
         return 1;
     }
 
@@ -566,18 +547,18 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
                 g = pt_g_make(gm, 1);
                 y0q = off > base ? 0 : (uint16_t)(base - off);
             }
-            // kept exact; a start at or past PT_SCREEN_HEIGHT is fine, the
-            // piece comes on screen where its gradient brings the row under
-            // the screen edge less a half
-            out[n++] = (pt_line) {.x0 = cs, .x1 = e1.sx, .y0 = y0q, .g = g, .ce = col.e, .co = col.o};
+            // round like every other re-anchor; PT_SCREEN_HEIGHT is fine,
+            // the piece comes on screen where its gradient brings the row
+            // under the screen edge less a half
+            out[n++] = (pt_line) {.x0 = cs, .x1 = e1.sx, .y0 = row_of(y0q), .g = g,
+                                  .ce = col.e, .co = col.o};
         }
     } else {
         if (e0.sx < cs) {
             uint16_t dxq = (uint16_t)(sxq - ((uint16_t)(e0.sx << 8)));
             uint16_t g = edge >= syf ? pt_g_make(pt_gradq8_mag((uint8_t)(edge - syf), dxq), 0)
                                      : pt_g_make(pt_gradq8_mag((uint8_t)(syf - edge), dxq), 1);
-            out[n++] = (pt_line) {.x0 = e0.sx, .x1 = cs, .y0 = row_anchor(syf), .g = g,
-                                  .ce = col.e, .co = col.o};
+            out[n++] = (pt_line) {.x0 = e0.sx, .x1 = cs, .y0 = syf, .g = g, .ce = col.e, .co = col.o};
         }
         if (cs < e1.sx)
             out[n++] = flat(cs, e1.sx, edge, col);
@@ -595,7 +576,7 @@ static bool clamp_line(pt_line *L, uint8_t xa, uint8_t xb)
     if (L->x0 < xa) {
         if (xa >= L->x1)
             return false;
-        L->y0 = line_y_exact(L, xa);
+        L->y0 = row_of(line_y(L, xa));
         L->x0 = xa;
     }
     return L->x0 < L->x1;
@@ -903,10 +884,11 @@ static void close_columns(pt_render *r, uint8_t head, uint8_t l, uint8_t rr, pt_
 // ---- one edge of the walk (spec 7.8) ----
 
 // An edge's lines for one visit. A line with an active piece on this edge
-// is already in screen space: the piece's x0, y0 (exact) and g are its
-// line, which runs on to the edge's end column, so it is used as is -
-// clamp_line starts it at the span's left column - with no projection or
-// gradient division. That holds for near-clipped lines too: their flat run
+// is already in screen space: the piece's x0, y0 and g are its line,
+// which runs on to the edge's end column, so it is used as is - clamp_line
+// starts it at the span's left column - with no projection or gradient
+// division (the piece's start row is rounded, so a restart past an
+// occluder may sit a row off the regenerated line; accepted). That holds for near-clipped lines too: their flat run
 // on the screen edge lies on or beyond every bound, so it is never visible
 // and never the active piece, and the sloped part carried past the
 // crossing clamps (ceilings) or runs below every bound (floors) exactly as
@@ -1275,10 +1257,10 @@ static void walk(pt_render *r, pt_portal p, uint8_t depth)
 }
 
 // Plot every pool piece with a colour, one pixel pair per column: an
-// ascending and a descending loop, both pure unsigned DDA from the piece's
-// start row. Rows round to nearest, and every piece's start is derived
-// from its line's exact anchor, so pieces of one line stay within half a
-// row of it and a chain seam cannot notch the boundary by more.
+// ascending and a descending loop, both pure unsigned DDA. Rows round to
+// nearest, the same convention every re-anchor uses: a piece split at a cut
+// then plots the same rows the unsplit line would have, so chain seams
+// cannot notch the boundary.
 static void plot(pt_render *r)
 {
     for (uint16_t i = 1; i < r->pool_num; i++) {
@@ -1286,9 +1268,8 @@ static void plot(pt_render *r)
         if ((uint8_t)(p->ce | p->co) == 0)
             continue;
         pt_pattern pat = {.e = p->ce, .o = p->co};
-        // from the start row (the anchor's high byte), bias folded in once:
-        // the row is then just the high byte
-        uint16_t y = row_anchor((uint8_t)(p->y0 >> 8));
+        // rounding bias folded in once: the row is then just the high byte
+        uint16_t y = row_anchor(p->y0);
         uint16_t gm = pt_g_mag(p->g);
         if (!pt_g_isneg(p->g)) {
             for (uint8_t c = p->x0; c < p->x1; c++) {
@@ -1336,8 +1317,8 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     // the root portal: a plotted top bound seeding the fill with the camera
     // cell's ceiling, and a dummy off-screen bottom bound
     pt_pattern ceil = pt_shade(m->cells[cell].ceil);
-    uint8_t roott = pool_alloc(r, 0, 128, row_anchor(0), 0, ceil.e, ceil.o);
-    uint8_t rootb = pool_alloc(r, 0, 128, row_anchor(PT_SCREEN_HEIGHT), 0, 0, 0);
+    uint8_t roott = pool_alloc(r, 0, 128, 0, 0, ceil.e, ceil.o);
+    uint8_t rootb = pool_alloc(r, 0, 128, PT_SCREEN_HEIGHT, 0, 0, 0);
     walk(r, root_portal(r, roott, rootb), 1);
 
     plot(r);

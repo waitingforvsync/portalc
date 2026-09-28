@@ -677,3 +677,17 @@ and the sloped part carried past the crossing clamps at row 0 or runs
 below every bottom bound, merging exactly as the flat run would. Reuse
 matches regeneration on every sweep frame. Divisions per frame: pillar
 poses 31.6 -> 27.0, sweep 20.0 -> 17.3. 25/25 tests.
+
+## 2026-09-28 — The fractional y0 dropped again
+
+Rich asked whether the u8.8 y0 was earning its byte. A build rounding y0
+to the row at every new start (splits, clamps, new pieces, reused lines)
+differs from it in 131 of 1172 sweep frames; classified by the vertical
+extent of the difference in each column, 1431 runs are one row and 37 two
+rows (a lintel edge and the wall top behind it moving together), and none
+three or more - no slivers, no streaks, just lines a row higher or lower
+in places, e.g. a wall behind the pillar a row apart either side of it.
+Not worth it: y0 is a u8 again (pieces 8 bytes, pool 2K), the exact
+evaluation variants are gone, and line reuse stays, now from the rounded
+row. Against the u8.8 commit: 136 frames differ, all by one or two rows.
+25/25 tests.

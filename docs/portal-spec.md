@@ -181,27 +181,26 @@ used throughout §7.9:
 ```
 x0      u8      first column (inclusive)
 x1      u8      last column + 1 (exclusive)
-y0      u8.8    row at column x0: clipping and plotting use the row (the high byte); the
-                fraction is kept only to start new pieces along the line exactly.
-                y0 >= H starts off screen (a falling piece may come on later)
+y0      u8      row at column x0; y0 >= H starts off screen (a falling piece may come on later)
 g       s7.8    gradient, sign bit + u7.8 magnitude, rows per column
 cE, cO  u8      colour patterns; cE | cO == 0 means unplotted
 next    u8      next piece in this piece's chain (0 = end)
 ```
 
-9 bytes; 256 records = 2.25K. The pool is reset every frame. Chains are built from pool
+8 bytes; 256 records = 2K. The pool is reset every frame. Chains are built from pool
 pieces by `next`; a piece belongs to at most one live chain.
 
 - **Evaluate** at column `c`: `y(c) = y0 + (c − x0)·g`, kept as u8.8 while in use.
 - **Split** piece `p` at column `c` (`p.x0 < c < p.x1`): allocate `q` with
-  `q.x0 = c`, `q.y0 = y_p(c)`, `q.x1 = p.x1`, `q.g = p.g`, `q.colour = p.colour`,
-  `q.next = p.next`; then `p.x1 = c`, `p.next = q`. `q.y0` is evaluated from `p`'s
-  full u8.8 anchor and kept whole, so a new start along a line (a split, a clamp to a
-  span, a later visit's piece, §7.10) is never re-rounded: its row rounds to nearest
-  when used, within half a row of the true line, however many times the line has been
-  restarted. Keeping only the rounded row would let chained splits (a bound cut once
-  per child portal) drift by up to half a row each — enough to carry a bound past a
-  line it should hide, opening a wrongly coloured sliver.
+  `q.x0 = c`, `q.y0 = round(y_p(c))`, `q.x1 = p.x1`, `q.g = p.g`, `q.colour = p.colour`,
+  `q.next = p.next`; then `p.x1 = c`, `p.next = q`. Re-anchoring keeps only the
+  integer row, so `q.y0` **rounds to nearest** (add `0x80` to the fraction byte and
+  carry into the row): each split shifts `q`'s pixels by at most half a row in either
+  direction, which the parity property makes harmless. Truncating instead would lose
+  the fraction in the same direction every time, and chained splits compound that
+  drift. Keeping the fraction as well (a u8.8 `y0`) was tried and measured: over the
+  sweep it moved lines by one row in places (two where neighbouring lines both moved)
+  and never opened a sliver of three rows or more, so it is not worth the byte.
 - **Relink**: a piece owned by the current edge (§7.9.2) may be moved from a parent
   chain into a child chain by appending it (`tail.next = p; p.next = 0`). The piece
   keeps its geometry and colour and is plotted once, from the pool.
@@ -756,11 +755,12 @@ edge keeps them. A contiguous visit extends them across the seam; after a gap
 (foreground geometry in between) the `x1 == r0` test fails and new pieces start.
 
 **Lines are generated once per edge.** An active piece is also its line: a piece's
-`x0`, `y0` (exact, §6) and `g` never change, and a line runs on to the edge's end
+`x0`, `y0` and `g` never change, and a line runs on to the edge's end
 column, which the end vertex gives without clipping. So a later visit resuming on the
 edge uses `(piece.x0, end column, piece.y0, piece.g)` as the line, and `clamp_line`
 starts it at the new span's left column: no side clip, projection or gradient
-division, and exactly the line regeneration would give. Near-clipped lines need no
+division. The piece's start row is rounded (§6), so a restart past an occluder can sit
+a row off the regenerated line; that is accepted. Near-clipped lines need no
 exception. Their flat run on the screen edge (§7.7) lies on or beyond every bound (the
 root's two lines at rows 0 and H are the outermost), so it is always hidden and never
 the active piece; and the sloped part carried past the crossing either clamps at row 0

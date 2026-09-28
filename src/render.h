@@ -15,7 +15,8 @@
 #include "richc/macros.h"
 
 #define PT_POOL_SIZE 256      // piece 0 is the null link
-#define PT_MAX_DEPTH 24
+#define PT_MAX_DEPTH 16      // portals nested along a line of sight (the walk's
+                              // recursion; about 10 bytes of 6502 stack each)
 #define PT_MAX_CLOSED 8
 #define PT_MAX_VISITS PT_MAX_CELLS    // distinct cells one frame may visit; entry 0 is null
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
@@ -81,7 +82,7 @@ enum {
     PT_NUM_SLOTS,
 };
 
-// A visited cell, created when its first visit is pushed and shared by
+// A visited cell, created when its first visit is entered and shared by
 // every later visit that frame. Visits of one cell run in increasing x and never
 // nest (a ray crosses a convex cell once), so the ring cursor lives here
 // rather than in the frame: a later visit resumes from the edge the
@@ -90,25 +91,24 @@ enum {
 typedef struct pt_visit {
     uint8_t cell;         // back-reference, to clear the cell's index at frame end
     uint8_t k;            // the current edge, as a ring index 0..num_edges-1
-    uint8_t xr;           // right column of the latest visit pushed or ended
+    uint8_t xr;           // right column of the latest visit entered
     pt_vv v0;             // view data of the current edge's start vertex
     pt_vv v1;             // and of its end vertex
     uint8_t active[PT_NUM_SLOTS];    // last visible piece of each of edge k's
                                      // lines, cleared when the cursor moves on
 } pt_visit;
 
-// A portal frame on the explicit walk stack, pushed ready to walk: its
-// cell's record already holds the cursor on its first edge. Its left column
-// is not stored: it is where its bound chains begin (the cursors'
-// frontier). A frame is popped as its last edge starts, so that edge's
-// children take its slot.
-typedef struct pt_pframe {
+// A portal being walked: the state the recursive walk keeps across a
+// child's walk (on the 6502, what is saved around the JSR). The cell's
+// visit record holds the rest: the cursor on the edge being walked.
+typedef struct pt_portal {
     uint8_t cell;
+    uint8_t x;            // where the next edge's span starts: the end of the
+                          // last one (the portal's left column to begin with)
     uint8_t xr;           // right column bound
     uint8_t tcur, bcur;   // current piece of the top / bottom bound chain
     uint8_t tmax, bmin;   // conservative row extents over the span
-    uint8_t steps;        // safety: edges left before the ring must have ended
-} pt_pframe;
+} pt_portal;
 
 typedef struct pt_render {
     const pt_map *map;
@@ -124,8 +124,7 @@ typedef struct pt_render {
     uint16_t pool_num;
     uint16_t pool_high;          // high-water mark across frames, for stats
 
-    pt_pframe stack[PT_MAX_DEPTH];
-    uint8_t depth;
+    uint8_t depth_high;          // deepest walk nesting across frames, for stats
 
     pt_visit visits[PT_MAX_VISITS];
     uint8_t num_visits;

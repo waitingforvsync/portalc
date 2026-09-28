@@ -218,42 +218,42 @@ render_frame():
     pool.reset()
     rootT = alloc(x0=0, x1=128, y0=0,  g=0, colour=camera_cell.ceiling)   // plotted: initialises the fill
     rootB = alloc(x0=0, x1=128, y0=H, g=0, colour=0)                      // dummy, never plotted
-    push(cell=camera_cell, xl=0, xr=128, T=rootT, B=rootB, start=first_edge_camera())
-    while stack not empty:
-        walk(top)                  // may push; a pushed child runs before the parent resumes
-                                   // push records sprite clip pieces (§9.3), pop issues sprites (§9.4)
+    walk(cell=camera_cell, x=0, xr=128, T=rootT, B=rootB, start=first_edge_camera())
+                                   // recursive: a child is walked before its parent carries on
+                                   // entering a portal records sprite clip pieces (§9.3), leaving it issues sprites (§9.4)
     plot every pool piece with colour != 0 and y0 < H
     sprite_pass()                  // §9.5: reads the plotted toggles, adds sprite toggles and cancels
     fill (even pass, odd pass)
 ```
 
-Recursion is an explicit stack of portal frames rather than JSR recursion. The walk
-state of a cell lives not in the frame but in the cell's **visit record** (below),
-shared by every visit of that cell in the frame:
+The walk is recursive (§7.5): a child portal is walked by a nested call, and the only
+state a portal keeps across it is small. The cell's position in its ring lives not
+there but in the cell's **visit record** (below), shared by every visit of that cell
+in the frame:
 
 ```
-frame:
+portal:                                    // kept across a child's walk (on the 6502: saved around the JSR)
     cell         cell index
+    x            where the next edge's span starts: the end of the last one
+                 (the portal's left column to begin with)
     xr           right column bound
     Tcur, Bcur   current piece of the top / bottom chain (the piece containing the next column)
     Tmax, Bmin   conservative row extents of the chains over the span   (fast path, §7.9)
-    steps        safety count: edges left before the ring must have ended
 
 visit:                                     // one per cell visited this frame
     cell         back-reference to the cell
     k            the edge being walked, as a ring index 0..num_edges-1
-    xr           right column of the latest visit pushed or ended
+    xr           right column of the latest visit entered
     V0, V1       view data of edge k's start and end vertices
     active[4]    last VISIBLE piece of each of edge k's ≤ 4 lines (§7.10)
 ```
 
-The frame stores no left column: it is where the frame's bound chains begin, the
-**frontier** `max(Tcur.x0, Bcur.x0)`. A push splits the chain heads at the span's
-left column (the child's first cut would split there anyway), and cuts only move the
-cursors right, so the frontier is the frame's left column until its first edge, and
-the end of the last edge's span after that. Nor does a frame carry flags: it is
-pushed ready to walk, its cell's record already holding the cursor on its first edge
-(§7.4), and it is popped as its last edge begins (§7.5).
+A portal keeps two columns: `x`, where its next edge's span starts, and `xr`. `x`
+only increases: each non-empty span moves it to its end, so when a child's walk
+returns the portal carries on from its own `x`, whatever column the child reached (a
+child trimmed at its right end by closed columns stops short of it). Once `x` reaches
+`xr` every later span is empty. A child portal is entered ready to walk, its cell's
+record already holding the cursor on its first edge (§7.4).
 
 Rendering is a depth-first, left-to-right sweep: every visit to any cell during a
 frame happens in increasing x order, which is what makes line extension (§7.10) valid
@@ -261,7 +261,7 @@ and makes chain ownership (§7.9) safe. Visits of one cell never nest (a straigh
 crosses a convex cell once, so a cell never appears in its own subtree), which is what
 lets them share one cursor.
 
-Visit records are created when a cell's first visit is pushed, from a small cache:
+Visit records are created when a cell's first visit is entered, from a small cache:
 each cell has a one-byte cache index (0 = not visited), set on creation. At the end
 of the frame the cache is emptied by walking its entries and clearing each one's
 cell index through the back-reference, so the cost is proportional to the cells
@@ -273,7 +273,7 @@ root push, already started.
 No per-frame vertex cache. Each vertex is transformed when the walk reaches it, and
 the visit record carries the current edge's two vertices from one edge to the next,
 so a walk transforms each vertex once, as the end of one edge. When a child is
-pushed, the parent's edge start vertex `P` is the child's start vertex, so its view
+entered, the parent's edge start vertex `P` is the child's start vertex, so its view
 data is passed down. A cell visited again resumes with the vertices of the edge its
 last visit ended on (§7.4), so only the first visit's search re-transforms vertices
 a neighbouring cell already did. The arithmetic is deterministic, so any vertex
@@ -351,7 +351,7 @@ be the new first edge. The search therefore continues from `k`, with `V0` and `V
 already in the record, and usually stops at once:
 
 ```
-push_child(cell, xl, xr, T, B, P):         // the cursor is set up here; the frame is pushed ready
+child_portal(cell, xl, xr, T, B, P):       // the cursor is set up here; the portal is walked next
     V = cell's record
     if V exists:                               // an earlier visit, finished: resume
         if V.xr != xl: clear V.active          // V.xr < xl, a gap: nothing extends
@@ -360,15 +360,14 @@ push_child(cell, xl, xr, T, B, P):         // the cursor is set up here; the fra
         V.k = edge starting at P ; V.V0 = P ; V.V1 = transform(v[V.k + 1])
     while cmp(V.V1, xl) ≤ 0: advance V         // next edge; clears V.active
     V.xr = xr
-    split T and B at xl                        // the child's first cut would; the frontier is then xl
-    push frame(cell, xr, T, B)
+    return portal(cell, x=xl, xr, T, B)
 ```
 
 The resume always finds the edge the search from `P` would (checked over every
 resume in the sweep and tests).
 
-Since each edge pushes at most one child (§7.8), there is never more than one frame
-of a cell on the stack, so a push always finds the cell's record finished. Portals
+Since each edge has at most one child (§7.8), and a cell never appears inside its own
+subtree, a child portal always finds its cell's record finished. Portals
 never overlap horizontally and each new one starts at or right of the last, so a
 revisit's `xl` is never left of the record's `xr`: equal means contiguous, greater
 means a gap. There is no fallback for anything else.
@@ -376,15 +375,33 @@ means a gap. There is no fallback for anything else.
 ### 7.5 The walk, the last edge, zero-width spans, termination
 
 ```
-step():                                    // one edge of the frame on top
-    f = top ; V = f.cell's record
-    if cmp(V.V1, f.xr) ≥ 0:                    // the last edge: end vertex at or right of xr
-        pop() ; V.xr = f.xr                    // before processing, so its children take f's slot
-        process_edge(f, V.k, V.V0, V.V1)       // the cursor stays on edge k for a resume
-    else:
-        process_edge(f, V.k, V.V0, V.V1)       // §7.6–7.9; may push children, which run first
-        advance V                              // V.k + 1, V0 = V1, V1 = transform(v[V.k + 1])
+walk(p, depth):
+    loop:                                      // one portal per pass
+        V = p.cell's record ; steps = num_edges + 1
+        loop:                                  // its edges
+            if steps == 0: return ; steps = steps − 1
+            last = cmp(V.V1, p.xr) ≥ 0         // end vertex at or right of the right column
+            child = process_edge(p, V.k, V.V0, V.V1)   // §7.6–7.9
+            if last:
+                if no child: return
+                p = child ; next pass          // tail call: the child replaces this portal
+            if child: descend(child, depth + 1)
+            advance V                          // V.k + 1, V0 = V1, V1 = transform(v[V.k + 1])
+
+descend(child, depth):
+    if depth > MAX_DEPTH: close child's columns (§7.9.4 fix-up) ; return
+    walk(child, depth)
 ```
+
+The recursion needs a stack only for children through edges before the last: the last
+edge's child replaces its parent (on the 6502 a JMP), and the cursor stays on that
+edge for a later visit to resume from. So the depth grows only with portals nested
+along a line of sight, not with the number of edges walked. In the demo the deepest
+frame nests 11 (typically 2–4); at about 10 bytes of 6502 stack per level (the portal
+state above plus the return address) the cap of 16 fits in page 1 beside the MOS.
+Past the cap a child's columns are closed instead of walked: the closed-column fix-up
+(§7.9.4) stands in for its whole stack, so the opening shows its ceiling colour flat,
+a draw-distance cutoff rather than a glitch.
 
 For the camera cell the stop test is `b(V1) ≤ 0`.
 
@@ -399,8 +416,8 @@ For the camera cell the stop test is `b(V1) ≤ 0`.
 - **Termination**: the back chain reaches a vertex at or beyond `xr` before it can
   reach the twin, so each walk ends. Each child span is contained in its parent's,
   and a straight ray cannot re-enter a convex cell, so no cell recurs along its own
-  portal chain; skipping zero-width spans removes the rounding cases. A depth cap and
-  the pool size are the safety net.
+  portal chain; skipping zero-width spans removes the rounding cases. The depth cap
+  (above), the steps count and the pool size are the safety net.
 
 ### 7.6 Frustum (side) clipping
 
@@ -499,11 +516,14 @@ column, because they are projections of the same vertical segment.
 
 ```
 process_edge(f, n, V0, V1):
-    // 1. side clip and column span
-    E0 = (a(V0) < 0) ? clip_left(V0, V1)  : (x=V0.x, y=V0.y, sx=column(V0))
-    E1 = (b(V1) < 0) ? clip_right(V0, V1) : (x=V1.x, y=V1.y, sx=column(V1))
-    xa = max(E0.sx, f.xl) ; xb = min(E1.sx, f.xr)
+    // 1. column span, then side clip
+    if a(V0) < 0 and a(V1) ≤ 0: return                   // wholly outside the left ray
+    xa = max(start column, f.x)                         // §7.1: the previous span's end
+    xb = min((b(V1) < 0) ? 128 : column(V1), f.xr)      // the end's column needs no clip
     if xa ≥ xb: return                                  // zero width
+    f.x = xb
+    E0 = (a(V0) < 0) ? clip_left(V0, V1)  : (x=V0.x, y=V0.y, sx=column(V0))   // sx ≤ xa
+    E1 = (b(V1) < 0) ? clip_right(V0, V1) : (x=V1.x, y=V1.y, sx=column(V1))
     // 2. take ownership of the bound sub-chains over [xa, xb)   (§7.9)
     T = cut(f.Tcur, xa, xb) ; B = cut(f.Bcur, xa, xb)
     e = edge[n] ; A = f.cell
@@ -729,7 +749,7 @@ active[4]       last emitted VISIBLE piece of each of the edge's ≤ 4 lines (0 
 Each line of an edge has a fixed slot, the same on every visit: the line at the
 cell's own ceiling (a wall's top, or a portal's top ceiling), the child's top bound,
 the child's bottom bound, and the line at the cell's own floor. The slots are cleared
-when the cursor moves to a new edge, and when a visit is pushed with a gap after the
+when the cursor moves to a new edge, and when a visit is entered with a gap after the
 previous one (its left column is not the record's `xr`, §7.4); a visit that resumes
 contiguously on the previous visit's last edge keeps them, which is what joins pieces
 across the seam.
@@ -751,7 +771,7 @@ a bound-forming line's piece: a split shortens it (`x1` no longer matches), and 
 merge recolours it; either way a fresh piece starts. A piece carried over from an
 earlier visit ends at this visit's first column, so it can only open the chain being
 built, never follow its tail; it then starts left of the span, which chain walks
-tolerate (the push splits it at the child's left column, §7.1). Such a piece
+tolerate (the child's first cut splits it at the child's left column). Such a piece
 was in a previous child's chain at most, and that child was popped before this visit
 started, so re-linking it is safe: pieces only ever move down into child chains,
 never up into a live ancestor's. A pillar between two visits leaves a gap, so `x1`

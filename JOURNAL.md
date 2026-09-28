@@ -590,3 +590,58 @@ The last fallback went with it: push_child no longer searches from P when
 a record's xr lies right of the new xl. Portals never overlap
 horizontally and each starts at or right of the last, so a revisit
 always resumes; the order is a debug assert.
+In process_edge the span's left column is now just the frontier: Rich
+noted the portal's current column is already known, and max(e0.sx,
+frontier) never took e0.sx (in 491563 test spans e0.sx was never right of
+the frontier - it is the previous edge's end vertex, or left of the
+portal on the first edge); that is now an assert. The span is also
+formed before the side clips, its right end from the end vertex's flags
+(right first: a vertex behind the camera reads as the right ray). That
+saved no divisions in practice - every clipped edge has columns - but
+the clip now only serves the line endpoints. Two traps on the way: the
+flag order (ANEG first dropped a 2-column span ending behind the camera),
+and the wholly-left test, which is still needed because an edge from
+outside the left ray to behind the camera has a < 0 throughout yet ends
+"at" column 128. Sweep and pillar poses byte-identical; 25/25 tests.
+The current column then went through three shapes in an hour. First it
+was derived from the chain cursors (the "frontier", max(tcur.x0,
+bcur.x0), with chain heads split at push so it was exact). Rich wanted it
+threaded instead - one running column that only increases, xr the only
+stacked value - and process_edge took and returned it. That broke under
+a stress build closing the right half of every portal: a child trimmed
+at its right end leaves the running column short of its parent's span
+end, and when the root ring then wraps behind the camera (eye on a
+vertex; 50 edges in the tests, all root) the wrapped edge's start reads
+as column 0, so its span would reclaim owned columns. Neither piece has
+occurred together in the real map (right-trimmed children: 0), but the
+hole was real. The settled form stacks one more byte, as Rich put it: the
+column where the frame's next edge starts (the last span's end, the
+portal's left column at push), alongside xr. Each edge's span starts at
+max(start vertex column, f->x) and moves f->x to its end, so a frame
+resumes from its own column whatever its children reached. That removed
+the frontier, the head splitting at push, the exhausted-cursor check
+(x == xr already empties every later span) and the column threading.
+The stress build now passes the walk probe; sweep and pillar poses
+byte-identical; 25/25 tests.
+
+## 2026-09-27 — The walk made recursive
+
+With the per-portal state down to seven bytes (cell, x, xr, the two
+cursors, the two extents) and the ring cursor in the visit record, Rich
+asked whether a JSR recursion would fit the 6502 stack. Measured depth,
+counting the last edge as a tail call: typically 2-4, 11 at worst (room 1
+down the corridor, through room 2 and up the stairs); 50326 test frames
+and the sweep never exceed it. At about 10 bytes a level (the state plus
+a return address) a cap of 16 fits page 1 beside the MOS. So the explicit
+stack is gone: walk() walks a portal's edges, descends into the child of
+any edge but the last, and on the last edge simply becomes the child (a
+loop reassigning its portal - on the 6502 a JMP), so depth grows only with
+portals nested along a line of sight. process_edge returns the child
+portal instead of pushing a frame; pt_pframe, the stack array and the
+pop-before-the-last-edge trick went, and the steps count is a local.
+Past the cap a child is not walked: its columns get the closed-column
+fix-up, which reads as a draw-distance cutoff (flat ceiling colour in the
+opening); a scratch build with the cap at 3 showed exactly that. The
+parent's cursor now advances after its child's walk instead of before -
+independent work, so the sweep and pillar poses stay byte-identical;
+25/25 tests, with the render test now checking the cap is never reached.

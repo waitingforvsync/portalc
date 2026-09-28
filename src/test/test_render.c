@@ -40,7 +40,7 @@ RC_TEST(render, all_cells_all_angles)
         for (uint32_t a = 0; a < 256; a += 8) {
             pt_render_frame(&render_, x, y, (uint8_t)a, cell);
             RC_CHECK(render_.pool_num, <=, (uint16_t)PT_POOL_SIZE);
-            RC_CHECK(render_.depth, ==, (uint8_t)0);
+            RC_CHECK(render_.depth_high, <, (uint8_t)PT_MAX_DEPTH);    // never cut off
         }
     }
 }

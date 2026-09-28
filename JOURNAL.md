@@ -691,3 +691,267 @@ Not worth it: y0 is a u8 again (pieces 8 bytes, pool 2K), the exact
 evaluation variants are gone, and line reuse stays, now from the rounded
 row. Against the u8.8 commit: 136 frames differ, all by one or two rows.
 25/25 tests.
+
+## 2026-09-28 — Sketch: reciprocal division in 6502, and a leading-zero table
+
+Rich asked why the reciprocal table became 128 bytes of u8 (n in 128..255)
+instead of 512 bytes of u16 (n up to 255), and what the 6502 code would
+look like. The short answer: normalising the denominator into 128..255
+puts its reciprocal between 256 and 512, so it is `256 + f` with `f` one
+byte, and `num * (256 + f)` is `num * f` with `num` added 8 bits up - one
+8x8 multiply for a byte numerator, two for a u16, instead of the old
+16x16 product. The cost is uniform ~0.2% relative precision (small
+denominators used to be exact) and left shifts for small denominators.
+
+The sketch below is in Baron. It assembles cleanly, and a small Python
+6502 interpreter checked it against the C arithmetic: every input for the
+byte cases, 1M random inputs for `mul_recip16`, every denominator for
+both normalisers, 25139 `project_rowd` cases - all matching, after the
+harness caught three slips in the first draft (a `DEX` clobbering the N
+flag a `BMI` tested, a carry `CPX` had left set, and the power-of-two
+correction pointing the wrong way). Source and harness were kept out of
+the repo (scratch `recip.6502`, `run.py`).
+
+### Tables
+
+Quarter squares, extended to full 16-bit products: four page-aligned
+512-byte tables, 2K. The second term of `a*b = qsq(a+b) - qsq(b-a)` is
+looked up at `(a EOR 255) + b = 255 + b - a` in a table of `qsq(x - 255)`,
+so with a zero-page pointer per table whose low byte is the multiplier
+(or its EOR 255), each term is one `(zp),Y` load for any `Y = b`.
+
+```
+FUNCTION qsq(x) = (x * x) DIV 4
+FUNCTION nsq(x) = ((x - 255) * (x - 255)) DIV 4
+
+.sqlo   EQUB LO(qsq(0..511))
+.sqhi   EQUB HI(qsq(0..511))
+.nsqlo  EQUB LO(nsq(0..511))
+.nsqhi  EQUB HI(nsq(0..511))
+```
+
+The reciprocal fractions, placed so `recipf-128` is page aligned (indexed
+by `n` itself, no page crossing). A stored 0 means 256 (`n = 128`); the
+sketch turns that case into `f = 0` at one shift *less* (2^16/128 =
+256 << 1), so the multiplies need no "0 means 256" branch - a
+simplification the C could adopt too (not done).
+
+```
+FUNCTION recipf(n) = ((65536 + n DIV 2) DIV n - 256) AND 255
+
+ALIGN &100
+        SKIP 128
+.recipf EQUB recipf(128..255)
+```
+
+### Multiplying by a reciprocal
+
+```
+; Make A the multiplier for every MUL until the next SETMUL.
+MACRO SETMUL
+    STA psql : STA psqh
+    EOR #255
+    STA pnsl : STA pnsh
+ENDMACRO
+
+; The multiplier times Y: 16-bit product, low byte to lo, high byte in A.
+; 23-25 cycles (a (zp),Y load that crosses a page costs 1 more).
+MACRO MUL lo
+    SEC
+    LDA (psql),Y : SBC (pnsl),Y : STA lo
+    LDA (psqh),Y : SBC (pnsh),Y
+ENDMACRO
+
+\\ num * (256 + f) for a byte numerator, exact in 17 bits (mul_recip8).
+\\ in: A = f, Y = num   out: C:A:plo (C the 17th bit)
+.mul_recip8
+{
+    ZA_ENTRY
+    ZA_AUTO1 n
+    STY n
+    SETMUL
+    MUL plo
+    CLC : ADC n                 ; num into the high byte
+    RTS
+}
+
+\\ num * (256 + f) >> 8 for a u16 numerator (mul_recip16). Exact: only
+\\ num.lo*f has bits below the shift, and they are the product's own.
+\\ in: A = f, num (2 bytes)   out: C:A:mlo (C the 17th bit)
+.mul_recip16
+{
+    ZA_ENTRY
+    ZA_AUTO1 scratch
+    SETMUL
+    LDY num
+    MUL scratch                 ; num.lo * f: only the high byte in A is kept
+    STA mlo
+    LDY num+1
+    MUL scratch                 ; num.hi * f, low byte in scratch, high in A
+    TAX
+    CLC
+    LDA scratch : ADC mlo : STA mlo       ; + (num.lo * f) >> 8
+    BCC @+ : INX : .@           ; can't wrap: 255*255 + 255 < 65536
+    CLC
+    LDA mlo : ADC num : STA mlo           ; + num
+    TXA : ADC num+1             ; C = the 17th bit
+    RTS
+}
+```
+
+A caller: the row offset of a line endpoint, `64*8*h8/x`, from the
+reciprocal stored with the vertex (`pt_project_rowd`). The vertex keeps
+`f` and `j = s - 1`; for the usual depths 256..4095 the shift is `8 + j`
+and the quotient comes out of `C:A` alone.
+
+```
+\\ in: Y = h8, rf = f, rj = j (0..6; depths under 256 are rare, not shown)
+\\ out: A = q, clamped to H/2
+.project_rowd
+{
+    ZA_ENTRY
+    LDA rf
+    JSR mul_recip8              ; C:A:plo = h8 * (256 + f)
+    LDX rj
+    BEQ nine                    ; j = 0: q is the 9 bits C:A
+    ROR A                       ; j >= 1: the 17th bit comes in once...
+    DEX : BEQ clamp
+.@  LSR A : DEX : BNE @-        ; ...then plain shifts
+.clamp
+    CMP #H/2+1 : BCC @+ : LDA #H/2 : .@
+    RTS
+.nine
+    BCC clamp
+    LDA #H/2
+    RTS
+}
+```
+
+Measured, including the RTS but not the caller's JSR: `mul_recip8` 47-51
+cycles, `mul_recip16` 105-114, `project_rowd` 76-95 (its `mul_recip8`
+included).
+
+### Normalising: loop against leading-zero tables
+
+What arith.c does now - shift and count:
+
+```
+\\ in: den (2 bytes, > 0; destroyed)   out: A = f, X = s + 8 (0..15)
+.normalise_loop
+{
+    ZA_ENTRY
+    LDX #8
+    LDA den+1 : BEQ small
+.right                          ; den >= 256: 18 cycles a shift
+    LSR den+1 : ROR den : INX
+    LDA den+1 : BNE right       ; the high byte gone leaves bit 7 of the low set
+    LDY den
+    JMP done
+.small
+    LDA den : BMI norm
+.left                           ; den < 128: 7 cycles a shift
+    DEX : ASL A : BPL left
+.norm
+    TAY
+.done
+    CPY #128 : BNE @+           ; n = 128: f = 0 at one shift less
+    DEX
+.@  LDA recipf-128,Y
+    RTS
+}
+```
+
+With `lz(b)`, a byte's leading zero bits, three 256-byte tables:
+
+```
+FUNCTION lz(b)
+    IF b >= 128
+        r = 0
+    ELSE
+        r = 1 + lz(b * 2)
+    ENDIF
+= r
+
+ALIGN &100
+.nrm    EQUB 0                  ; b << lz(b): shifted up until bit 7 is set
+        FOR b = 1..255 : EQUB b << lz(b) : NEXT
+.k8     EQUB 0                  ; 8 - lz(b): the byte's bit length
+        FOR b = 1..255 : EQUB 8 - lz(b) : NEXT
+.sbyte  EQUB 0                  ; s + 8 for a byte denominator, n = 128 folded in
+        FOR b = 1..255 : EQUB 8 - lz(b) - (b << lz(b) == 128) : NEXT
+```
+
+A byte denominator is then pure lookups. A 16-bit one's shift count is
+the high byte's bit length, `k8[hi]`, found without counting, and `n` is
+`nrm[hi]` (the high byte's bits moved up) ORed with the low byte shifted
+right by that count - a one-byte shift in A at 7 cycles a bit instead of
+a 16-bit one at 18:
+
+```
+\\ in: den (2 bytes, > 0; kept)   out: A = f, Y = s + 8 (0..15)
+.normalise_lz
+{
+    ZA_ENTRY
+    LDY den+1 : BNE big
+    LDY den
+    LDX nrm,Y                   ; n
+    LDA sbyte,Y : TAY           ; s + 8
+    LDA recipf-128,X            ; f
+    RTS
+.big
+    LDX k8,Y                    ; s = the high byte's bit length, 1..8
+    LDA den
+.@  LSR A : DEX : BNE @-        ; low byte >> s (its low bits fall away)
+    ORA nrm,Y                   ; + the high byte's bits above it
+    TAX                         ; n
+    LDA k8,Y : CLC : ADC #8     ; s + 8
+    CPX #128 : BNE @+           ; n = 128: f = 0 at one shift less
+    SBC #1                      ;   (CPX left C set: n >= 128)
+.@  TAY
+    LDA recipf-128,X
+    RTS
+}
+```
+
+| Denominator                        | loop          | tables     |
+|------------------------------------|---------------|------------|
+| column counts 2..128 (gradients)   | 26-66 cycles  | 22 always  |
+| depths 256..4095                   | 39-94         | 44-66      |
+
+Weighted by a frame's actual use on the pillar poses - 29.7 byte
+denominators averaging 2.2 shifts (~19 cycles saved each), 15.9 depths
+averaging 1.9 shifts (~5 each) - that is about 640 cycles a frame, for
+768 bytes of tables. Nearly all of it comes from the byte denominators,
+so `nrm` and `sbyte` alone (512 bytes) keep about 560 of those cycles.
+Nothing in the C changed.
+
+## 2026-09-28 — The normalising tables in arith.c
+
+The three tables from the sketch went into arith.c: `nrm_` (`b << lz(b)`),
+`k8_` (`8 - lz(b)`) and `sbyte_` (`s + 8` for a byte denominator), 768
+bytes, built in `pt_arith_init`. `pt_recip16` no longer loops: a byte
+denominator is two lookups; a u16 one takes its shift from `k8_[hi]` and
+its normalised byte as `nrm_[hi] | (lo >> s)`.
+
+`sbyte_` carries the sketch's convention, now the C's too: a power-of-two
+denominator (normalised 128) keeps its stored `f = 0` at one shift less,
+since 2^16/128 = 256 << 1, so the reciprocal is always `256 + f` and
+`mul_recip8`/`mul_recip16` lost their `f == 0` branches. Two callers could
+then see a shift below zero and got a guard each: `pt_div_q8` at a
+denominator of exactly 128, and `pt_project_rowd` at depth 1. Against the
+previous arith, 273M comparisons over every division and projection's
+domain (and the reciprocal values themselves) match exactly; the sweep is
+byte-identical; 25/25 tests.
+
+Then the C was brought in line with the 6502 routines it models. The
+reciprocal keeps its shift as `e = s + 8` (0..15), the value the 6502
+normaliser returns in a register, so no negative shift is ever formed and
+each quotient is a right shift by a constant offset from `e` (the two
+guards became range cases). `pt_recip8` is the two-lookup entry for a
+denominator known to be a byte - used by `pt_grad_mag` and by `pt_div_t`
+below 256 - and `pt_grad_mag` lost its `dx == 1` special case, which the
+tables already cover (`f = 0`, `e = 0`: `dy << 8`). The quarter-square
+multiply was left indexing `a - b + 255` in u16 tables (the 6502's
+`(a EOR 255) + b` and split byte pages are the same arithmetic). 273M
+comparisons against the previous arith match exactly; sweep
+byte-identical; 25/25 tests.

@@ -19,8 +19,21 @@ static uint16_t sq2_[512];
 
 // recipf_[n - 128] = round(0x10000 / n) - 256 for n in [128, 255]: the
 // fractional byte of the reciprocal of a normalised denominator. The 512 at
-// n = 128 wraps to a stored 0, which therefore means 256.
+// n = 128 wraps to a stored 0: the normaliser gives that case one shift
+// less (512 = 256 << 1), so the reciprocal is always 256 + f.
 static uint8_t recipf_[128];
+
+// Normalising tables, indexed by a byte b >= 1 with lz(b) its leading zero
+// bits (entry 0 unused):
+//   nrm_[b]   = b << lz(b), the byte shifted up until bit 7 is set
+//   k8_[b]    = 8 - lz(b), the byte's bit length (1..8)
+//   sbyte_[b] = e = s + 8 for a byte denominator b: 8 - lz(b), one less when b
+//               is a power of two (normalised to 128, whose stored f of 0
+//               then means 256 at one shift less - 2^16/128 = 256 << 1 - so
+//               no multiply needs a special case)
+static uint8_t nrm_[256];
+static uint8_t k8_[256];
+static uint8_t sbyte_[256];
 
 // sin of [0, pi) in u0.8, 128 entries: every entry is positive and a stored
 // 0 means 256. The second half turn reuses the table negated, and indices 0
@@ -42,6 +55,15 @@ void pt_arith_init(void)
 
     for (uint32_t n = 128; n < 256; n++)
         recipf_[n - 128] = (uint8_t)((0x10000u + n / 2) / n - 256);
+
+    for (uint32_t b = 1; b < 256; b++) {
+        uint32_t lz = 0;
+        while ((b << lz) < 128)
+            lz++;
+        nrm_[b] = (uint8_t)(b << lz);
+        k8_[b] = (uint8_t)(8 - lz);
+        sbyte_[b] = (uint8_t)(8 - lz - (nrm_[b] == 128));
+    }
 
     sin_[0] = 0;    // never read: index 0 is special cased
     for (uint32_t i = 1; i < 128; i++) {
@@ -200,29 +222,36 @@ int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t)
     return (int16_t)(a - (int16_t)pt_mulu16_frac((uint16_t)(a - b), t));
 }
 
-pt_recip pt_recip16(uint16_t n)
+pt_recip pt_recip8(uint8_t n)
 {
     RC_ASSERT(inited_);
     RC_ASSERT(n > 0);
 
-    int8_t s = 0;
-    while (n > 255) {
-        n >>= 1;    // truncating; costs up to n/2^s in the denominator
-        s++;
-    }
-    while (n < 128) {
-        n <<= 1;    // exact
-        s--;
-    }
-    return (pt_recip) {.f = recipf_[n - 128], .s = s};
+    // pure lookups: left shifts are exact
+    return (pt_recip) {.f = recipf_[nrm_[n] - 128], .e = sbyte_[n]};
+}
+
+pt_recip pt_recip16(uint16_t n)
+{
+    RC_ASSERT(n > 0);
+
+    if (n < 256)
+        return pt_recip8((uint8_t)n);
+
+    // a u16 shifts right by the high byte's bit length: the normalised byte
+    // is the high byte's bits moved up, ORed with the low byte shifted down
+    // (its low bits fall away: truncating, costing up to n/2^s in the
+    // denominator) - on the 6502 a shift of one byte in A, not of two
+    uint8_t hi = (uint8_t)(n >> 8);
+    uint8_t s = k8_[hi];
+    uint8_t m = (uint8_t)(nrm_[hi] | ((uint8_t)n >> s));
+    return (pt_recip) {.f = recipf_[m - 128], .e = (uint8_t)(s + 8 - (m == 128))};
 }
 
 // num * (256 + f) for a byte numerator: one lookup with num added into the
 // high byte, exact in 17 bits (the top bit is the add's carry).
 static uint32_t mul_recip8(uint8_t num, pt_recip rc)
 {
-    if (rc.f == 0)
-        return (uint32_t)num << 9;
     return ((uint32_t)num << 8) + pt_mulu8(num, rc.f);
 }
 
@@ -231,8 +260,6 @@ static uint32_t mul_recip8(uint8_t num, pt_recip rc)
 // bits below the shift, and they are the true product's own.
 static uint32_t mul_recip16(uint16_t num, pt_recip rc)
 {
-    if (rc.f == 0)
-        return (uint32_t)num << 1;
     return (uint32_t)num + pt_mulu16_frac(num, rc.f);
 }
 
@@ -240,11 +267,16 @@ uint8_t pt_div_t(uint16_t num, uint16_t den)
 {
     RC_ASSERT(den > 0 && num <= den);
 
-    // k = 8: below den = 128 (s < 0) num is a byte and the exact product
-    // shifts by 8 + s; otherwise the u16 form shifts by s
-    pt_recip rc = pt_recip16(den);
-    uint32_t t = rc.s < 0 ? mul_recip8((uint8_t)num, rc) >> (8 + rc.s)
-                          : mul_recip16(num, rc) >> rc.s;
+    // k = 8: a byte den leaves num a byte too, and the exact product shifts
+    // by e; a u16 den (e >= 8) takes the u16 form, shifted by e - 8
+    uint32_t t;
+    if (den < 256) {
+        pt_recip rc = pt_recip8((uint8_t)den);
+        t = mul_recip8((uint8_t)num, rc) >> rc.e;
+    } else {
+        pt_recip rc = pt_recip16(den);
+        t = mul_recip16(num, rc) >> (rc.e - 8);
+    }
     return t > 255 ? 255 : (uint8_t)t;
 }
 
@@ -252,9 +284,9 @@ uint8_t pt_div_cols(uint16_t num_q8, uint16_t den_q8)
 {
     RC_ASSERT(den_q8 > 0);
 
-    // k = 0: the shift 8 + s is always at least 1
+    // k = 0: the u16 form shifted by e
     pt_recip rc = pt_recip16(den_q8);
-    uint32_t q = mul_recip16(num_q8, rc) >> (8 + rc.s);
+    uint32_t q = mul_recip16(num_q8, rc) >> rc.e;
     return q > 127 ? 127 : (uint8_t)q;
 }
 
@@ -263,12 +295,14 @@ uint16_t pt_div_q8(uint16_t num, uint16_t den)
     RC_ASSERT(den >= 128);
 
     // an overflowing quotient saturates up front (only a byte den can
-    // overflow: one compare of num's high byte); then k = 8 with s >= 0 is
-    // a plain right shift
+    // overflow: one compare of num's high byte); then k = 8 is the u16 form
+    // shifted right by e - 8 - or left by one for den = 128 exactly, the one
+    // power of two here whose e is 7
     if (den < 256 && (num >> 8) >= den)
         return 0xFFFF;
     pt_recip rc = pt_recip16(den);
-    uint32_t q = mul_recip16(num, rc) >> rc.s;
+    uint32_t m = mul_recip16(num, rc);
+    uint32_t q = rc.e < 8 ? m << 1 : m >> (rc.e - 8);
     return q > 0xFFFF ? 0xFFFF : (uint16_t)q;
 }
 
@@ -277,11 +311,10 @@ uint16_t pt_grad_mag(uint8_t dy, uint8_t dx)
     RC_ASSERT(dx >= 1);
     RC_ASSERT(dy <= 64);
 
-    if (dx == 1)
-        return (uint16_t)(dy << 8);
-    // k = 8: a byte dx normalises with s <= 0, so the shift 8 + s is 1..8
-    pt_recip rc = pt_recip16(dx);
-    uint32_t q = mul_recip8(dy, rc) >> (8 + rc.s);
+    // k = 8: the exact product shifted by e (0..8: dx = 1 is f = 0, e = 0,
+    // giving dy << 8 with no special case)
+    pt_recip rc = pt_recip8(dx);
+    uint32_t q = mul_recip8(dy, rc) >> rc.e;
     return q > 0x7FFF ? 0x7FFF : (uint16_t)q;
 }
 
@@ -290,16 +323,16 @@ uint16_t pt_gradq8_mag(uint8_t dy, uint16_t dx_q8)
     RC_ASSERT(dx_q8 > 0);
     RC_ASSERT(dy <= 64);
 
-    // k = 16: the exact product shifted by s either way; a left shift
+    // k = 16: the exact product shifted by e - 8 either way; a left shift
     // saturates, tested against the product before shifting
     pt_recip rc = pt_recip16(dx_q8);
     uint32_t p = mul_recip8(dy, rc);
-    if (rc.s < 0) {
-        if (p >= (0x8000u >> -rc.s))
+    if (rc.e < 8) {
+        if (p >= (0x8000u >> (8 - rc.e)))
             return 0x7FFF;
-        return (uint16_t)(p << -rc.s);
+        return (uint16_t)(p << (8 - rc.e));
     }
-    p >>= rc.s;
+    p >>= rc.e - 8;
     return p > 0x7FFF ? 0x7FFF : (uint16_t)p;
 }
 
@@ -310,10 +343,10 @@ uint8_t pt_project_col(int16_t y, uint16_t x, pt_recip rx)
     uint16_t uy = (uint16_t)(y < 0 ? -y : y);
     RC_ASSERT(uy <= x);
 
-    // k = 6: below x = 32 (s < -2) uy is a byte and the exact product
-    // shifts by 10 + s; otherwise the u16 form shifts by 2 + s
-    uint32_t q = rx.s < -2 ? mul_recip8((uint8_t)uy, rx) >> (10 + rx.s)
-                           : mul_recip16(uy, rx) >> (2 + rx.s);
+    // k = 6: below x = 32 (e < 6) uy is a byte and the exact product
+    // shifts by e + 2; otherwise the u16 form shifts by e - 6
+    uint32_t q = rx.e < 6 ? mul_recip8((uint8_t)uy, rx) >> (rx.e + 2)
+                          : mul_recip16(uy, rx) >> (rx.e - 6);
     if (q > 64)
         q = 64;
     return (uint8_t)(y < 0 ? 64 - q : 64 + q);
@@ -327,12 +360,12 @@ uint16_t pt_project_col_q8(int16_t y, uint16_t d)
     if (uy > d)
         uy = d;    // interpolation rounding can nudge y just past the ray
 
-    // k = 14: the shift s - 6 is negative at every near-clip depth, so the
+    // k = 14: the shift e - 14 is negative at every near-clip depth, so the
     // numerator is pre-shifted left (exact); uy <= d keeps it under
     // n * 64 < 2^14
     pt_recip rc = pt_recip16(d);
-    RC_ASSERT(rc.s <= 6);
-    uint32_t q = mul_recip16((uint16_t)(uy << (6 - rc.s)), rc);
+    RC_ASSERT(rc.e <= 14);
+    uint32_t q = mul_recip16((uint16_t)(uy << (14 - rc.e)), rc);
     if (q > 64u << 8)
         q = 64u << 8;
     return (uint16_t)(y < 0 ? (64u << 8) - q : (64u << 8) + q);
@@ -343,8 +376,10 @@ uint8_t pt_project_rowd(uint8_t h8, uint16_t x, pt_recip rx)
     RC_ASSERT(x > 0);
     RC_ASSERT((uint32_t)x * PT_SCREEN_HEIGHT >= (uint32_t)h8 * (8 * 128));    // on screen
 
-    // k = 9 (64 * 8 * h8 / x): the exact product shifted by 7 + s >= 0
-    uint32_t q = mul_recip8(h8, rx) >> (7 + rx.s);
+    // k = 9 (64 * 8 * h8 / x): the exact product shifted by e - 1; e is 0
+    // only at depth 1, where h8 can only be 0
+    uint32_t p = mul_recip8(h8, rx);
+    uint32_t q = rx.e == 0 ? p << 1 : p >> (rx.e - 1);
     if (q > PT_SCREEN_HEIGHT / 2)
         q = PT_SCREEN_HEIGHT / 2;
     return (uint8_t)q;

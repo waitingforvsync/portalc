@@ -70,22 +70,28 @@ int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t);
 // ---- reciprocal-table divisions ----
 // Each is num * 2^k / den for its own k. den is normalised to n in [128, 255]
 // with a shift count s, so 2^16 / den ~= (256 + f) * 2^-s, and the quotient
-// is num * (256 + f) >> (16 + s - k). For a byte numerator that product is
-// one lookup plus num in the high byte, exact in 17 bits, so a numerator is
+// is num * (256 + f) >> (16 + s - k). The shift is kept as e = s + 8
+// (0..15, as the 6502 normaliser returns it), making that
+// num * (256 + f) >> (8 + e - k). For a byte numerator the product is one
+// lookup plus num in the high byte, exact in 17 bits, so a numerator is
 // never widened by pre-shifting; a u16 numerator keeps num * (256 + f) >> 8
-// (two lookups, the carry as a 17th bit) and shifts right from there. Error
-// stays within ~0.2% of the result plus a count of truncation.
+// (two lookups, the carry as a 17th bit) and shifts right by e - k from
+// there. Error stays within ~0.2% of the result plus a count of truncation.
 
-// A normalised reciprocal: 2^16 / den ~= (256 + f) * 2^-s, den shifted into
-// [128, 255] (right shifts truncating, left shifts exact, s signed). f is a
-// single byte; 0 means 256 (den a power of two), the sine table's trick.
+// A normalised reciprocal: 2^16 / den ~= (256 + f) * 2^(8 - e), den shifted
+// into [128, 255] by s = e - 8 places (right shifts truncating, left shifts
+// exact). f is a single byte. A power-of-two den normalises to 128, whose
+// 2^16/128 = 512 is kept as f = 0 at one shift less, so 256 + f always
+// holds.
 typedef struct pt_recip {
     uint8_t f;
-    int8_t s;
+    uint8_t e;    // s + 8, 0..15
 } pt_recip;
 
-// The normalised reciprocal of n > 0. A depth's is formed once and handed
-// to every projection at that depth.
+// The normalised reciprocal of n > 0: two lookups for a byte, a one-byte
+// shift more for a u16. A depth's is formed once and handed to every
+// projection at that depth.
+pt_recip pt_recip8(uint8_t n);
 pt_recip pt_recip16(uint16_t n);
 
 // num / den as a u0.8 clip parameter t, clamped to 255; needs num <= den.

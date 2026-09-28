@@ -111,11 +111,20 @@ vertex between them and therefore partition the columns exactly.
   `(x−255)²/4` tables. The table MSB pointers are set once at start-up and never
   changed.
 - **Reciprocals**: one byte per entry, 128 entries: `round(0x10000/n) − 256` for
-  `n` in `[128, 255]`, a stored 0 meaning 256. Every denominator is normalised into
-  that window by counting shifts (left shifts are exact), so `1/n` is `1 + f/256`
-  at a known power of two and a division is one add plus a single fractional
-  multiply; the numerator is pre-shifted when the result scale calls for it, so
-  truncation is never amplified.
+  `n` in `[128, 255]`. Every denominator is normalised into that window (left
+  shifts are exact), so `1/n` is `1 + f/256` at a known power of two and a division
+  is one add plus a single fractional multiply; the numerator is pre-shifted when
+  the result scale calls for it, so truncation is never amplified. The 512 at
+  `n = 128` wraps to a stored 0 and is taken at one shift less (512 = 256 << 1), so
+  the reciprocal is always `256 + f` and no multiply has a special case. The shift
+  is kept as `e = s + 8` (0..15), as the 6502 normaliser returns it, so every
+  quotient is a right shift by a constant offset from `e`.
+- **Normalising tables**, three of 256 bytes indexed by a byte `b` with `lz(b)` its
+  leading zero bits: `b << lz(b)`, `8 − lz(b)` (its bit length), and `s + 8` for a
+  byte denominator (the power-of-two case folded in). A byte denominator is then
+  pure lookups; a u16 one shifts right by the high byte's bit length, its
+  normalised byte being the high byte's bits moved up ORed with the low byte
+  shifted down, a one-byte shift instead of a two-byte one.
 - Prefer unsigned values of the smallest type that fits.
 
 ### 4.1 Fixed-point formats

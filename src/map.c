@@ -296,7 +296,8 @@ void pt_scene_init(pt_map *m)
 
     // horizontal surfaces: catalogue shade indices
     uint8_t main_floor = PT_SH_KRRR;
-    uint8_t main_ceil = PT_SH_KKKB;
+    uint8_t room1_ceil = PT_SH_KKKB;
+    uint8_t room2_ceil = PT_SH_KKKB;
     uint8_t pit_floor = PT_SH_GGGG;    // the one pure green
     uint8_t corr_ceil = PT_SH_KKRR;
     uint8_t end_ceil = PT_SH_KKKR;
@@ -328,7 +329,7 @@ void pt_scene_init(pt_map *m)
     // Cell 1: the depressed central square (floor 24 units below the ring's);
     // its edge colours are the riser faces seen from inside the pit, lit like
     // the walls: the south riser faces the light, the north riser is dark.
-    begin_cell(&b, 536, 352, pit_floor, main_ceil);
+    begin_cell(&b, 536, 352, pit_floor, room1_ceil);
     add_edge(&b, s0, pit_dark);   // north riser, faces south, in shadow
     add_edge(&b, s1, lit_w);      // east riser, faces west
     add_edge(&b, s2, lit_n);      // south riser, faces north
@@ -338,19 +339,19 @@ void pt_scene_init(pt_map *m)
     // spokes; all five share identical attributes. The five wall orientations
     // give five distinct brightnesses. The colours of the ring's pit edges
     // are never drawn (the drop face points away).
-    begin_cell(&b, 512, 352, main_floor, main_ceil);    // A
+    begin_cell(&b, 512, 352, main_floor, room1_ceil);    // A
     add_edge(&b, p0, lit_shadow);    // faces south-west, fully away
     add_edge(&b, p1, PT_EDGE_SOFT);
     add_edge(&b, s1, none);
     add_edge(&b, s0, PT_EDGE_SOFT);
 
-    begin_cell(&b, 512, 352, main_floor, main_ceil);    // B
+    begin_cell(&b, 512, 352, main_floor, room1_ceil);    // B
     add_edge(&b, p1, lit_wnw);    // faces west-north-west
     add_edge(&b, p2, PT_EDGE_SOFT);
     add_edge(&b, s2, none);
     add_edge(&b, s1, PT_EDGE_SOFT);
 
-    begin_cell(&b, 512, 352, main_floor, main_ceil);    // C, holds the doorway
+    begin_cell(&b, 512, 352, main_floor, room1_ceil);    // C, holds the doorway
     add_edge(&b, p2, lit_n);      // faces north
     add_edge(&b, d0, lit_n);      // the doorway portal (lintel face, stepped)
     add_edge(&b, d1, lit_n);
@@ -358,13 +359,13 @@ void pt_scene_init(pt_map *m)
     add_edge(&b, s3, none);
     add_edge(&b, s2, PT_EDGE_SOFT);
 
-    begin_cell(&b, 512, 352, main_floor, main_ceil);    // D
+    begin_cell(&b, 512, 352, main_floor, room1_ceil);    // D
     add_edge(&b, p3, lit_ene);    // faces east-north-east
     add_edge(&b, p4, PT_EDGE_SOFT);
     add_edge(&b, s0, none);
     add_edge(&b, s3, PT_EDGE_SOFT);
 
-    begin_cell(&b, 512, 352, main_floor, main_ceil);    // E
+    begin_cell(&b, 512, 352, main_floor, room1_ceil);    // E
     add_edge(&b, p4, lit_se);     // faces south-east
     add_edge(&b, p0, PT_EDGE_SOFT);
     add_edge(&b, s0, PT_EDGE_SOFT);
@@ -387,7 +388,7 @@ void pt_scene_init(pt_map *m)
     // its pillar into four convex quarters by soft diagonals from the room's
     // corners to the pillar's (cells 8 and 19..21), leaving both doorways
     // whole; each pillar face is lit by its facing like the room's walls.
-    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    begin_cell(&b, 544, 352, room2_floor, room2_ceil);
     add_edge(&b, r0, lit_shadow);    // north wall, faces south
     add_edge(&b, w1, lintel2);       // portal back to the corridor (lintel)
     add_edge(&b, w0, lit_shadow);
@@ -442,19 +443,19 @@ void pt_scene_init(pt_map *m)
 
     // Cells 19..21: the rest of the second room round the pillar (east,
     // south and west quarters).
-    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    begin_cell(&b, 544, 352, room2_floor, room2_ceil);
     add_edge(&b, r3, lit_wnw);       // east wall, faces west
     add_edge(&b, r4, PT_EDGE_SOFT);
     add_edge(&b, pse, lit_e);        // pillar east face
     add_edge(&b, pne, PT_EDGE_SOFT);
 
-    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    begin_cell(&b, 544, 352, room2_floor, room2_ceil);
     add_edge(&b, r4, room2_far);     // far wall (black-blue-red mix)
     add_edge(&b, r5, PT_EDGE_SOFT);
     add_edge(&b, psw, lit_shadow);   // pillar south face
     add_edge(&b, pse, PT_EDGE_SOFT);
 
-    begin_cell(&b, 544, 352, room2_floor, main_ceil);
+    begin_cell(&b, 544, 352, room2_floor, room2_ceil);
     add_edge(&b, r5, lit_e2);        // west wall up to the stair doorway
     add_edge(&b, sv[0], blue75);     // stair doorway (first riser face)
     add_edge(&b, nv[0], lit_e2);     // west wall beyond the doorway

@@ -955,3 +955,44 @@ multiply was left indexing `a - b + 255` in u16 tables (the 6502's
 `(a EOR 255) + b` and split byte pages are the same arithmetic). 273M
 comparisons against the previous arith match exactly; sweep
 byte-identical; 25/25 tests.
+
+## 2026-09-29 — One line per edge height; cut-off columns clamped by span
+
+Looking at plot() for a byte-at-a-time rewrite, Rich wanted to know how far
+plotted rows really stray outside 0..H. Over the sweep, one piece reached
+row 70: a floor line near-clipped at its end vertex had become two pieces,
+the slope and then a flat run at row H, and a later visit reused the slope
+as the line and carried it to the edge's end, six rows under the screen.
+The spec had argued this was harmless (past the crossing the carried
+slope is below every bound, so it merges where the flat run would), and it
+would have been, except that clip_line's fast path compared rows clamped
+to 0..H: with the root's extents (0, H) anything passed, so the whole
+overrun was kept as a visible piece. plot()'s per-column break hid it.
+
+Rich's model of the near clip: pre-clip the one line to the screen,
+stopping where it reaches the top or bottom edge, and clip that against
+the portal; a line ending on a bound counts as meeting it. The columns
+the pre-clip cut off still clamp to the bound on that side, and the line
+remembers enough to know which: its own span against the edge's. So
+make_line now returns a single line (empty if both endpoints are too
+near), and clip_edge_line clips a visit's columns in three ranges, left
+to right: the cut-off columns before the line, the line, the cut-off
+columns after it. A cut-off range goes through clip_line with a forced
+ABOVE or BELOW, which only walks that side's bound pieces, splitting and
+recolouring, with nothing evaluated (a closed gap in the bottom chain is
+still ABOVE, as before). The flat runs are gone. The fast path compares
+unclamped rows, so a reused line carried past its pre-clip fails it and
+is clamped by the walk.
+
+I first made the fast path strict at ties too (row > tmax, row < bmin,
+matching the walk's inclusive compares). That sent every line starting
+exactly on its bound's row down the slow path, whose first column merges
+and whose visible part restarts a column later at a rounded anchor: 546
+sweep frames shifted by a row along such lines. Back to the inclusive
+thresholds, only unclamped.
+
+The sweep is byte-identical. Plotted rows now stay within 0..65; the
+excess is only rounding accumulated along a line. Plotted pieces fell
+from 19840 to 19028. The row-H flat pieces are mostly the root's bottom
+bound recoloured by merges, which still happen: 3087 of them, 102k
+columns, down from 3822 and 140k. 25/25 tests.

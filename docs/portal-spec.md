@@ -462,8 +462,10 @@ x < 128·|h|/H      // off the top for h < 0 (ceilings), off the bottom for h > 
 
 (`2·|h|` on the 64-row screen; `8·|h|/5` at H = 80, shifts and adds.)
 
-`make_line` produces one or two pieces from the side-clipped endpoints `E0`
-(left, columns from `E0.sx`) and `E1` (right), for a height `h` and colour `col`:
+`make_line` produces one line from the side-clipped endpoints `E0` (left, columns
+from `E0.sx`) and `E1` (right), for a height `h` and colour `col`, pre-clipped to the
+screen: where an endpoint is too near, the line stops at the column where it reaches
+the screen edge.
 
 ```
 make_line(E0, E1, h, col):
@@ -471,34 +473,44 @@ make_line(E0, E1, h, col):
     edge  = (h < 0) ? 0 : H                          // the screen edge this line can leave by
     near0 = E0.x < d ; near1 = E1.x < d
     if near0 and near1:
-        return [ flat(E0.sx, E1.sx, edge, col) ]     // y0 = 0 → merges into the top bound; y0 = H → off screen
+        return empty                                 // x0 = x1: the whole span is cut off
     if not near0 and not near1:
         sy0 = H/2 + 64·h/E0.x ; sy1 = H/2 + 64·h/E1.x
-        return [ line(E0.sx, E1.sx, sy0, (sy1 − sy0)/(E1.sx − E0.sx), col) ]
+        return line(E0.sx, E1.sx, sy0, (sy1 − sy0)/(E1.sx − E0.sx), col)
     // exactly one endpoint is too close: clip the edge at depth d
     (N, F) = near0 ? (E0, E1) : (E1, E0)             // near and far endpoints
     t   = (d − N.x) / (F.x − N.x)                    // u0.8
     y*  = N.y + t·(F.y − N.y)                        // lateral view coordinate at depth d
     sx* = 64 + 64·y*/d                               // u8.8, keep the fraction; 1/d cached per (cell, ceiling|floor) per frame
     syF = H/2 + 64·h/F.x
+    c*  = ceil(sx*)
     if near0:                                        // near end on the left
-        c*  = ceil(sx*)
         g   = (syF − edge) / (E1.sx − sx*)           // fractional dx: same reciprocal routine, extra shift
         y0  = edge + (c* − sx*)·g,  rounded to nearest and clamped to 0..H
-        return [ flat(E0.sx, c*, edge, col), line(c*, E1.sx, y0, g, col) ]
+        return line(c*, E1.sx, y0, g, col)
     else:                                            // near end on the right
-        c*  = ceil(sx*)
         g   = (edge − sy0) / (sx* − E0.sx)
-        return [ line(E0.sx, c*, sy0, g, col), flat(c*, E1.sx, edge, col) ]
+        return line(E0.sx, c*, sy0, g, col)
 ```
 
-Empty pieces (`x0 ≥ x1`) are dropped. The lateral coordinate `N.y` of a side-clipped
-endpoint is `∓N.x` (on the ray); of an in-frustum endpoint it is the transformed `y`.
+A line whose span comes out empty (`x0 ≥ x1`) is cut off entirely. The lateral
+coordinate `N.y` of a side-clipped endpoint is `∓N.x` (on the ray); of an in-frustum
+endpoint it is the transformed `y`.
 
-Starting the sloped piece at `ceil(sx*)` keeps its `y0` inside the screen and exact
-at that column; the column `floor(sx*)` goes to the flat piece, at most `|g|` rows
-off, in one column. After this step every `y0` is in `0..H` and every gradient of
-a piece wider than one column fits sign + u6.8.
+The columns of `[E0.sx, E1.sx)` the pre-clip cut off are not dropped: there the line
+is off the screen on `edge`'s side, beyond every portal bound, so it is clamped to the
+bound on that side like any hidden range (§7.9), and the bound piece takes its colour.
+That matters wherever the bound is on screen above the cut-off columns: looking down a
+step into a cell whose far wall is inside that cell's (larger) near distance, the
+wall's bottom line is off the screen while the step's lip, nearer but at a smaller
+relative height, is on it; the lip's bottom bound must take `W^FB`, or the parent's
+floor below it is miscoloured. `clip_edge_line` (§7.9.3) handles the cut-off columns
+from the x spans alone: nothing is evaluated there.
+
+Starting the sloped line at `ceil(sx*)` keeps its `y0` inside the screen and exact
+at that column; the column `floor(sx*)` is cut off, at most `|g|` rows off, in one
+column. After this step every `y0` is in `0..H` and every gradient of a line wider
+than one column fits sign + u6.8.
 
 Because the near clip runs after the side clip, the depths it sees are the
 side-clipped ones, so it stays well conditioned when the camera stands against a
@@ -540,20 +552,20 @@ process_edge(f, n, V0, V1):
     if e.soft:
         push_child(e.adj, xa, xb, T, B, P=V0) ; return
     if e.adj == 0:
-        for L in make_line(E0, E1, cA − eye, CA^W) : clip(L, T, B, none)
-        for L in make_line(E0, E1, fA − eye, W^FA) : clip(L, T, B, none)
+        clip_edge_line(make_line(E0, E1, cA − eye, CA^W), T, B, none)
+        clip_edge_line(make_line(E0, E1, fA − eye, W^FA), T, B, none)
         return
     Bc = cell[e.adj]
     // 3. non-bound-forming lines first: they only recolour, and need T and B intact
-    if cB > cA: for L in make_line(E0, E1, cA − eye, CA^W) : clip(L, T, B, none)
-    if fB < fA: for L in make_line(E0, E1, fA − eye, W^FA) : clip(L, T, B, none)
+    if cB > cA: clip_edge_line(make_line(E0, E1, cA − eye, CA^W), T, B, none)
+    if fB < fA: clip_edge_line(make_line(E0, E1, fA − eye, W^FA), T, B, none)
     // 4. bound-forming lines last, floor first (§7.9.3):
     //    F builds childB against T and B; C builds childT against T and childB
     F = (fB < fA) ? make_line(E0, E1, fB − eye, FB^W) : make_line(E0, E1, fA − eye, FB^FA)
     C = (cB > cA) ? make_line(E0, E1, cB − eye, W^CB) : make_line(E0, E1, cA − eye, CA^CB)
     closed = [] ; childB = chain() ; childT = chain()
-    for L in F: clip(L, T, B,      build=childB, role=BOTTOM)
-    for L in C: clip(L, T, childB, build=childT, role=TOP)
+    clip_edge_line(F, T, B,      build=childB, role=BOTTOM)
+    clip_edge_line(C, T, childB, build=childT, role=TOP)
     // 5. the child portal: [xa, xb) less its closed ends   (§7.9.4)
     (l, r) = widest open range of [xa, xb) ; close any other open columns
     if l < r: push_child(e.adj, l, r, piece_at(childT, l), piece_at(childB, l), P=V0)
@@ -629,9 +641,19 @@ nothing walks the parent's sub-chains again. The mirror order would work equally
 well; what matters is that the second line uses the chain the first one built.
 
 ```
-clip(L, T, Bc, build, role):            // Bc: the bottom chain to use (B, or childB for the ceiling-forming line)
-    // fast path: the line lies wholly inside the row extents of the two chains
-    if min(L.y0, y_L(L.x1−1)) ≥ Tmax(T) and max(...) ≤ Bmin(Bc):
+clip_edge_line(L, T, Bc, build, role):  // over the visit's columns [xa, xb), left to right
+    side = (L's height is below the eye) ? BELOW : ABOVE      // the edge the pre-clip cut it at
+    l0 = max(L.x0, xa) ; l1 = min(L.x1, xb)
+    if l0 ≥ l1: l0 = l1 = xb                                  // cut off over the whole visit
+    if xa < l0: clip([xa, l0), side)                          // cut-off columns: clamped, nothing evaluated
+    if l0 < l1: clip(L restricted to [l0, l1), OPEN)          // re-anchored at l0 if L starts left of it
+    if l1 < xb: clip([l1, xb), side)
+
+clip(L, T, Bc, build, role, st):        // Bc: the bottom chain to use (B, or childB for the ceiling-forming line)
+                                        // st: OPEN to resolve, or the side a cut-off range is known to lie on
+    // fast path: the line lies wholly inside the row extents of the two chains, compared
+    // unclamped (a line carried past its pre-clip column runs off the screen and fails it)
+    if st == OPEN and min(L.y0, y_L(L.x1−1)) ≥ Tmax(T) and max(...) ≤ Bmin(Bc):
         emit(L.x0, L.x1, VISIBLE) ; return
     c  = L.x0
     tp = piece of T containing c ; bp = piece of Bc containing or after c     // split at c if needed
@@ -640,6 +662,9 @@ clip(L, T, Bc, build, role):            // Bc: the bottom chain to use (B, or ch
         if c < bp.x0:                                                 // gap in Bc (closed range, §7.9.4)
             e = min(L.x1, tp.x1, bp.x0)                               // L is ABOVE T throughout such a range
             emit(c, e, ABOVE) ; advance ; continue
+        if st != OPEN:                                                // a cut-off range: its own side's chain only
+            e = min(L.x1, (st == ABOVE) ? tp.x1 : bp.x1)
+            emit(c, e, st) ; advance ; continue
         e   = min(L.x1, tp.x1, bp.x1)                                 // one linear function each over [c, e)
         yL1 = y_L(e−1) ; yT1 = y_tp(e−1) ; yB1 = y_bp(e−1)
         // resolve against the top: D = yL − yT changes sign at most once
@@ -694,7 +719,8 @@ Fast path bookkeeping: `Tmax` is the largest row of any top-chain piece over the
 span and `Bmin` the smallest of any bottom-chain piece; both are maintained while
 appending (the endpoint rows are already computed during the walk), and the
 ceiling-forming line uses `childB`'s `Bmin`. For the root portal `Tmax = 0` and
-`Bmin = H`, so every line of the camera cell skips the walk.
+`Bmin = H`, so every line of the camera cell skips the walk (a reused line carried
+past its pre-clip column is the exception: it runs off the screen).
 
 #### 7.9.4 Closed columns
 
@@ -769,14 +795,17 @@ column, which the end vertex gives without clipping. So a later visit resuming o
 edge uses `(piece.x0, end column, piece.y0, piece.g)` as the line, and `clamp_line`
 starts it at the new span's left column: no side clip, projection or gradient
 division. The piece's start row is rounded (§6), so a restart past an occluder can sit
-a row off the regenerated line; that is accepted. Near-clipped lines need no
-exception. Their flat run on the screen edge (§7.7) lies on or beyond every bound (the
-root's two lines at rows 0 and H are the outermost), so it is always hidden and never
-the active piece; and the sloped part carried past the crossing either clamps at row 0
-(ceilings) or runs below every bottom bound (floors), merging into the same bound
-pieces the flat run would. Only a slot with no active piece (0: the line not yet
-generated on this edge, or wholly hidden so far) is projected, and only then are the
-edge's endpoints side-clipped, once for all its lines.
+a row off the regenerated line; that is accepted. Lines pre-clipped at the screen edge
+(§7.7) need no exception. The reused line carries on past the column where it left the
+screen, with rows off the screen and beyond every bound (the row arithmetic saturates
+at the bottom and clamps at the top, so it keeps comparing as outside); the clip finds
+that and clamps it, recolouring the same bound pieces the cut-off columns would have.
+This needs the fast path's rows unclamped: clamped to `0..H`, a line running off the
+screen would pass the root's extents and be kept whole. The cut-off columns themselves
+never produce a visible piece, so a line cut off at its start leaves no active piece
+there, and a later visit regenerates it. Only a slot with no active piece (0: the line
+not yet generated on this edge, or wholly hidden so far) is projected, and only then
+are the edge's endpoints side-clipped, once for all its lines.
 
 ```
 emit_visible(r0, r1, L):

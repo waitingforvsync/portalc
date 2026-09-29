@@ -394,20 +394,29 @@ static void resolve_block(pt_clip *cx, const pt_line *L, uint8_t c, uint8_t e)
     }
 }
 
-// Clamp a line between the top and bottom chains over its whole span.
-static void clip_line(pt_clip *cx, const pt_line *L)
+// Clamp a line between the top and bottom chains over its whole span. With
+// st ST_ABOVE or ST_BELOW the span is known to lie outside the portal on
+// that side (columns the screen pre-clip cut off, clip_edge_line): nothing
+// is evaluated, the bound pieces over it are just recoloured.
+static void clip_line(pt_clip *cx, const pt_line *L, uint8_t st)
 {
     pt_render *r = cx->r;
     RC_ASSERT(L->x0 < L->x1);
 
-    // fast path: the line lies wholly inside the row extents of the chains
-    uint16_t ya = row_anchor(L->y0);
-    uint16_t yb = line_y(L, (uint8_t)(L->x1 - 1));
-    uint16_t lo = ya < yb ? ya : yb;
-    uint16_t hi = ya > yb ? ya : yb;
-    if (row_of_floor(lo) >= cx->tmax && row_of_ceil(hi) <= cx->bmin) {
-        emit(cx, L, L->x0, L->x1, ST_VISIBLE);
-        return;
+    // fast path: the line lies wholly inside the row extents of the chains.
+    // The rows are unclamped, so a line running off the screen (one carried
+    // past its pre-clip column) fails it.
+    if (st == ST_OPEN) {
+        uint16_t ya = row_anchor(L->y0);
+        uint16_t yb = line_y(L, (uint8_t)(L->x1 - 1));
+        uint16_t lo = ya < yb ? ya : yb;
+        uint16_t hi = ya > yb ? ya : yb;
+        uint16_t hc = (uint16_t)(hi + 127);
+        if (lo >= 128 && (uint8_t)((uint16_t)(lo - 128) >> 8) >= cx->tmax && hc > hi
+            && (uint8_t)(hc >> 8) <= cx->bmin) {
+            emit(cx, L, L->x0, L->x1, ST_VISIBLE);
+            return;
+        }
     }
 
     uint8_t c = L->x0;
@@ -420,24 +429,24 @@ static void clip_line(pt_clip *cx, const pt_line *L)
         cx->bp = r->pool[cx->bp].next;
 
     while (c < L->x1) {
-        uint8_t e;
+        // a block ends at the next piece boundary of each chain it involves
+        uint8_t e = L->x1;
+        uint8_t s = st;
         if (cx->bp == 0 || c < r->pool[cx->bp].x0) {
             // gap in the bottom chain (a closed range): the line is above the
             // top bound throughout
-            e = L->x1;
-            if (r->pool[cx->tp].x1 < e)
-                e = r->pool[cx->tp].x1;
+            s = ST_ABOVE;
             if (cx->bp && r->pool[cx->bp].x0 < e)
                 e = r->pool[cx->bp].x0;
-            emit(cx, L, c, e, ST_ABOVE);
-        } else {
-            e = L->x1;
-            if (r->pool[cx->tp].x1 < e)
-                e = r->pool[cx->tp].x1;
-            if (r->pool[cx->bp].x1 < e)
-                e = r->pool[cx->bp].x1;
-            resolve_block(cx, L, c, e);
+        } else if (s != ST_ABOVE && r->pool[cx->bp].x1 < e) {
+            e = r->pool[cx->bp].x1;
         }
+        if (s != ST_BELOW && r->pool[cx->tp].x1 < e)
+            e = r->pool[cx->tp].x1;
+        if (s == ST_OPEN)
+            resolve_block(cx, L, c, e);
+        else
+            emit(cx, L, c, e, s);
         c = e;
         if (c >= L->x1)
             break;
@@ -475,14 +484,13 @@ static uint8_t row_from(pt_relh h, const pt_ep *e)
     return (uint8_t)(h.below ? PT_SCREEN_HEIGHT / 2 + q : PT_SCREEN_HEIGHT / 2 - q);
 }
 
-static pt_line flat(uint8_t x0, uint8_t x1, uint8_t y, pt_pattern col)
-{
-    return (pt_line) {.x0 = x0, .x1 = x1, .y0 = y, .g = 0, .ce = col.e, .co = col.o};
-}
-
-// Build one or two pieces for the edge's line at relative height h, near
-// clipping against x = 2h; pieces partition [e0.sx, e1.sx) left to right.
-static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col)
+// The edge's line at relative height h, pre-clipped to the screen: the part
+// nearer than x = 2h projects past the screen's top or bottom edge (h's
+// side), so the line stops at the column where it reaches that edge. The
+// columns cut off, the rest of [e0.sx, e1.sx), are outside every portal on
+// that side (clip_edge_line); the line is empty (x0 == x1) when both
+// endpoints are too near.
+static pt_line make_line(pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col)
 {
     RC_ASSERT(e0.x >= 1 && e1.x >= 1);
     RC_ASSERT(e0.sx < e1.sx);
@@ -496,18 +504,18 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
     bool near0 = e0.x < d;
     bool near1 = e1.x < d;
 
-    if (near0 && near1) {
-        out[0] = flat(e0.sx, e1.sx, edge, col);
-        return 1;
-    }
+    pt_line L = {.x0 = e0.sx, .x1 = e0.sx, .ce = col.e, .co = col.o};
+    if (near0 && near1)
+        return L;
     if (!near0 && !near1) {
         uint8_t sy0 = row_from(h, &e0);
         uint8_t sy1 = row_from(h, &e1);
         uint8_t dx = (uint8_t)(e1.sx - e0.sx);
-        uint16_t g = sy1 >= sy0 ? pt_g_make(pt_grad_mag((uint8_t)(sy1 - sy0), dx), 0)
-                                : pt_g_make(pt_grad_mag((uint8_t)(sy0 - sy1), dx), 1);
-        out[0] = (pt_line) {.x0 = e0.sx, .x1 = e1.sx, .y0 = sy0, .g = g, .ce = col.e, .co = col.o};
-        return 1;
+        L.x1 = e1.sx;
+        L.y0 = sy0;
+        L.g = sy1 >= sy0 ? pt_g_make(pt_grad_mag((uint8_t)(sy1 - sy0), dx), 0)
+                         : pt_g_make(pt_grad_mag((uint8_t)(sy0 - sy1), dx), 1);
+        return L;
     }
 
     // exactly one endpoint too close: clip the edge at depth d
@@ -524,62 +532,73 @@ static uint8_t make_line(pt_line out[2], pt_ep e0, pt_ep e1, pt_relh h, pt_patte
     if (cs > e1.sx)
         cs = e1.sx;
 
-    uint8_t n = 0;
     if (near0) {
-        if (e0.sx < cs)
-            out[n++] = flat(e0.sx, cs, edge, col);
         if (cs < e1.sx) {
             uint16_t dxq = (uint16_t)(((uint16_t)(e1.sx << 8)) - sxq);
             uint8_t fr = (uint8_t)(((uint16_t)(cs << 8)) - sxq);
             uint16_t base = (uint16_t)((edge << 8) | 128);    // rounding bias in the anchor
-            uint16_t g;
             uint16_t y0q;
             if (syf >= edge) {
                 uint16_t gm = pt_gradq8_mag((uint8_t)(syf - edge), dxq);
                 uint16_t off = pt_mulu16_frac(gm, fr);
-                g = pt_g_make(gm, 0);
+                L.g = pt_g_make(gm, 0);
                 y0q = (uint16_t)(base + off);
                 if (y0q < base)
                     y0q = 0xFFFF;    // carry out: clamp
             } else {
                 uint16_t gm = pt_gradq8_mag((uint8_t)(edge - syf), dxq);
                 uint16_t off = pt_mulu16_frac(gm, fr);
-                g = pt_g_make(gm, 1);
+                L.g = pt_g_make(gm, 1);
                 y0q = off > base ? 0 : (uint16_t)(base - off);
             }
             // round like every other re-anchor; PT_SCREEN_HEIGHT is fine,
-            // the piece comes on screen where its gradient brings the row
+            // the line comes on screen where its gradient brings the row
             // under the screen edge less a half
-            out[n++] = (pt_line) {.x0 = cs, .x1 = e1.sx, .y0 = row_of(y0q), .g = g,
-                                  .ce = col.e, .co = col.o};
+            L.x0 = cs;
+            L.x1 = e1.sx;
+            L.y0 = row_of(y0q);
         }
-    } else {
-        if (e0.sx < cs) {
-            uint16_t dxq = (uint16_t)(sxq - ((uint16_t)(e0.sx << 8)));
-            uint16_t g = edge >= syf ? pt_g_make(pt_gradq8_mag((uint8_t)(edge - syf), dxq), 0)
-                                     : pt_g_make(pt_gradq8_mag((uint8_t)(syf - edge), dxq), 1);
-            out[n++] = (pt_line) {.x0 = e0.sx, .x1 = cs, .y0 = syf, .g = g, .ce = col.e, .co = col.o};
-        }
-        if (cs < e1.sx)
-            out[n++] = flat(cs, e1.sx, edge, col);
+    } else if (e0.sx < cs) {
+        uint16_t dxq = (uint16_t)(sxq - ((uint16_t)(e0.sx << 8)));
+        L.x1 = cs;
+        L.y0 = syf;
+        L.g = edge >= syf ? pt_g_make(pt_gradq8_mag((uint8_t)(edge - syf), dxq), 0)
+                          : pt_g_make(pt_gradq8_mag((uint8_t)(syf - edge), dxq), 1);
     }
-    return n;
+    return L;
 }
 
-// Restrict a line to [xa, xb); false when nothing is left.
-static bool clamp_line(pt_line *L, uint8_t xa, uint8_t xb)
+// Clip an edge's line over this visit's columns [xa, xb). Columns outside
+// the line's own span are the ones its screen pre-clip cut off: outside the
+// portal on the side it left the screen by, so they only recolour that
+// side's bound, with nothing evaluated. The ranges go left to right, as the
+// clip cursors require.
+static void clip_edge_line(pt_clip *cx, pt_line L, pt_relh h, uint8_t xa, uint8_t xb)
 {
-    if (L->x0 >= L->x1)
-        return false;
-    if (L->x1 > xb)
-        L->x1 = xb;
-    if (L->x0 < xa) {
-        if (xa >= L->x1)
-            return false;
-        L->y0 = row_of(line_y(L, xa));
-        L->x0 = xa;
+    uint8_t out = h.below ? ST_BELOW : ST_ABOVE;
+    uint8_t l0 = L.x0 > xa ? L.x0 : xa;
+    uint8_t l1 = L.x1 < xb ? L.x1 : xb;
+    if (l0 >= l1)
+        l0 = l1 = xb;    // cut off over the whole visit
+
+    pt_line o = L;
+    if (xa < l0) {
+        o.x0 = xa;
+        o.x1 = l0;
+        clip_line(cx, &o, out);
     }
-    return L->x0 < L->x1;
+    if (l0 < l1) {
+        if (L.x0 < l0)
+            L.y0 = row_of(line_y(&L, l0));    // re-anchor at the visit's first column
+        L.x0 = l0;
+        L.x1 = l1;
+        clip_line(cx, &L, ST_OPEN);
+    }
+    if (l1 < xb) {
+        o.x0 = l1;
+        o.x1 = xb;
+        clip_line(cx, &o, out);
+    }
 }
 
 // ---- vertex transform and classification (spec 3.2, 7.3) ----
@@ -885,17 +904,16 @@ static void close_columns(pt_render *r, uint8_t head, uint8_t l, uint8_t rr, pt_
 
 // An edge's lines for one visit. A line with an active piece on this edge
 // is already in screen space: the piece's x0, y0 and g are its line,
-// which runs on to the edge's end column, so it is used as is - clamp_line
-// starts it at the span's left column - with no projection or gradient
-// division (the piece's start row is rounded, so a restart past an
-// occluder may sit a row off the regenerated line; accepted). That holds for near-clipped lines too: their flat run
-// on the screen edge lies on or beyond every bound, so it is never visible
-// and never the active piece, and the sloped part carried past the
-// crossing clamps (ceilings) or runs below every bound (floors) exactly as
-// that run would. Only a line with no active piece (0: not yet generated
-// on this edge, or wholly hidden so far) is projected, and only then are
-// the edge's endpoints side-clipped (the divisions), once for all its
-// lines.
+// which runs on to the edge's end column, so it is used as is -
+// clip_edge_line starts it at the span's left column - with no projection
+// or gradient division (the piece's start row is rounded, so a restart past
+// an occluder may sit a row off the regenerated line; accepted). A line
+// pre-clipped at the screen edge needs no exception: carried on past that
+// column, its rows run off the screen, beyond every bound, and the clip
+// recolours the bound there as the cut-off columns would have. Only a line
+// with no active piece (0: not yet generated on this edge, or wholly hidden
+// so far) is projected, and only then are the edge's endpoints side-clipped
+// (the divisions), once for all its lines.
 typedef struct pt_edgelines {
     const pt_render *r;
     const pt_visit *vs;
@@ -905,15 +923,13 @@ typedef struct pt_edgelines {
     pt_ep e0, e1;
 } pt_edgelines;
 
-static uint8_t edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern col,
-                         pt_line out[2])
+static pt_line edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern col)
 {
     uint8_t q = el->vs->active[slot];
     if (q) {
         const pt_piece *pp = &el->r->pool[q];
-        out[0] = (pt_line) {.x0 = pp->x0, .x1 = el->sx1, .y0 = pp->y0, .g = pp->g,
-                            .ce = col.e, .co = col.o};
-        return 1;
+        return (pt_line) {.x0 = pp->x0, .x1 = el->sx1, .y0 = pp->y0, .g = pp->g,
+                          .ce = col.e, .co = col.o};
     }
 
     if (!el->have_ep) {
@@ -938,7 +954,7 @@ static uint8_t edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern c
         RC_ASSERT(el->e0.sx == el->sx0 && el->e1.sx == el->sx1);
         el->have_ep = true;
     }
-    return make_line(out, el->e0, el->e1, h, col);
+    return make_line(el->e0, el->e1, h, col);
 }
 
 // Process the portal's current edge: its lines, and the child portal
@@ -995,31 +1011,23 @@ static bool process_edge(pt_render *r, pt_portal *p, pt_portal *child)
     pt_pattern ca_floor = pt_shade(ca->floor);
     pt_relh ha_c = rel_h(ca->ceil_z, r->eye_z);
     pt_relh ha_f = rel_h(ca->floor_z, r->eye_z);
-    pt_line ls[2];
-    uint8_t n;
 
     if (e->adj == 0) {
         // solid wall: ceiling line and floor line, recolour only; each line
         // gets fresh cursors (role NONE never severs the chains)
         pt_clip cx = {.r = r, .thead = th, .bhead = bh, .tmax = p->tmax, .bmin = p->bmin,
                       .role = ROLE_NONE, .vis = vs, .slot = PT_SLOT_CEIL};
-        n = edge_line(&el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall), ls);
-        for (uint8_t i = 0; i < n; i++)
-            if (clamp_line(&ls[i], xa, xb))
-                clip_line(&cx, &ls[i]);
+        clip_edge_line(&cx, edge_line(&el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall)),
+                       ha_c, xa, xb);
         cx.tp = 0;
         cx.bp_set = false;
         cx.slot = PT_SLOT_FLOOR;
-        n = edge_line(&el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor), ls);
-        for (uint8_t i = 0; i < n; i++)
-            if (clamp_line(&ls[i], xa, xb))
-                clip_line(&cx, &ls[i]);
+        clip_edge_line(&cx, edge_line(&el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor)),
+                       ha_f, xa, xb);
         return false;
     }
 
     const pt_cell *cb = &m->cells[e->adj];
-    pt_relh hb_c = rel_h(cb->ceil_z, r->eye_z);
-    pt_relh hb_f = rel_h(cb->floor_z, r->eye_z);
     pt_pattern cb_ceil = pt_shade(cb->ceil);
     pt_pattern cb_floor = pt_shade(cb->floor);
     pt_pattern cbfb = pt_pattern_xor(cb_ceil, cb_floor);
@@ -1029,19 +1037,15 @@ static bool process_edge(pt_render *r, pt_portal *p, pt_portal *child)
     pt_clip cxn = {.r = r, .thead = th, .bhead = bh, .tmax = p->tmax, .bmin = p->bmin,
                    .role = ROLE_NONE, .vis = vs, .slot = PT_SLOT_CEIL};
     if (cb->ceil_z > ca->ceil_z) {
-        n = edge_line(&el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall), ls);
-        for (uint8_t i = 0; i < n; i++)
-            if (clamp_line(&ls[i], xa, xb))
-                clip_line(&cxn, &ls[i]);
+        clip_edge_line(&cxn, edge_line(&el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall)),
+                       ha_c, xa, xb);
         cxn.tp = 0;
         cxn.bp_set = false;
     }
     if (cb->floor_z < ca->floor_z) {
         cxn.slot = PT_SLOT_FLOOR;
-        n = edge_line(&el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor), ls);
-        for (uint8_t i = 0; i < n; i++)
-            if (clamp_line(&ls[i], xa, xb))
-                clip_line(&cxn, &ls[i]);
+        clip_edge_line(&cxn, edge_line(&el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor)),
+                       ha_f, xa, xb);
     }
 
     // 4. bound-forming lines, floor first: it builds the child's bottom chain
@@ -1051,28 +1055,27 @@ static bool process_edge(pt_render *r, pt_portal *p, pt_portal *child)
     pt_chainb childt = {.bmin = PT_SCREEN_HEIGHT};
     pt_closedl closed = {0};
 
-    pt_line fl[2];
-    uint8_t nf = (cb->floor_z < ca->floor_z)
-                     ? edge_line(&el, PT_SLOT_FLOOR_BOUND, hb_f, pt_pattern_xor(cb_floor, wall), fl)
-                     : edge_line(&el, PT_SLOT_FLOOR_BOUND, ha_f, pt_pattern_xor(cb_floor, ca_floor), fl);
-    pt_line cl[2];
-    uint8_t nc = (cb->ceil_z > ca->ceil_z)
-                     ? edge_line(&el, PT_SLOT_CEIL_BOUND, hb_c, pt_pattern_xor(wall, cb_ceil), cl)
-                     : edge_line(&el, PT_SLOT_CEIL_BOUND, ha_c, pt_pattern_xor(ca_ceil, cb_ceil), cl);
-
+    pt_relh hf = ha_f;
+    pt_pattern colf = pt_pattern_xor(cb_floor, ca_floor);
+    if (cb->floor_z < ca->floor_z) {
+        hf = rel_h(cb->floor_z, r->eye_z);
+        colf = pt_pattern_xor(cb_floor, wall);
+    }
     pt_clip cxf = {.r = r, .thead = th, .bhead = bh, .tmax = p->tmax, .bmin = p->bmin,
                    .role = ROLE_BOTTOM, .build = &childb, .cbfb = cbfb, .closed = &closed,
                    .vis = vs, .slot = PT_SLOT_FLOOR_BOUND};
-    for (uint8_t i = 0; i < nf; i++)
-        if (clamp_line(&fl[i], xa, xb))
-            clip_line(&cxf, &fl[i]);
+    clip_edge_line(&cxf, edge_line(&el, PT_SLOT_FLOOR_BOUND, hf, colf), hf, xa, xb);
 
+    pt_relh hc = ha_c;
+    pt_pattern colc = pt_pattern_xor(ca_ceil, cb_ceil);
+    if (cb->ceil_z > ca->ceil_z) {
+        hc = rel_h(cb->ceil_z, r->eye_z);
+        colc = pt_pattern_xor(wall, cb_ceil);
+    }
     pt_clip cxc = {.r = r, .thead = th, .bhead = childb.head, .tmax = p->tmax,
                    .bmin = childb.head ? childb.bmin : 0, .role = ROLE_TOP, .build = &childt,
                    .cbfb = cbfb, .closed = &closed, .vis = vs, .slot = PT_SLOT_CEIL_BOUND};
-    for (uint8_t i = 0; i < nc; i++)
-        if (clamp_line(&cl[i], xa, xb))
-            clip_line(&cxc, &cl[i]);
+    clip_edge_line(&cxc, edge_line(&el, PT_SLOT_CEIL_BOUND, hc, colc), hc, xa, xb);
 
     // 5. the child portal. Every portal opening is convex on screen (spec
     // 7.9.4), so the open columns form one interval and closed ranges only

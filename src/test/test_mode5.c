@@ -68,3 +68,24 @@ RC_TEST(mode5, dither_alignment)
     RC_CHECK(sl1[0 * 4 + 1], ==, (uint8_t)255);     // (0,1): green
     RC_CHECK(sl1[1 * 4 + 1], ==, (uint8_t)0);       // (1,1): red
 }
+
+RC_TEST(mode5, junk_rows)
+{
+    // rows just off the screen land in the junk character rows either side,
+    // leaving the screen itself untouched
+    static uint8_t mem[PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD];
+    uint8_t *fb = mem + PT_FB_GUARD;
+    pt_pattern red = pt_shade(PT_SH_RRRR);
+    for (uint8_t col = 0; col < PT_SCREEN_WIDTH; col++) {
+        pt_mode5_plot(fb, col, 0xFF, red);                                  // row -1
+        pt_mode5_plot(fb, col, (uint8_t)-PT_FB_GUARD_ROWS, red);            // the top junk row
+        pt_mode5_plot(fb, col, PT_SCREEN_HEIGHT, red);
+        pt_mode5_plot(fb, col, PT_SCREEN_HEIGHT + PT_FB_GUARD_ROWS - 1, red);    // the last
+    }
+    for (uint32_t i = 0; i < PT_FB_BYTES; i++)
+        RC_CHECK(fb[i], ==, (uint8_t)0);
+    RC_CHECK(mem[PT_FB_GUARD - 1], !=, (uint8_t)0);                        // row -1's odd scanline
+    RC_CHECK(mem[0], !=, (uint8_t)0);                                      // row -4's even scanline
+    RC_CHECK(mem[PT_FB_GUARD + PT_FB_BYTES], !=, (uint8_t)0);             // row H's even scanline
+    RC_CHECK(mem[sizeof mem - 1], !=, (uint8_t)0);                         // row H+3's odd scanline
+}

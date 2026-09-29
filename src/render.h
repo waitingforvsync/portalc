@@ -116,7 +116,9 @@ typedef struct pt_portal {
 
 typedef struct pt_render {
     const pt_map *map;
-    uint8_t fb[PT_FB_BYTES];
+    uint8_t fbmem[PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD];    // the back buffer, with the
+                                                               // junk rows either side
+    uint8_t *fb;             // the back buffer proper, within fbmem
 
     // camera for the frame being rendered
     uint16_t cam_x, cam_y;

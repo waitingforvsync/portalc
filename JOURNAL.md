@@ -996,3 +996,53 @@ excess is only rounding accumulated along a line. Plotted pieces fell
 from 19840 to 19028. The row-H flat pieces are mostly the root's bottom
 bound recoloured by merges, which still happen: 3087 of them, 102k
 columns, down from 3822 and 140k. 25/25 tests.
+
+## 2026-09-29 — plot() without bounds checks: junk rows either side
+
+plot() tested every column's row: a break once a descending line passed
+the bottom, and a clamp at row 0 on the rising side. With pieces now
+starting in 0..H, rows can only stray past the screen through rounding
+accumulated along a line: row 65 at worst over the sweep, nothing above
+row 0. Rich's fix: plot into junk. The back buffer is now `fbmem`, the
+screen (`fb`) with a 256-byte character row either side, canvas rows H..H+3
+below and -4..-1 above; a rising line's row wraps to 0xFF.., which
+pt_mode5_plot counts from the top junk row (on the 6502, row-to-address
+tables that cover those byte values). The junk is never displayed,
+cleared or filled; the fill still starts at row 0. The per-column checks
+are gone. The one test left is per piece: a piece at y0 = H whose
+gradient is not negative is wholly below the screen and skipped (3087
+pieces, 102k columns over the sweep, mostly the root's bottom bound
+recoloured by merges). Sweep byte-identical; a new test plots into both
+junk rows and checks the screen untouched; 26/26 tests.
+
+## 2026-09-29 — Shallow lines a byte at a time
+
+Rich's scheme for lines with |g| < 1, now plot_shallow: the gradient is
+one byte, the row a byte and a fraction, and the carry out of
+`fraction + gm` (the borrow, rising) is exactly the u8.8 row's step. A
+whole byte takes three steps, their carries forming a 3-bit index into
+eight "sprites" of up to four row masks (FF for a flat run of four;
+88 44 22 11 for a row per pixel); each mask row is EORed as `pattern AND
+mask` into its two scanlines through the new pt_mode5_plot_mask, and a
+fourth step's carry moves the row on for the next byte. Partial bytes at
+either end go a pixel at a time. Steep lines keep the per-column loop.
+
+Over the sweep shallow lines are 176k of the 180k sloped columns; flat
+ones (270k columns, 102k of them skipped below the screen) take the same
+path with index 0 every byte. Checked against the per-column DDA on 8.9M
+lines (every gradient byte, both directions, start rows near both screen
+edges and the middle, start columns at every alignment near both screen
+sides, every length the junk rows allow): no mismatch; sweep
+byte-identical; 26/26 tests.
+
+Then, at Rich's request, plot_shallow branched three ways, as the 6502
+will: falling (add, carry down), rising (subtract, borrow up) and flat.
+A flat line has no steps: whole bytes with mask FF on its one row, and
+the end bytes masked to the piece's pixels from two 4-entry tables
+(FF 77 33 11 from the first pixel, 88 CC EE FF to the last), combined when
+the piece lies in one byte. The 8.9M-line check and the sweep still
+match exactly; 26/26 tests.
+
+One 6502 refinement was floated and not taken into the C: branching on
+each carry into eight unrolled leaves instead of building the index (no
+dispatch, constant masks).

@@ -14,17 +14,24 @@ void pt_mode5_clear(uint8_t *fb)
     memset(fb, 0, PT_FB_BYTES);
 }
 
-void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat)
+void pt_mode5_plot_mask(uint8_t *fb, uint8_t bytecol, uint8_t row, uint8_t mask, pt_pattern pat)
 {
-    RC_ASSERT(col < PT_SCREEN_WIDTH && row < PT_SCREEN_HEIGHT);
+    // counted from the top junk row, which is one character row up
+    uint8_t grow = (uint8_t)(row + PT_FB_GUARD_ROWS);
+    RC_ASSERT(bytecol < PT_SCREEN_WIDTH / 4 && grow < PT_SCREEN_HEIGHT + 2 * PT_FB_GUARD_ROWS);
 
-    uint8_t mask = pixmask_[col & 3];
-    uint16_t off = pt_mode5_offset(col >> 2, (uint8_t)(row << 1));
+    int16_t off = (int16_t)(pt_mode5_offset(bytecol, (uint8_t)(grow << 1)) - PT_FB_GUARD);
 
     // An even scanline is never the last of its character cell, so the odd
     // partner is always at off + 1.
     fb[off] ^= pat.e & mask;
     fb[off + 1] ^= pat.o & mask;
+}
+
+void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat)
+{
+    RC_ASSERT(col < PT_SCREEN_WIDTH);
+    pt_mode5_plot_mask(fb, col >> 2, row, pixmask_[col & 3], pat);
 }
 
 void pt_mode5_fill(uint8_t *fb)

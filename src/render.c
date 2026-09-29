@@ -1259,36 +1259,147 @@ static void walk(pt_render *r, pt_portal p, uint8_t depth)
     }
 }
 
-// Plot every pool piece with a colour, one pixel pair per column: an
-// ascending and a descending loop, both pure unsigned DDA. Rows round to
-// nearest, the same convention every re-anchor uses: a piece split at a cut
-// then plots the same rows the unsplit line would have, so chain seams
-// cannot notch the boundary.
+// ---- plotting (spec 8.1) ----
+
+// The pixels of one byte of a shallow line (|g| < 1), by which of the three
+// steps inside the byte carried into the next row (bit 2 the step after the
+// leftmost pixel): the pixel mask of each row the byte touches, in order,
+// 0 after the last.
+static const uint8_t sprite_[8][4] = {
+    {0xFF},                      // all four pixels on one row
+    {0xEE, 0x11},
+    {0xCC, 0x33},
+    {0xCC, 0x22, 0x11},
+    {0x88, 0x77},
+    {0x88, 0x66, 0x11},
+    {0x88, 0x44, 0x33},
+    {0x88, 0x44, 0x22, 0x11},    // a row per pixel
+};
+
+// The pixels from p to the byte's right end, and from its left end to p.
+static const uint8_t mask_from_[4] = {0xFF, 0x77, 0x33, 0x11};
+static const uint8_t mask_to_[4] = {0x88, 0xCC, 0xEE, 0xFF};
+
+// One column's step of a falling line's row fraction: the carry, 1 when the
+// next column is a row down.
+static uint8_t carry_down(uint8_t *f, uint8_t gm)
+{
+    uint16_t s = (uint16_t)(*f + gm);
+    *f = (uint8_t)s;
+    return (uint8_t)(s >> 8);
+}
+
+// And a rising line's: the borrow, 1 when the next column is a row up.
+static uint8_t borrow_up(uint8_t *f, uint8_t gm)
+{
+    uint8_t b = *f < gm;
+    *f = (uint8_t)(*f - gm);
+    return b;
+}
+
+// A shallow line: its row moves by at most one per column, so it is kept as
+// a row byte and a fraction, and each step's carry out of the fraction says
+// whether the next column is a row on. Whole bytes go four pixels at a time:
+// the carries of the three steps inside the byte pick a sprite of up to four
+// row masks, and the fourth step's carry moves the row on for the next byte.
+// The partial bytes at either end go a pixel at a time. A flat line has no
+// steps: whole bytes on one row, the end bytes masked.
+static void plot_shallow(uint8_t *fb, const pt_piece *p, pt_pattern pat)
+{
+    uint8_t gm = (uint8_t)pt_g_mag(p->g);
+    uint8_t row = p->y0;
+    uint8_t f = 128;    // the rounding bias, as row_anchor
+    uint8_t c = p->x0;
+
+    if (gm == 0) {
+        uint8_t b0 = p->x0 >> 2;
+        uint8_t b1 = (uint8_t)(p->x1 - 1) >> 2;
+        uint8_t m0 = mask_from_[p->x0 & 3];
+        uint8_t m1 = mask_to_[(p->x1 - 1) & 3];
+        if (b0 == b1) {
+            pt_mode5_plot_mask(fb, b0, row, m0 & m1, pat);
+            return;
+        }
+        pt_mode5_plot_mask(fb, b0, row, m0, pat);
+        for (uint8_t b = (uint8_t)(b0 + 1); b < b1; b++)
+            pt_mode5_plot_mask(fb, b, row, 0xFF, pat);
+        pt_mode5_plot_mask(fb, b1, row, m1, pat);
+    } else if (!pt_g_isneg(p->g)) {
+        for (; (c & 3) != 0 && c < p->x1; c++) {
+            pt_mode5_plot(fb, c, row, pat);
+            row = (uint8_t)(row + carry_down(&f, gm));
+        }
+        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4)) {
+            uint8_t i = carry_down(&f, gm);
+            i = (uint8_t)((i << 1) | carry_down(&f, gm));
+            i = (uint8_t)((i << 1) | carry_down(&f, gm));
+            const uint8_t *sp = sprite_[i];
+            pt_mode5_plot_mask(fb, c >> 2, row, sp[0], pat);
+            for (uint8_t k = 1; k < 4 && sp[k]; k++)
+                pt_mode5_plot_mask(fb, c >> 2, ++row, sp[k], pat);
+            row = (uint8_t)(row + carry_down(&f, gm));
+        }
+        for (; c < p->x1; c++) {
+            pt_mode5_plot(fb, c, row, pat);
+            row = (uint8_t)(row + carry_down(&f, gm));
+        }
+    } else {
+        for (; (c & 3) != 0 && c < p->x1; c++) {
+            pt_mode5_plot(fb, c, row, pat);
+            row = (uint8_t)(row - borrow_up(&f, gm));
+        }
+        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4)) {
+            uint8_t i = borrow_up(&f, gm);
+            i = (uint8_t)((i << 1) | borrow_up(&f, gm));
+            i = (uint8_t)((i << 1) | borrow_up(&f, gm));
+            const uint8_t *sp = sprite_[i];
+            pt_mode5_plot_mask(fb, c >> 2, row, sp[0], pat);
+            for (uint8_t k = 1; k < 4 && sp[k]; k++)
+                pt_mode5_plot_mask(fb, c >> 2, --row, sp[k], pat);
+            row = (uint8_t)(row - borrow_up(&f, gm));
+        }
+        for (; c < p->x1; c++) {
+            pt_mode5_plot(fb, c, row, pat);
+            row = (uint8_t)(row - borrow_up(&f, gm));
+        }
+    }
+}
+
+// Plot every pool piece with a colour: shallow lines (|g| < 1) a byte at a
+// time, steep ones a pixel pair per column, falling or rising, both pure
+// unsigned DDA. Rows round to nearest, the same convention every re-anchor
+// uses: a piece split at a cut then plots the same rows the unsplit line
+// would have, so chain seams cannot notch the boundary. Nothing is bounds
+// checked: pieces start on the screen or at its bottom edge, and the
+// rounding accumulated along a line carries it at most a row or so past the
+// top or bottom, into the junk rows (a row above the top wraps to 0xFF..).
+// A piece starting on the bottom edge that does not rise is wholly below
+// the screen, and skipped.
 static void plot(pt_render *r)
 {
     for (uint16_t i = 1; i < r->pool_num; i++) {
         const pt_piece *p = &r->pool[i];
         if ((uint8_t)(p->ce | p->co) == 0)
             continue;
+        if (p->y0 >= PT_SCREEN_HEIGHT && !pt_g_isneg(p->g))
+            continue;
         pt_pattern pat = {.e = p->ce, .o = p->co};
+        uint16_t gm = pt_g_mag(p->g);
+        if (gm < 0x100) {
+            plot_shallow(r->fb, p, pat);
+            continue;
+        }
         // rounding bias folded in once: the row is then just the high byte
         uint16_t y = row_anchor(p->y0);
-        uint16_t gm = pt_g_mag(p->g);
         if (!pt_g_isneg(p->g)) {
             for (uint8_t c = p->x0; c < p->x1; c++) {
-                uint8_t row = (uint8_t)(y >> 8);
-                if (row >= PT_SCREEN_HEIGHT)
-                    break;    // rows only grow; the rest is below the screen
-                pt_mode5_plot(r->fb, c, row, pat);
-                y = (uint16_t)(y + gm);    // row < 64 here, so no wrap
+                pt_mode5_plot(r->fb, c, (uint8_t)(y >> 8), pat);
+                y = (uint16_t)(y + gm);
             }
         } else {
             for (uint8_t c = p->x0; c < p->x1; c++) {
-                uint8_t row = (uint8_t)(y >> 8);
-                if (row < PT_SCREEN_HEIGHT)
-                    pt_mode5_plot(r->fb, c, row, pat);
-                // clamp at the screen top: the toggle stays live at row 0
-                y = gm > y ? 0 : (uint16_t)(y - gm);
+                pt_mode5_plot(r->fb, c, (uint8_t)(y >> 8), pat);
+                y = (uint16_t)(y - gm);
             }
         }
     }
@@ -1298,6 +1409,7 @@ void pt_render_init(pt_render *r, const pt_map *m)
 {
     *r = (pt_render) {0};
     r->map = m;
+    r->fb = r->fbmem + PT_FB_GUARD;
 }
 
 void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle, uint8_t cell)

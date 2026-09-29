@@ -139,7 +139,7 @@ vertex between them and therefore partition the columns exactly.
 | Clip parameter `t`             | u0.8                 | `[0, 1)`; 1.0 cannot occur in the clips of §7.6/§7.7   |
 | `1/n`                          | u16 + shift count    | Normalised                                             |
 | `sx`, column                   | u8                   | `0..128`; a u8.8 form is used once, in §7.7            |
-| `sy`, `y0`                     | u8                   | `0..H−1` plotted; `H` marks an off-screen piece        |
+| `sy`, `y0`                     | u8                   | `0..H`; a piece at `H` that does not rise is off screen |
 | Gradient `g`                   | sign + u6.8          | `|g| < 64` once `dx ≥ 2`; `dx = 1` never uses `g`       |
 | Line evaluation `y(c)`         | u8.8 (transient)     | `y0 + (c − x0)·g`                                       |
 | Crossing quotient (§7.9)       | u7 columns, clamped  |                                                        |
@@ -231,7 +231,7 @@ render_frame():
     walk(cell=camera_cell, x=0, xr=128, T=rootT, B=rootB, start=first_edge_camera())
                                    // recursive: a child is walked before its parent carries on
                                    // entering a portal records sprite clip pieces (§9.3), leaving it issues sprites (§9.4)
-    plot every pool piece with colour != 0 and y0 < H
+    plot every pool piece with colour != 0, except those at y0 = H with g ≥ 0
     sprite_pass()                  // §9.5: reads the plotted toggles, adds sprite toggles and cancels
     fill (even pass, odd pass)
 ```
@@ -839,18 +839,46 @@ could meet the next wall a row off where the extended piece joins it exactly.
 
 ### 8.1 Plotting lines
 
-Iterate the pool; skip pieces with `colour == 0`, and rising pieces with `y0 ≥ H`
-(a falling piece starting at H comes on screen where its row drops under H − ½).
-The plotted row is the **nearest** row, `(y + 0x80) >> 8` — the same convention as
-every re-anchor (§6 split, §7.9 emit), so a piece split at a cut plots exactly the
-rows the unsplit line would have and a chain seam cannot notch the boundary; a
-toggle that rounds past the screen top still clamps to row 0. Branch on direction
-(up/down) and on `|g| ≤ 2` versus `> 2`:
+Iterate the pool; skip pieces with `colour == 0`, and pieces at `y0 = H` whose
+gradient is not negative: they are wholly below the screen (one that rises comes on
+screen where its row drops under H − ½). The plotted row is the **nearest** row,
+`(y + 0x80) >> 8` — the same convention as every re-anchor (§6 split, §7.9 emit), so
+a piece split at a cut plots exactly the rows the unsplit line would have and a chain
+seam cannot notch the boundary.
 
-- Steep lines: one pixel pair per column, `y += g`.
-- Shallow lines: add the gradient three times, rotating the overflow bits into an
-  index selecting a byte-pattern "sprite" for the 4 pixel columns of the byte, so a
-  whole byte is plotted at a time. (Existing 6502 implementation.)
+Nothing is bounds checked. Every piece starts in `0..H`, but the rounding accumulated
+along a line can carry it a row past the top or bottom (row 65 at worst over the
+sweep, nothing above row 0). The back buffer therefore has a junk character row either
+side (§8.3), canvas rows `H..H+3` below and `−4..−1` above (the row byte wraps to
+`0xFC..0xFF`, so the row-to-address tables simply cover those values). Toggles there
+are never displayed or filled; the fill starts at row 0 as always. Branch on direction
+(falling or rising) and on `|g| < 1` or not:
+
+- Steep lines (`|g| ≥ 1`): one pixel pair per column, `y ± g` in u8.8.
+- Shallow lines (`|g| < 1`, the gradient one byte): the row moves at most one per
+  column, so the row is a byte and a fraction, and the carry (borrow, rising) out of
+  `fraction ± g` says whether the next column is a row on. A whole byte of the line
+  takes three steps inside the byte, their carries shifted into a 3-bit index (the
+  first step highest), which selects a byte "sprite": the pixel mask of each row the
+  byte touches, in turn:
+
+  ```
+  000 FF             100 88 77
+  001 EE 11          101 88 66 11
+  010 CC 33          110 88 44 33
+  011 CC 22 11       111 88 44 22 11
+  ```
+
+  Each mask row is EORed as `pattern AND mask` into the row's two scanlines, moving
+  a row (down falling, up rising) between masks; a fourth step's carry moves the row
+  on for the next byte. The partial bytes at either end of the piece go a pixel at a
+  time with the same step. The pixels are exactly the steep loop's: the carry out of
+  the fraction byte is the u8.8 row's increment. Falling and rising lines are separate
+  branches (add and carry down, subtract and borrow up).
+- Flat lines (`g = 0`), a third branch: no steps at all, whole bytes on the one row
+  with mask `FF`, the end bytes masked to the piece's pixels (`FF 77 33 11` from the
+  first pixel's position in its byte, `88 CC EE FF` up to the last's; both at once
+  when the piece lies within one byte).
 
 Each plot writes rows `y` and `y+1` with `E` on the even row and `O` on the odd row.
 
@@ -862,7 +890,8 @@ About 9 cycles per byte, roughly 18 ms for 4K; the two passes do not change the 
 ### 8.3 Buffers and clearing
 
 In-place for now: plot into the back buffer, fill in place, clear it for the next
-frame (about 10 ms for 4K). A separate 4K line buffer, cleared by re-plotting the
+frame (about 10 ms for 4K). The buffer has a 256-byte junk character row above and
+below it for plot overruns (§8.1); they are never cleared, filled or displayed. A separate 4K line buffer, cleared by re-plotting the
 frame's pieces with EOR, would likely save 5 ms or more per frame and can be adopted
 later without changing the capture.
 

@@ -882,6 +882,21 @@ are never displayed or filled; the fill starts at row 0 as always. Branch on dir
 
 Each plot writes rows `y` and `y+1` with `E` on the even row and `O` on the odd row.
 
+The screen is addressed as the 6502 does, `EOR (blk),Y : STA (blk),Y`: `blk` in zero
+page holds a character block's address (256 bytes per character row, 8 per byte
+column) and `Y` the canvas row's even scanline within the block, `0, 2, 4, 6`, its odd
+partner at `Y + 1`. A piece places the cursor once, at its first pixel (row-indexed
+tables give the character row's address and `Y`; the byte column adds `8·bc`), and
+then only moves it:
+
+- a row down: `Y += 2`, and on reaching 8, `Y = 0` and `blk += 256`;
+- a row up: at `Y = 0`, `Y = 8` and `blk −= 256`; then `Y −= 2`;
+- a byte right: `blk += 8`;
+- a pixel right: the mask shifts right (`LSR`), and past the byte's last pixel it
+  resets to `88` with `blk += 8`.
+
+A steep line moves its whole rows per column one at a time, as a shallow one does.
+
 ### 8.2 Fill
 
 Two passes (even rows, odd rows), column-major, unrolled `EOR row,X : STA row,X`.

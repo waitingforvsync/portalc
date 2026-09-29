@@ -1046,3 +1046,33 @@ match exactly; 26/26 tests.
 One 6502 refinement was floated and not taken into the C: branching on
 each carry into eight unrolled leaves instead of building the index (no
 dispatch, constant masks).
+
+## 2026-09-29 — The plotter addresses the screen as the 6502 will
+
+Rich asked for the line plotter to be phrased as `STA (zp),Y` access: a
+character block's address plus the scanline in Y, moving Y to reach
+neighbouring rows and amending the address at block crossings. (The
+buffer was already in BBC character-block order: pt_mode5_offset is
+`(scanline & 0xF8) << 5 | bytecol << 3 | scanline & 7`, 256 bytes a
+character row, 8 a block.)
+
+mode5.h now has the cursor, pt_mode5_cur: `blk`, the block's address
+relative to the screen's first byte (negative in the top junk row, and
+only dereferenced by a plot, so a cursor stepped past the ends is just a
+number), and `y`, the canvas row's even scanline 0/2/4/6. pt_mode5_at
+places it (on the 6502, row-indexed tables for the character row and Y,
+plus bytecol * 8); pt_mode5_eor EORs E into Y and O into Y + 1;
+pt_mode5_down and pt_mode5_up move a row, crossing to the next or previous
+character row at a block's edge; pt_mode5_next moves a byte right, and
+pt_mode5_right a pixel (the mask shifted, reset to 88 with a byte step
+past the last pixel). Each piece places the cursor once and then only
+moves it. plot_shallow's three branches and the new plot_steep (whole
+rows a row at a time, plus the fraction's carry) are written in these
+terms; pt_mode5_plot_mask is gone and pt_mode5_plot is two calls, for
+the tests.
+
+Checked against the per-column DDA through pt_mode5_plot on 18.2M lines
+(every shallow gradient, steep ones up to 4 rows a column exhaustively
+and sampled beyond, both directions, start rows near both screen edges,
+start columns at every alignment near both sides, every length the junk
+rows allow): no mismatch. Sweep byte-identical; 26/26 tests.

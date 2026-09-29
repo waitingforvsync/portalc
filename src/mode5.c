@@ -6,32 +6,15 @@
 
 #include "richc/macros.h"
 
-// The two bits of pixel p within a MODE 5 byte.
-static const uint8_t pixmask_[4] = {0x88, 0x44, 0x22, 0x11};
-
 void pt_mode5_clear(uint8_t *fb)
 {
     memset(fb, 0, PT_FB_BYTES);
 }
 
-void pt_mode5_plot_mask(uint8_t *fb, uint8_t bytecol, uint8_t row, uint8_t mask, pt_pattern pat)
-{
-    // counted from the top junk row, which is one character row up
-    uint8_t grow = (uint8_t)(row + PT_FB_GUARD_ROWS);
-    RC_ASSERT(bytecol < PT_SCREEN_WIDTH / 4 && grow < PT_SCREEN_HEIGHT + 2 * PT_FB_GUARD_ROWS);
-
-    int16_t off = (int16_t)(pt_mode5_offset(bytecol, (uint8_t)(grow << 1)) - PT_FB_GUARD);
-
-    // An even scanline is never the last of its character cell, so the odd
-    // partner is always at off + 1.
-    fb[off] ^= pat.e & mask;
-    fb[off + 1] ^= pat.o & mask;
-}
-
 void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat)
 {
     RC_ASSERT(col < PT_SCREEN_WIDTH);
-    pt_mode5_plot_mask(fb, col >> 2, row, pixmask_[col & 3], pat);
+    pt_mode5_eor(fb, pt_mode5_at(col >> 2, row), pt_mode5_pixmask(col), pat);
 }
 
 void pt_mode5_fill(uint8_t *fb)

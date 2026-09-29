@@ -1297,6 +1297,11 @@ static uint8_t borrow_up(uint8_t *f, uint8_t gm)
     return b;
 }
 
+// The lines are plotted as the 6502 will, through a screen cursor (a
+// character block's address and Y, pt_mode5_cur) placed once at the piece's
+// first pixel and then only moved: a row down or up (Y by two, a character
+// row on at a block's edge), a byte right, or a pixel right (the mask).
+
 // A shallow line: its row moves by at most one per column, so it is kept as
 // a row byte and a fraction, and each step's carry out of the fraction says
 // whether the next column is a row on. Whole bytes go four pixels at a time:
@@ -1307,60 +1312,106 @@ static uint8_t borrow_up(uint8_t *f, uint8_t gm)
 static void plot_shallow(uint8_t *fb, const pt_piece *p, pt_pattern pat)
 {
     uint8_t gm = (uint8_t)pt_g_mag(p->g);
-    uint8_t row = p->y0;
+    pt_mode5_cur cur = pt_mode5_at(p->x0 >> 2, p->y0);
+    uint8_t mask = pt_mode5_pixmask(p->x0);
     uint8_t f = 128;    // the rounding bias, as row_anchor
     uint8_t c = p->x0;
 
     if (gm == 0) {
-        uint8_t b0 = p->x0 >> 2;
-        uint8_t b1 = (uint8_t)(p->x1 - 1) >> 2;
+        uint8_t n = (uint8_t)(((uint8_t)(p->x1 - 1) >> 2) - (p->x0 >> 2));    // bytes after the first
         uint8_t m0 = mask_from_[p->x0 & 3];
         uint8_t m1 = mask_to_[(p->x1 - 1) & 3];
-        if (b0 == b1) {
-            pt_mode5_plot_mask(fb, b0, row, m0 & m1, pat);
+        if (n == 0) {
+            pt_mode5_eor(fb, cur, m0 & m1, pat);
             return;
         }
-        pt_mode5_plot_mask(fb, b0, row, m0, pat);
-        for (uint8_t b = (uint8_t)(b0 + 1); b < b1; b++)
-            pt_mode5_plot_mask(fb, b, row, 0xFF, pat);
-        pt_mode5_plot_mask(fb, b1, row, m1, pat);
+        pt_mode5_eor(fb, cur, m0, pat);
+        while (--n) {
+            pt_mode5_next(&cur);
+            pt_mode5_eor(fb, cur, 0xFF, pat);
+        }
+        pt_mode5_next(&cur);
+        pt_mode5_eor(fb, cur, m1, pat);
     } else if (!pt_g_isneg(p->g)) {
         for (; (c & 3) != 0 && c < p->x1; c++) {
-            pt_mode5_plot(fb, c, row, pat);
-            row = (uint8_t)(row + carry_down(&f, gm));
+            pt_mode5_eor(fb, cur, mask, pat);
+            if (carry_down(&f, gm))
+                pt_mode5_down(&cur);
+            pt_mode5_right(&cur, &mask);
         }
         for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4)) {
             uint8_t i = carry_down(&f, gm);
             i = (uint8_t)((i << 1) | carry_down(&f, gm));
             i = (uint8_t)((i << 1) | carry_down(&f, gm));
             const uint8_t *sp = sprite_[i];
-            pt_mode5_plot_mask(fb, c >> 2, row, sp[0], pat);
-            for (uint8_t k = 1; k < 4 && sp[k]; k++)
-                pt_mode5_plot_mask(fb, c >> 2, ++row, sp[k], pat);
-            row = (uint8_t)(row + carry_down(&f, gm));
+            pt_mode5_eor(fb, cur, sp[0], pat);
+            for (uint8_t k = 1; k < 4 && sp[k]; k++) {
+                pt_mode5_down(&cur);
+                pt_mode5_eor(fb, cur, sp[k], pat);
+            }
+            if (carry_down(&f, gm))
+                pt_mode5_down(&cur);
+            pt_mode5_next(&cur);
         }
         for (; c < p->x1; c++) {
-            pt_mode5_plot(fb, c, row, pat);
-            row = (uint8_t)(row + carry_down(&f, gm));
+            pt_mode5_eor(fb, cur, mask, pat);
+            if (carry_down(&f, gm))
+                pt_mode5_down(&cur);
+            pt_mode5_right(&cur, &mask);
         }
     } else {
         for (; (c & 3) != 0 && c < p->x1; c++) {
-            pt_mode5_plot(fb, c, row, pat);
-            row = (uint8_t)(row - borrow_up(&f, gm));
+            pt_mode5_eor(fb, cur, mask, pat);
+            if (borrow_up(&f, gm))
+                pt_mode5_up(&cur);
+            pt_mode5_right(&cur, &mask);
         }
         for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4)) {
             uint8_t i = borrow_up(&f, gm);
             i = (uint8_t)((i << 1) | borrow_up(&f, gm));
             i = (uint8_t)((i << 1) | borrow_up(&f, gm));
             const uint8_t *sp = sprite_[i];
-            pt_mode5_plot_mask(fb, c >> 2, row, sp[0], pat);
-            for (uint8_t k = 1; k < 4 && sp[k]; k++)
-                pt_mode5_plot_mask(fb, c >> 2, --row, sp[k], pat);
-            row = (uint8_t)(row - borrow_up(&f, gm));
+            pt_mode5_eor(fb, cur, sp[0], pat);
+            for (uint8_t k = 1; k < 4 && sp[k]; k++) {
+                pt_mode5_up(&cur);
+                pt_mode5_eor(fb, cur, sp[k], pat);
+            }
+            if (borrow_up(&f, gm))
+                pt_mode5_up(&cur);
+            pt_mode5_next(&cur);
         }
         for (; c < p->x1; c++) {
-            pt_mode5_plot(fb, c, row, pat);
-            row = (uint8_t)(row - borrow_up(&f, gm));
+            pt_mode5_eor(fb, cur, mask, pat);
+            if (borrow_up(&f, gm))
+                pt_mode5_up(&cur);
+            pt_mode5_right(&cur, &mask);
+        }
+    }
+}
+
+// A steep line (|g| >= 1): a pixel pair per column, the row moving on by
+// the gradient's whole rows plus the fraction's carry, a row at a time.
+static void plot_steep(uint8_t *fb, const pt_piece *p, pt_pattern pat)
+{
+    uint8_t gi = (uint8_t)(pt_g_mag(p->g) >> 8);
+    uint8_t gf = (uint8_t)pt_g_mag(p->g);
+    pt_mode5_cur cur = pt_mode5_at(p->x0 >> 2, p->y0);
+    uint8_t mask = pt_mode5_pixmask(p->x0);
+    uint8_t f = 128;    // the rounding bias, as row_anchor
+
+    if (!pt_g_isneg(p->g)) {
+        for (uint8_t c = p->x0; c < p->x1; c++) {
+            pt_mode5_eor(fb, cur, mask, pat);
+            for (uint8_t n = (uint8_t)(gi + carry_down(&f, gf)); n != 0; n--)
+                pt_mode5_down(&cur);
+            pt_mode5_right(&cur, &mask);
+        }
+    } else {
+        for (uint8_t c = p->x0; c < p->x1; c++) {
+            pt_mode5_eor(fb, cur, mask, pat);
+            for (uint8_t n = (uint8_t)(gi + borrow_up(&f, gf)); n != 0; n--)
+                pt_mode5_up(&cur);
+            pt_mode5_right(&cur, &mask);
         }
     }
 }
@@ -1372,9 +1423,8 @@ static void plot_shallow(uint8_t *fb, const pt_piece *p, pt_pattern pat)
 // would have, so chain seams cannot notch the boundary. Nothing is bounds
 // checked: pieces start on the screen or at its bottom edge, and the
 // rounding accumulated along a line carries it at most a row or so past the
-// top or bottom, into the junk rows (a row above the top wraps to 0xFF..).
-// A piece starting on the bottom edge that does not rise is wholly below
-// the screen, and skipped.
+// top or bottom, into the junk rows. A piece starting on the bottom edge
+// that does not rise is wholly below the screen, and skipped.
 static void plot(pt_render *r)
 {
     for (uint16_t i = 1; i < r->pool_num; i++) {
@@ -1384,24 +1434,10 @@ static void plot(pt_render *r)
         if (p->y0 >= PT_SCREEN_HEIGHT && !pt_g_isneg(p->g))
             continue;
         pt_pattern pat = {.e = p->ce, .o = p->co};
-        uint16_t gm = pt_g_mag(p->g);
-        if (gm < 0x100) {
+        if (pt_g_mag(p->g) < 0x100)
             plot_shallow(r->fb, p, pat);
-            continue;
-        }
-        // rounding bias folded in once: the row is then just the high byte
-        uint16_t y = row_anchor(p->y0);
-        if (!pt_g_isneg(p->g)) {
-            for (uint8_t c = p->x0; c < p->x1; c++) {
-                pt_mode5_plot(r->fb, c, (uint8_t)(y >> 8), pat);
-                y = (uint16_t)(y + gm);
-            }
-        } else {
-            for (uint8_t c = p->x0; c < p->x1; c++) {
-                pt_mode5_plot(r->fb, c, (uint8_t)(y >> 8), pat);
-                y = (uint16_t)(y - gm);
-            }
-        }
+        else
+            plot_steep(r->fb, p, pat);
     }
 }
 

@@ -858,9 +858,9 @@ are never displayed or filled; the fill starts at row 0 as always. Branch on dir
 - Shallow lines (`|g| < 1`, the gradient one byte): the row moves at most one per
   column, so the row is a byte and a fraction, and the carry (borrow, rising) out of
   `fraction ± g` says whether the next column is a row on. A whole byte of the line
-  takes three steps inside the byte, their carries shifted into a 3-bit index (the
-  first step highest), which selects a byte "sprite": the pixel mask of each row the
-  byte touches, in turn:
+  takes three steps inside the byte, and branches on each carry in turn (the step
+  after the leftmost pixel first) into one of eight fixed routines, each plotting the
+  byte's rows with its masks as constants:
 
   ```
   000 FF             100 88 77
@@ -869,16 +869,22 @@ are never displayed or filled; the fill starts at row 0 as always. Branch on dir
   011 CC 22 11       111 88 44 22 11
   ```
 
-  Each mask row is EORed as `pattern AND mask` into the row's two scanlines, moving
-  a row (down falling, up rising) between masks; a fourth step's carry moves the row
-  on for the next byte. The partial bytes at either end of the piece go a pixel at a
-  time with the same step. The pixels are exactly the steep loop's: the carry out of
-  the fraction byte is the u8.8 row's increment. Falling and rising lines are separate
-  branches (add and carry down, subtract and borrow up).
+  Each mask row is EORed as `pattern AND mask` into the row's two scanlines (`FF`
+  needs no `AND`), moving a row (down falling, up rising) between masks; a fourth
+  step's carry moves the row on for the next byte. On the 6502 the routine takes that
+  fourth step first and carries it through the plotting in C, and each step's add
+  uses `g` or `g − 1` as the known carry-in requires, so the loop has no `CLC`. The
+  partial bytes at either end of the piece go a pixel at a time with the same step.
+  The pixels are exactly the steep loop's: the carry out of the fraction byte is the
+  u8.8 row's increment. Falling and rising lines are separate branches (add and carry
+  down, subtract and borrow up).
 - Flat lines (`g = 0`), a third branch: no steps at all, whole bytes on the one row
   with mask `FF`, the end bytes masked to the piece's pixels (`FF 77 33 11` from the
   first pixel's position in its byte, `88 CC EE FF` up to the last's; both at once
-  when the piece lies within one byte).
+  when the piece lies within one byte). Through the tree a flat byte would still take
+  its four steps (77 cycles against about 48), and its end bytes would go a pixel at a
+  time; flat lines are the commonest kind, so the branch saves over 1,000 cycles a
+  frame.
 
 Each plot writes rows `y` and `y+1` with `E` on the even row and `O` on the odd row.
 

@@ -1076,3 +1076,489 @@ Checked against the per-column DDA through pt_mode5_plot on 18.2M lines
 and sampled beyond, both directions, start rows near both screen edges,
 start columns at every alignment near both sides, every length the junk
 rows allow): no mismatch. Sweep byte-identical; 26/26 tests.
+
+## 2026-09-29 — Sketch: shallow lines in 6502, a branch per carry
+
+Rich asked what plot_shallow's whole-byte loop would look like on the
+6502 if the three carries were not built into an index but branched on
+directly, into eight hardcoded routines. The sketch below is the falling
+direction in Baron. It assembles to 576 bytes, and the Python 6502
+interpreter from the reciprocal sketch (extended with the few opcodes it
+lacked) checked it on 187783 calls from random start states (every
+alignment of row and block, any fraction, 1 to 32 bytes, gradients
+biased both gentle and steep) against a pixel-by-pixel reference: screen
+bytes, fraction, Y and block address all matching. The only mismatches
+the first run reported were the harness's own: past the last byte column
+the block's low byte wraps without a carry, which is harmless because
+the line has ended. Source and harness are in scratch (`shallow.6502`,
+`shallow_run.py`), not the repo.
+
+The screen is addressed as in the C plotter: `blk` in zero page holds
+the character block's address, `Y` the scanline within it.
+
+```
+blk = &70                               ; the character block's address, for (blk),Y
+frac = &72                              ; the row's fraction
+gm = &73                                ; the gradient, 1..255
+gmm1 = &74                              ; gm - 1: what ADC adds with the carry set
+pe = &75 : po = &76                     ; the even and odd scanline patterns
+count = &77                             ; whole bytes to plot
+
+; EOR the patterns under a mask into the row at Y (its even scanline),
+; leaving Y on its odd scanline. The flags are untouched: C carries through.
+MACRO ROW mask
+    LDA pe : AND #mask : EOR (blk),Y : STA (blk),Y
+    INY
+    LDA po : AND #mask : EOR (blk),Y : STA (blk),Y
+ENDMACRO
+
+MACRO ROWFF
+    LDA pe : EOR (blk),Y : STA (blk),Y
+    INY
+    LDA po : EOR (blk),Y : STA (blk),Y
+ENDMACRO
+
+; From a row's odd scanline to the next row's even one: Y + 1, and at the
+; block's end the top of the block below, a character row on. C untouched.
+MACRO DOWN
+    INY
+    TYA : AND #7 : BNE @+
+    TAY                                 ; Y = 0
+    INC blk+1
+.@
+ENDMACRO
+```
+
+The loop. The tree's three levels are the three steps inside the byte;
+each leaf takes the fourth step, then plots its rows with the masks as
+constants.
+
+```
+\\ in: blk, Y = the row's even scanline, frac, gm, gmm1, pe, po, count >= 1
+\\ out: blk, Y, frac at the next byte
+.shallow_down
+{
+    CLC
+    BCC byte
+
+.tail                                   ; Y on the last row's odd scanline, C = the 4th step's carry
+    BCS down
+    DEY                                 ; the next byte starts on this row
+    LDA blk : ADC #8 : STA blk          ; the next block (C clear, and left clear)
+    DEC count : BNE byte
+    RTS
+.down
+    DOWN                                ; the next byte starts a row down
+    LDA blk : ADC #7 : STA blk          ; + 8 with the carry, which it clears
+    DEC count : BNE byte
+    RTS
+
+.byte                                   ; C = 0
+    LDA frac
+    ADC gm : BCS t1                     ; step 1: carry, pixel 1 is a row down
+    ADC gm : BCS t01                    ; step 2
+    ADC gm : BCS c001                   ; step 3
+    ADC gm : STA frac                   ; 000; step 4
+    ROWFF
+    JMP tail
+.t1 JMP c1                              ; out of branch range
+.t01 JMP c01
+.c001
+    ADC gmm1 : STA frac                 ; C set: + gm
+    ROW &EE : DOWN : ROW &11
+    JMP tail
+.c01
+    ADC gmm1 : BCS c011
+    ADC gm : STA frac                   ; 010
+    ROW &CC : DOWN : ROW &33
+    JMP tail
+.c011
+    ADC gmm1 : STA frac
+    ROW &CC : DOWN : ROW &22 : DOWN : ROW &11
+    JMP tail
+.c1
+    ADC gmm1 : BCS t11
+    ADC gm : BCS c101
+    ADC gm : STA frac                   ; 100
+    ROW &88 : DOWN : ROW &77
+    JMP tail
+.t11 JMP c11
+.c101
+    ADC gmm1 : STA frac
+    ROW &88 : DOWN : ROW &66 : DOWN : ROW &11
+    JMP tail
+.c11
+    ADC gmm1 : BCS c111
+    ADC gm : STA frac                   ; 110
+    ROW &88 : DOWN : ROW &44 : DOWN : ROW &33
+    JMP tail
+.c111
+    ADC gmm1 : STA frac
+    ROW &88 : DOWN : ROW &44 : DOWN : ROW &22 : DOWN : ROW &11
+    JMP tail
+}
+```
+
+What makes it work:
+
+- **The carry is always known.** Every point in the tree is reached by a
+  known branch, so each step's carry-in is known too: with it clear the
+  step adds `gm`, with it set `gm - 1`, which gives the same sum and the
+  same carry out. So there is no `CLC` inside the loop.
+- **The fourth step's carry survives the plotting.** A leaf takes that
+  step before plotting, and nothing in `ROW` or `DOWN` touches C. That is
+  why `DOWN` finds the block's edge with `TYA : AND #7` rather than
+  `CPY #8`.
+- **Stepping to the next block leaves C clear.** It adds 8 with C clear
+  or 7 with C set; neither overflows, since the block's low byte is at
+  most 248, so the next byte starts with C clear.
+- **Y alternates between a row's two scanlines.** A row is plotted even
+  scanline first and ends on its odd one. Moving down is then a single
+  `INY`, and staying on the row a `DEY`.
+- **Three trampolines.** The leaves are 20 to 100 bytes each, so three
+  branches cannot reach their targets and go through a `JMP` (3 cycles).
+  They are all on paths that start with a carry, which are rare for
+  gentle slopes. The loop's tail code sits ahead of the tree so that
+  `BNE byte` stays in range.
+- **Some patterns cannot occur.** For example 001 followed by a step
+  down would need `gm` both below and above 128.
+
+Measured per byte inside the loop:
+
+| Byte | Cycles |
+|---|---|
+| 000, next byte on the same row | 77 (about 19 a pixel) |
+| one row change in the byte (001, 010, 100) | 125-128 |
+| two (011, 101, 110) | 172-175 |
+| three (111) | 219 |
+| next byte a row down | +8 |
+| each character-block crossing | +6 |
+
+A row with a mask costs 34 cycles and one with FF 30; each `DOWN` 9.
+Patching `gm`, `gmm1`, `pe` and `po` into the code as immediates would
+save another 4 to 6 cycles a byte.
+
+The alternative, building the 3-bit index, costs three `ROL idx` (5
+cycles each) after the adds, clearing the index, and a dispatch through
+a jump table (NMOS has no `JMP (abs,X)`, so it is loads and a patched
+`JMP`, about 20 cycles): about 36 cycles a byte more than the tree's 15
+cycles of branching, close to half the cost of a flat byte.
+
+The rising direction is the mirror. It starts with `SEC` and uses
+`SBC`, branching on `BCC` for a borrow; with C clear, `SBC gmm1`
+subtracts `gm`. `ROW` plots the odd scanline first and ends on the even
+one, so moving up is a `DEY` to the odd scanline of the row above, with
+a `BPL` check that wraps to `LDY #7 : DEC blk+1`. Both directions
+together come to about 1.2K.
+
+## 2026-09-30 — Shallow lines in 6502: table-driven, carry constraints, and a counter
+
+Three follow-ups to the branch-tree sketch, each written in Baron and
+measured in the same 6502 interpreter. Sources and harnesses are in
+scratch (`sprite.6502`, `counter.6502` and their `_run.py` files), not the
+repo.
+
+### Row masks from tables
+
+Rich asked how the tree compares with plotting from per-pattern "sprite
+data" ended by a zero. The loop builds the 3-bit index from the carries,
+then reads one table per row (`spr0` to `spr3`, 8 masks each, 0 after a
+pattern's last row):
+
+```
+.byte                                   ; C = 0
+    LDA #0 : STA idx
+    LDA frac
+    ADC gm : ROL idx                    ; the carry into the index; ROL's own carry out is 0
+    ADC gm : ROL idx
+    ADC gm : ROL idx
+    ADC gm : STA frac                   ; step 4: C kept through the rows
+    LDX idx
+    LDA spr0,X : STA m : ROWM
+    LDA spr1,X : BEQ tail
+    STA m : DOWN : ROWM
+    LDA spr2,X : BNE more               ; rows 3 and 4 out of line, keeping BNE byte in range
+.tail
+    ...                                 ; as in the tree version
+```
+
+It matches the pixel reference on the same 187783 calls, and is 215
+bytes against the tree's 576. Per byte inside the loop:
+
+| Byte | Tree | Table |
+|---|---|---|
+| 000 | 77 | 111 |
+| one row change | 125-128 | 164 |
+| two | 172-175 | 223 |
+| three | 219 | 270 |
+| next byte a row down | +8 | +8 |
+
+The table version pays about 34 cycles a byte more. Building the index
+costs 32 cycles against the tree's 15 of branching (clearing it, three
+`ROL idx`, `LDX idx`). Each row loads its mask and stores it for the
+`AND`, where the tree uses constants and drops the `AND` for an `FF` row.
+And every byte ends with one more load and `BEQ` to find its last row.
+Weighted by the sweep's mix of patterns, the tree comes to about 3,500
+cycles a frame and the table version about 4,700: roughly 0.6 ms a frame
+against about 800 bytes of code for both directions.
+
+### Which carry sequences occur
+
+Rich noted that some 4-step carry words can't happen, 1100 for one, and
+suggested the rule that no word has both a run of two carries and a run
+of two non-carries. Over every gradient 1..255 from every start
+fraction, exactly two words never occur: 0011 and 1100. A DDA's carries
+are evenly spaced (the sequence is *balanced*): below `gm` = 128 a carry
+leaves the fraction below `gm`, so no two carries are adjacent; from 128
+up a non-carry leaves it at least `gm`, so no two non-carries are. In
+the tree's terms these are 001 followed by a step down and 110 followed
+by staying on the row, the two combinations missing from every
+measurement. All eight 3-bit patterns occur on their own.
+
+| Word | `gm` | Word | `gm` |
+|---|---|---|---|
+| 0000 | 1-63 | 1000 | 1-85 |
+| 0001 | 1-85 | 1001 | 65-127 |
+| 0010, 0100 | 1-127 | 1010, 0101 | 86-170 |
+| 0110 | 129-191 | 1011, 1101 | 129-255 |
+| 0111, 1110 | 171-255 | 1111 | 193-255 |
+
+Of the sweep's 38864 sloped shallow whole bytes, 75% have `gm` below 64,
+18% 64 to 127, and 6% 128 or more.
+
+Rich then suggested inferring what may follow from the words already
+seen (1010 cannot follow 0000), accumulating two or three steps in one
+add where the outcome is certain. The gradient itself is known before
+plotting and says more than any word: 0000 caps `gm` at 63, but 0010 is
+consistent with anything from 1 to 127. Taken from `gm` directly, the
+certainty is large. After a carry the fraction is below `gm`, so the
+next carry is `q` or `q + 1` steps later, `q = 256 DIV gm`: every step in
+between is certain. And every piece starts at fraction 128, the rounding
+bias, so its first carry is `ceil(128 / gm)` steps in, from `gm` alone.
+
+### Counting down to each carry
+
+Each step adds `gm` to the fraction byte, and a carry is the row moving
+on. Call the fraction just after a carry `f'`. It is below `gm` (it was
+under 256 before the add), and the next carry comes at the first `k` with
+`f' + k·gm ≥ 256`. So:
+
+- `q = 256 DIV gm` is the fewest steps from one carry to the next. With
+  `f'` as low as 0 it takes `k·gm ≥ 256`, so at least `q` steps; with `f'`
+  just under `gm` it takes at most `q + 1`.
+- `rem = 256 MOD gm = 256 − q·gm` says which. The run is `q` steps
+  exactly when `f' + q·gm ≥ 256`, which is `f' ≥ rem`; otherwise `q + 1`.
+- The fraction just after the next carry is then `f' − rem`, or
+  `f' − rem + gm` after a run of `q + 1`: one subtract and perhaps one
+  add, with no multiply.
+
+For example `gm = 20`: `q = 12`, `rem = 16`, so carries come every 12 or
+13 steps; a fraction of 18 after a carry gives a run of 12 and leaves 2,
+which then gives a run of 13 and leaves 6.
+
+For `gm` up to 64, `q` is at least 4, so at most one carry falls in any
+byte, and where it falls is known exactly. Nothing needs stepping between
+carries.
+
+`q` comes from a table by `gm`, built at assembly time, rather than a
+division on the 6502 (the reciprocal routine would cost about 100 cycles
+a line). It is capped at 128: `gm = 1` would need 256, which doesn't fit
+a byte, and no line is long enough to reach a second carry at that
+gradient anyway (`gm = 2` gives exactly 128). A piece's fraction starts
+at 128, the rounding bias, so its first carry is also fixed by `gm`
+alone: at step `c0 = ceil(128 / gm)`, leaving `c0·gm − 128`. Four tables
+of 65 bytes cover it. The setup per line reads them and places the first
+carry relative to the first whole byte, given `h`, the 0 to 3 pixels of a
+partial first byte. When `c0 ≤ h` the first carry fell in those pixels;
+then the next run is worked out as `run_down` does after a carry, treating
+the partial byte as the end of a whole one:
+
+```
+FUNCTION qcap(g)
+    IF g <= 2
+        r = 128
+    ELSE
+        r = 256 DIV g
+    ENDIF
+= r
+FUNCTION c0(g) = (128 + g - 1) DIV g
+
+.remt   EQUB 0 : FOR g = 1..64 : EQUB 256 MOD g : NEXT
+.qm4t   EQUB 0 : FOR g = 1..64 : EQUB qcap(g) - 4 : NEXT
+.c0t    EQUB 0 : FOR g = 1..64 : EQUB c0(g) : NEXT
+.f1t    EQUB 0 : FOR g = 1..64 : EQUB c0(g) * g - 128 : NEXT
+
+\ Per line, for run_down: gm (1..64), h the pixels of a partial first byte
+\ (0..3), the piece's fraction starting at 128.
+\ out: rem, qm4, qm5, frac, X
+.run_setup
+{
+    ZA_ENTRY
+    LDX gm
+    LDA remt,X : STA rem
+    LDA qm4t,X : STA qm4
+    SEC : SBC #1 : STA qm5              ; q - 5 (255 for q = 4)
+    LDA f1t,X : STA frac                ; the fraction just after the first carry
+    LDA c0t,X                           ; the first carry's step from the piece's start
+    SEC : SBC h : BEQ head : BCC head
+    TAX                                 ; after the head: its step in the first whole byte
+    RTS
+.head                                   ; within the head: as if at step 4 - h + c0 of a byte
+    CLC : ADC #4 : TAX                  ; ending where the whole bytes begin
+    LDA frac : SEC : SBC rem : BCS short
+    ADC gm : STA frac                   ; then q + 1 steps (C set)
+    TXA : ADC qm4 : TAX
+    RTS
+.short
+    STA frac                            ; then q steps
+    TXA : ADC qm5 : TAX
+    RTS
+}
+```
+
+It matches a brute-force stepping of the fraction in all 256 cases
+(every `gm` 1 to 64, every `h`), in 40 to 67 cycles inline, 42 on
+average; the tree's setup, `gm − 1`, is 8. The loop itself:
+
+```
+\\ in: blk, Y = the row's even scanline, count >= 1,
+\\     X = the step of the next carry, counting this byte's first as 1,
+\\     frac = the fraction just after it, gm, rem, qm4 = q - 4,
+\\     qm5 = q - 5 (mod 256; q capped at 128), pe, po
+.run_down
+{
+    ZA_ENTRY
+.byte
+    CPX #5 : BCC near
+    ROWFF                               ; no carry among this byte's steps: one row
+    DEY
+    TXA : SBC #4 : TAX                  ; C set by CPX, and left set
+    LDA blk : ADC #7 : STA blk          ; + 8 with the carry, which it clears
+    DEC count : BNE byte
+    RTS
+
+.next                                   ; X = the carry's step; the run to the following one
+    LDA frac : SEC : SBC rem : BCS short
+    ADC gm : STA frac                   ; q + 1 steps (the add wraps: C set)
+    TXA : ADC qm4 : TAX                 ; X + (q + 1) - 4
+    CLC
+    LDA blk : ADC #8 : STA blk
+    DEC count : BNE byte
+    RTS
+.short
+    STA frac                            ; q steps
+    TXA : ADC qm5 : TAX                 ; C set: X + q - 4
+    CLC
+    LDA blk : ADC #8 : STA blk
+    DEC count : BNE byte
+    RTS
+
+.near                                   ; the carry comes at step X, 1..4
+    CPX #2 : BCC n1 : BEQ n2
+    CPX #4 : BCC n3
+    ROWFF                               ; 4: this byte on one row, the next a row down
+    DOWN
+    JMP next
+.n1 ROW &88 : DOWN : ROW &77 : DEY : JMP next
+.n2 ROW &CC : DOWN : ROW &33 : DEY : JMP next
+.n3 ROW &EE : DOWN : ROW &11 : DEY : JMP next
+}
+```
+
+Here `DOWN` is Rich's shorter form, `INY : CPY #8 : BNE @+ : LDY #0 :
+INC blk+1`: 7 cycles against 9, and 13 against 15 at a block crossing.
+It destroys C, which `run_down` can afford because every row move is
+followed by code that sets C itself. The tree cannot use it as it
+stands: its leaves take the fourth step before plotting and need C to
+survive to the tail. That would take branching on the fourth carry
+before plotting, doubling the leaves (about 1.1K a direction) to save
+about a cycle a byte on average.
+
+`run_down` is 254 bytes and matches the pixel reference on 60000 random
+calls and on all 6921 whole-byte sections of the sweep's shallow lines
+(rising ones mirrored: their borrows from `f` are the carries from
+`255 - f`). Per byte, by gradient:
+
+| `gm` | Bytes | Tree | Counter |
+|---|---|---|---|
+| 1-8 | 3614 | 80.8 | 64.0 |
+| 9-16 | 5913 | 85.3 | 71.5 |
+| 17-24 | 5207 | 90.8 | 80.7 |
+| 25-32 | 4112 | 96.1 | 89.1 |
+| 33-40 | 3742 | 101.4 | 98.3 |
+| 41-48 | 2517 | 106.4 | 105.8 |
+| 49-56 | 2407 | 112.2 | 114.6 |
+| 57-64 | 2074 | 118.4 | 124.0 |
+
+A byte with no carry drops from 77 cycles to 58, but a byte holding the
+carry costs about 9 more than the tree's (about 9 cycles of dispatch and
+22 of next-run arithmetic), and in this scene nearly half the bytes of
+gentle lines hold one. Per byte the two cross over near `gm` = 48.
+
+With the setup included (42 cycles a line against the tree's 8, plus 4
+to choose between them), over the sweep's 5.9 shallow lines a frame, 4.0
+of them gentle:
+
+| Counter used for | Cycles a frame | Saved |
+|---|---|---|
+| none (tree only) | 3,610 | |
+| `gm` ≤ 16 | 3,554 | 56 |
+| `gm` ≤ 32 | 3,528 | 81 |
+| `gm` ≤ 48 | 3,546 | 64 |
+| `gm` ≤ 64 | 3,585 | 24 |
+
+The best cut-off, 32, saves about 80 cycles a frame, 2% of the whole-byte
+plotting.
+
+Two variants were costed and not built. Counting bytes rather than steps
+makes a carry-free byte 6 cycles cheaper and a carry byte about 10
+dearer. A dedicated `FF` loop over a run (Y stepping by 8, a second
+pointer for the odd scanline) would bring carry-free bytes to about 39,
+paying off only on long runs, which are the minority here.
+
+### The methods side by side
+
+Falling direction; cycles per byte inside the loop, and per frame over
+the sweep's 6921 whole-byte sections (38864 bytes), setup included:
+
+| | Tree | Table | Counter (`gm` ≤ 64) | Tree + counter for `gm` ≤ 32 |
+|---|---|---|---|---|
+| Code | 576 bytes | 215 + 32 of masks | 254 + 61 of setup + 260 of tables | both |
+| Setup a line | 8 | 0 | 40-67 (42 average) | |
+| Byte with no row change | 77 | 111 | 58 | |
+| Byte with one row change | 125-128 | 164 | about 134 | |
+| Two row changes | 172-175 | 223 | (can't occur) | |
+| Three | 219 | 270 | (can't occur) | |
+| Next byte a row down | +8 | +8 | about 94 for the whole byte | |
+| Sweep, a frame | 3,610 | 4,768 | | 3,528 |
+
+At 2 MHz, 1,000 cycles is 0.5 ms. For scale, the fill is about 36,000
+cycles a frame.
+
+Conclusion: the tree stays. The table version is the compact fallback if
+memory gets tight, at about 0.6 ms a frame. The counter form is not
+worth adding for this scene; it pays off only where long, near-flat
+lines dominate.
+
+## 2026-09-30 — plot_shallow takes the branch tree
+
+Rich settled on the tree for the 6502 (after trying a biased Y range for a
+cheaper `DOWN`, which lost more to page crossings, plus a wrap check at
+one column, than it saved; not kept), and asked for the C to follow it.
+The sprite table is gone. `byte_down` and `byte_up` plot one whole byte
+each: nested `if`s on the three steps' carries (borrows, rising) lead to
+eight fixed routines with their masks as constants, a row plotted and
+the cursor moved by `row_down`/`row_up` between masks; the fourth step
+then moves the row on for the next byte, and the cursor moves a block
+right. The C takes that fourth step after plotting; the 6502 takes it
+first and carries it in C, which plotting leaves alone.
+
+The flat branch stays. Through the tree a flat byte still pays its four
+steps (77 cycles on the 6502, against about 48 in the flat loop), and its
+partial end bytes would go a pixel at a time instead of one masked write
+each. Flat lines are the commonest kind (about 143 visible columns a
+frame over the sweep, against about 150 for sloped shallow ones), so the
+branch is worth over 1,000 cycles a frame.
+
+Sweep byte-identical; the plotters match the per-pixel DDA on 18.2M
+lines; 26/26 tests.

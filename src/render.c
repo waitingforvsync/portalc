@@ -1261,21 +1261,6 @@ static void walk(pt_render *r, pt_portal p, uint8_t depth)
 
 // ---- plotting (spec 8.1) ----
 
-// The pixels of one byte of a shallow line (|g| < 1), by which of the three
-// steps inside the byte carried into the next row (bit 2 the step after the
-// leftmost pixel): the pixel mask of each row the byte touches, in order,
-// 0 after the last.
-static const uint8_t sprite_[8][4] = {
-    {0xFF},                      // all four pixels on one row
-    {0xEE, 0x11},
-    {0xCC, 0x33},
-    {0xCC, 0x22, 0x11},
-    {0x88, 0x77},
-    {0x88, 0x66, 0x11},
-    {0x88, 0x44, 0x33},
-    {0x88, 0x44, 0x22, 0x11},    // a row per pixel
-};
-
 // The pixels from p to the byte's right end, and from its left end to p.
 static const uint8_t mask_from_[4] = {0xFF, 0x77, 0x33, 0x11};
 static const uint8_t mask_to_[4] = {0x88, 0xCC, 0xEE, 0xFF};
@@ -1302,13 +1287,117 @@ static uint8_t borrow_up(uint8_t *f, uint8_t gm)
 // first pixel and then only moved: a row down or up (Y by two, a character
 // row on at a block's edge), a byte right, or a pixel right (the mask).
 
+// Plot a row of a byte under mask, then move the cursor a row down (up).
+static void row_down(uint8_t *fb, pt_mode5_cur *cur, uint8_t mask, pt_pattern pat)
+{
+    pt_mode5_eor(fb, *cur, mask, pat);
+    pt_mode5_down(cur);
+}
+
+static void row_up(uint8_t *fb, pt_mode5_cur *cur, uint8_t mask, pt_pattern pat)
+{
+    pt_mode5_eor(fb, *cur, mask, pat);
+    pt_mode5_up(cur);
+}
+
+// One whole byte of a falling shallow line, as the 6502 does it: the three
+// steps inside the byte decide, carry by carry, which of eight fixed routines
+// plots it, each with its row masks as constants (the comments give the
+// carries, the step after the leftmost pixel first). The fourth step then
+// says whether the next byte starts a row down. (The 6502 takes that step at
+// the routine's start and carries it through the plotting in C.)
+static void byte_down(uint8_t *fb, pt_mode5_cur *cur, uint8_t *f, uint8_t gm, pt_pattern pat)
+{
+    if (!carry_down(f, gm)) {
+        if (!carry_down(f, gm)) {
+            if (!carry_down(f, gm)) {
+                pt_mode5_eor(fb, *cur, 0xFF, pat);    // 000: all four on one row
+            } else {
+                row_down(fb, cur, 0xEE, pat);         // 001
+                pt_mode5_eor(fb, *cur, 0x11, pat);
+            }
+        } else if (!carry_down(f, gm)) {
+            row_down(fb, cur, 0xCC, pat);             // 010
+            pt_mode5_eor(fb, *cur, 0x33, pat);
+        } else {
+            row_down(fb, cur, 0xCC, pat);             // 011
+            row_down(fb, cur, 0x22, pat);
+            pt_mode5_eor(fb, *cur, 0x11, pat);
+        }
+    } else if (!carry_down(f, gm)) {
+        if (!carry_down(f, gm)) {
+            row_down(fb, cur, 0x88, pat);             // 100
+            pt_mode5_eor(fb, *cur, 0x77, pat);
+        } else {
+            row_down(fb, cur, 0x88, pat);             // 101
+            row_down(fb, cur, 0x66, pat);
+            pt_mode5_eor(fb, *cur, 0x11, pat);
+        }
+    } else if (!carry_down(f, gm)) {
+        row_down(fb, cur, 0x88, pat);                 // 110
+        row_down(fb, cur, 0x44, pat);
+        pt_mode5_eor(fb, *cur, 0x33, pat);
+    } else {
+        row_down(fb, cur, 0x88, pat);                 // 111: a row per pixel
+        row_down(fb, cur, 0x44, pat);
+        row_down(fb, cur, 0x22, pat);
+        pt_mode5_eor(fb, *cur, 0x11, pat);
+    }
+    if (carry_down(f, gm))
+        pt_mode5_down(cur);
+    pt_mode5_next(cur);
+}
+
+// And of a rising one: the same tree on the borrows, moving up.
+static void byte_up(uint8_t *fb, pt_mode5_cur *cur, uint8_t *f, uint8_t gm, pt_pattern pat)
+{
+    if (!borrow_up(f, gm)) {
+        if (!borrow_up(f, gm)) {
+            if (!borrow_up(f, gm)) {
+                pt_mode5_eor(fb, *cur, 0xFF, pat);    // 000
+            } else {
+                row_up(fb, cur, 0xEE, pat);           // 001
+                pt_mode5_eor(fb, *cur, 0x11, pat);
+            }
+        } else if (!borrow_up(f, gm)) {
+            row_up(fb, cur, 0xCC, pat);               // 010
+            pt_mode5_eor(fb, *cur, 0x33, pat);
+        } else {
+            row_up(fb, cur, 0xCC, pat);               // 011
+            row_up(fb, cur, 0x22, pat);
+            pt_mode5_eor(fb, *cur, 0x11, pat);
+        }
+    } else if (!borrow_up(f, gm)) {
+        if (!borrow_up(f, gm)) {
+            row_up(fb, cur, 0x88, pat);               // 100
+            pt_mode5_eor(fb, *cur, 0x77, pat);
+        } else {
+            row_up(fb, cur, 0x88, pat);               // 101
+            row_up(fb, cur, 0x66, pat);
+            pt_mode5_eor(fb, *cur, 0x11, pat);
+        }
+    } else if (!borrow_up(f, gm)) {
+        row_up(fb, cur, 0x88, pat);                   // 110
+        row_up(fb, cur, 0x44, pat);
+        pt_mode5_eor(fb, *cur, 0x33, pat);
+    } else {
+        row_up(fb, cur, 0x88, pat);                   // 111
+        row_up(fb, cur, 0x44, pat);
+        row_up(fb, cur, 0x22, pat);
+        pt_mode5_eor(fb, *cur, 0x11, pat);
+    }
+    if (borrow_up(f, gm))
+        pt_mode5_up(cur);
+    pt_mode5_next(cur);
+}
+
 // A shallow line: its row moves by at most one per column, so it is kept as
 // a row byte and a fraction, and each step's carry out of the fraction says
-// whether the next column is a row on. Whole bytes go four pixels at a time:
-// the carries of the three steps inside the byte pick a sprite of up to four
-// row masks, and the fourth step's carry moves the row on for the next byte.
-// The partial bytes at either end go a pixel at a time. A flat line has no
-// steps: whole bytes on one row, the end bytes masked.
+// whether the next column is a row on. Whole bytes go four pixels at a time
+// (byte_down, byte_up); the partial bytes at either end go a pixel at a
+// time. A flat line has no steps: whole bytes on one row, the end bytes
+// masked, with no arithmetic at all (through the tree each byte would still
+// take its four steps).
 static void plot_shallow(uint8_t *fb, const pt_piece *p, pt_pattern pat)
 {
     uint8_t gm = (uint8_t)pt_g_mag(p->g);
@@ -1339,20 +1428,8 @@ static void plot_shallow(uint8_t *fb, const pt_piece *p, pt_pattern pat)
                 pt_mode5_down(&cur);
             pt_mode5_right(&cur, &mask);
         }
-        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4)) {
-            uint8_t i = carry_down(&f, gm);
-            i = (uint8_t)((i << 1) | carry_down(&f, gm));
-            i = (uint8_t)((i << 1) | carry_down(&f, gm));
-            const uint8_t *sp = sprite_[i];
-            pt_mode5_eor(fb, cur, sp[0], pat);
-            for (uint8_t k = 1; k < 4 && sp[k]; k++) {
-                pt_mode5_down(&cur);
-                pt_mode5_eor(fb, cur, sp[k], pat);
-            }
-            if (carry_down(&f, gm))
-                pt_mode5_down(&cur);
-            pt_mode5_next(&cur);
-        }
+        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4))
+            byte_down(fb, &cur, &f, gm, pat);
         for (; c < p->x1; c++) {
             pt_mode5_eor(fb, cur, mask, pat);
             if (carry_down(&f, gm))
@@ -1366,20 +1443,8 @@ static void plot_shallow(uint8_t *fb, const pt_piece *p, pt_pattern pat)
                 pt_mode5_up(&cur);
             pt_mode5_right(&cur, &mask);
         }
-        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4)) {
-            uint8_t i = borrow_up(&f, gm);
-            i = (uint8_t)((i << 1) | borrow_up(&f, gm));
-            i = (uint8_t)((i << 1) | borrow_up(&f, gm));
-            const uint8_t *sp = sprite_[i];
-            pt_mode5_eor(fb, cur, sp[0], pat);
-            for (uint8_t k = 1; k < 4 && sp[k]; k++) {
-                pt_mode5_up(&cur);
-                pt_mode5_eor(fb, cur, sp[k], pat);
-            }
-            if (borrow_up(&f, gm))
-                pt_mode5_up(&cur);
-            pt_mode5_next(&cur);
-        }
+        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4))
+            byte_up(fb, &cur, &f, gm, pat);
         for (; c < p->x1; c++) {
             pt_mode5_eor(fb, cur, mask, pat);
             if (borrow_up(&f, gm))

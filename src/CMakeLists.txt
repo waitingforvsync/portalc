@@ -9,12 +9,14 @@ add_library(portal STATIC
     mode5.c
     palette.c
     render.c
+    sprite.c
     arith.h
     camera.h
     map.h
     mode5.h
     palette.h
     render.h
+    sprite.h
 )
 
 target_link_libraries(portal PUBLIC richc)

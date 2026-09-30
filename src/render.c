@@ -783,12 +783,161 @@ static pt_vertex ring_vertex(const pt_map *m, const pt_cell *c, uint8_t k)
 }
 
 // A new visit record for a cell's first visit of the frame.
+// ---- sprite instances (spec 9.2 - 9.4) ----
+
+// Project a cell's sprite on the cell's first visit (spec 9.2): the scale,
+// the top-left corner and the columns covered, or 0 when it can't be seen
+// (none, behind, too near, or wholly off the screen).
+static uint8_t inst_new(pt_render *r, uint8_t cell)
+{
+    const pt_map *m = r->map;
+    const pt_cell *c = &m->cells[cell];
+    if (c->sprite == 0)
+        return 0;
+    const pt_sprite *sp = &m->sprites[c->sprite];
+    const pt_sprite_art *a = &m->arts[sp->art];
+    pt_vv v = transform(r, (pt_vertex) {.x = sp->x, .y = sp->y});
+    if (v.x < PT_SPRITE_NEAR)
+        return 0;
+    uint16_t depth = (uint16_t)v.x;
+
+    // screen pixels per source pixel: the height's projection over its rows,
+    // 64 * size / (h * depth)
+    uint8_t w = pt_sprite_width(a);
+    uint8_t h = pt_sprite_height(a);
+    uint16_t hd = pt_mulg_u16(depth, h);
+    uint16_t scale = pt_project_q8(sp->size, hd, pt_recip16(hd));
+    if (scale == 0)
+        return 0;
+
+    // the base's centre: its column from the lateral offset, its row from
+    // the floor's height against the eye; then the corner, the width
+    // centred and the height above
+    uint16_t dy = pt_project_q8((uint16_t)(v.y < 0 ? -v.y : v.y), depth, v.rx);
+    int32_t centre = v.y < 0 ? (64 << 8) - dy : (64 << 8) + dy;
+    int16_t fz = (int16_t)(c->floor_z - r->eye_z);    // below the eye when positive
+    uint16_t dz = pt_project_q8((uint16_t)(8 * (fz < 0 ? -fz : fz)), depth, v.rx);
+    int32_t bottom = fz < 0 ? (PT_SCREEN_HEIGHT / 2 << 8) - dz : (PT_SCREEN_HEIGHT / 2 << 8) + dz;
+    uint16_t width = pt_mulg_u16(scale, w);
+    int32_t left = centre - (width >> 1);
+    int32_t top = bottom - pt_mulg_u16(scale, h);
+
+    // the pixels whose centres it covers: columns [round(left),
+    // round(left + width)), clamped; none, or no rows, and it is not drawn
+    int32_t c0 = (left + 128) >> 8;
+    int32_t c1 = (left + width + 128) >> 8;
+    if (c0 < 0)
+        c0 = 0;
+    if (c1 > PT_SCREEN_WIDTH)
+        c1 = PT_SCREEN_WIDTH;
+    if (c0 >= c1 || ((bottom + 128) >> 8) <= 0 || ((top + 128) >> 8) >= PT_SCREEN_HEIGHT)
+        return 0;
+
+    RC_PANIC(r->num_insts < PT_MAX_INSTS);
+    uint8_t i = r->num_insts++;
+    r->insts[i] = (pt_inst) {
+        .sprite = c->sprite,
+        .cx0 = (uint8_t)c0,
+        .cx1 = (uint8_t)c1,
+        .scale = scale,
+        .left = left,
+        .top = top,
+    };
+    return i;
+}
+
+// Append the bound chain's pieces over [s0, s1) to the segment being built,
+// from q, a piece at or before s0; the count of them.
+static uint8_t seg_pieces(pt_render *r, uint8_t q, uint8_t s0, uint8_t s1)
+{
+    while (r->pool[q].x1 <= s0)
+        q = r->pool[q].next;
+    uint8_t n = 0;
+    for (;;) {
+        RC_PANIC(r->seg_num < PT_SEG_POOL);
+        r->segs[r->seg_num++] = q;
+        n++;
+        if (r->pool[q].x1 >= s1)
+            return n;
+        uint8_t x1 = r->pool[q].x1;
+        q = r->pool[q].next;
+        RC_ASSERT(q != 0 && r->pool[q].x0 == x1);    // the chain is contiguous here
+    }
+}
+
+// On entering a portal of a cell with a sprite (spec 9.3): record the
+// bound pieces over the columns the portal and the sprite share, while the
+// chains are whole - the visit's own edges cut them and its children
+// relink their pieces, but the pieces themselves never change their line.
+// The instance waits on the pending stack to be issued when this visit
+// pops.
+static void seg_record(pt_render *r, const pt_portal *p)
+{
+    uint8_t ii = r->visits[r->cell_visit[p->cell]].inst;
+    if (ii == 0)
+        return;
+    pt_inst *in = &r->insts[ii];
+    uint8_t s0 = p->x > in->cx0 ? p->x : in->cx0;
+    uint8_t s1 = p->xr < in->cx1 ? p->xr : in->cx1;
+    if (s0 >= s1)
+        return;
+
+    RC_PANIC(r->seg_num + PT_SEG_PIECES <= PT_SEG_POOL);
+    uint8_t at = (uint8_t)r->seg_num;
+    r->seg_num += PT_SEG_PIECES;
+    r->segs[at + PT_SEG_X0] = s0;
+    r->segs[at + PT_SEG_X1] = s1;
+    r->segs[at + PT_SEG_NEXT] = 0;
+    r->segs[at + PT_SEG_NT] = seg_pieces(r, p->tcur, s0, s1);
+    r->segs[at + PT_SEG_NB] = seg_pieces(r, p->bcur, s0, s1);
+    if (in->seg_tail)
+        r->segs[in->seg_tail + PT_SEG_NEXT] = at;
+    else
+        in->seg = at;
+    in->seg_tail = at;
+
+    RC_PANIC(r->num_pend < PT_MAX_PEND);
+    r->pend[r->num_pend++] = ii;
+}
+
+// Issue the instances of a walk call's portals as they pop (spec 9.4),
+// innermost first: each moves to the tail of the draw order, so a sprite
+// comes after everything seen through its cell's visits (farther) and
+// before whatever they are seen through (nearer).
+static void inst_issue(pt_render *r, uint8_t pend)
+{
+    if (r->num_pend > r->pend_high)
+        r->pend_high = r->num_pend;
+    while (r->num_pend > pend) {
+        uint8_t i = r->pend[--r->num_pend];
+        pt_inst *in = &r->insts[i];
+        if (r->order_tail == i)
+            continue;
+        if (in->prev || r->order_head == i) {
+            // unlink
+            if (in->prev)
+                r->insts[in->prev].next = in->next;
+            else
+                r->order_head = in->next;
+            r->insts[in->next].prev = in->prev;    // not the tail, so next != 0
+        }
+        in->prev = r->order_tail;
+        in->next = 0;
+        if (r->order_tail)
+            r->insts[r->order_tail].next = i;
+        else
+            r->order_head = i;
+        r->order_tail = i;
+    }
+}
+
 static pt_visit *visit_new(pt_render *r, uint8_t cell)
 {
     RC_PANIC(r->num_visits < PT_MAX_VISITS);
     uint8_t i = r->num_visits++;
     r->visits[i] = (pt_visit) {.cell = cell};
     r->cell_visit[cell] = i;
+    r->visits[i].inst = inst_new(r, cell);
     return &r->visits[i];
 }
 
@@ -1230,14 +1379,16 @@ static void walk(pt_render *r, pt_portal p, uint8_t depth)
     const pt_map *m = r->map;
     if (depth > r->depth_high)
         r->depth_high = depth;
+    uint8_t pend = r->num_pend;    // this call's portals' sprites, issued as they pop
 
     for (;;) {
         pt_visit *vs = &r->visits[r->cell_visit[p.cell]];
         const pt_cell *c = &m->cells[p.cell];
+        seg_record(r, &p);
         uint8_t steps = (uint8_t)(c->num_edges + 1);
         for (;;) {
             if (steps-- == 0)
-                return;
+                goto done;
 
             // the visit holds both vertices of its current edge: each vertex
             // is transformed once, as the end of one edge, and carried on as
@@ -1248,7 +1399,7 @@ static void walk(pt_render *r, pt_portal p, uint8_t depth)
             bool has_child = process_edge(r, &p, &child);
             if (last) {
                 if (!has_child)
-                    return;
+                    goto done;
                 p = child;    // the tail call
                 break;
             }
@@ -1257,6 +1408,9 @@ static void walk(pt_render *r, pt_portal p, uint8_t depth)
             visit_advance(r, vs, c);
         }
     }
+done:
+    // every portal of this call pops here, the tail call's innermost first
+    inst_issue(r, pend);
 }
 
 // ---- plotting (spec 8.1) ----
@@ -1506,11 +1660,306 @@ static void plot(pt_render *r)
     }
 }
 
+// ---- the sprite pass (spec 9.5) ----
+
+// A bound row one column on: the plotter's own step (row_step for one
+// column), so the clip rows are the plotted rows.
+static uint16_t step1(uint16_t y, uint16_t g)
+{
+    uint16_t gm = pt_g_mag(g);
+    if (pt_g_isneg(g))
+        return gm > y ? 0 : (uint16_t)(y - gm);
+    uint16_t s = (uint16_t)(y + gm);
+    return s < y ? 0xFFFF : s;
+}
+
+// The piece of a segment's bound list over column c: the last whose x0 is at
+// or before it (the first always is).
+static uint8_t seg_piece_at(const pt_render *r, const uint8_t *list, uint8_t n, uint8_t c)
+{
+    uint8_t k = 0;
+    while (k + 1 < n && r->pool[list[k + 1]].x0 <= c)
+        k++;
+    return k;
+}
+
+// Move an instance's bound cursors to column c (columns only increase):
+// false when no segment covers it (hidden there), else the clip rows, the
+// portal's first visible row and the first row below it, 0..H. Within a
+// segment the rows step by the pieces' gradients, one piece to the next at
+// its x0; entering a segment or a piece costs one evaluation.
+static bool inst_bounds(pt_render *r, pt_inst *in, uint8_t c, uint8_t *top, uint8_t *bot)
+{
+    while (in->cseg != 0 && r->segs[in->cseg + PT_SEG_X1] <= c) {
+        in->cseg = r->segs[in->cseg + PT_SEG_NEXT];
+        in->cc = 0xFF;
+    }
+    if (in->cseg == 0 || c < r->segs[in->cseg + PT_SEG_X0])
+        return false;
+
+    const uint8_t *sg = &r->segs[in->cseg];
+    uint8_t nt = sg[PT_SEG_NT];
+    uint8_t nb = sg[PT_SEG_NB];
+    const uint8_t *tl = &sg[PT_SEG_PIECES];
+    const uint8_t *bl = tl + nt;
+    if (in->cc == 0xFF || (uint8_t)(in->cc + 1) != c) {
+        in->tk = seg_piece_at(r, tl, nt, c);
+        in->bk = seg_piece_at(r, bl, nb, c);
+        in->ty = piece_y(r, tl[in->tk], c);
+        in->by = piece_y(r, bl[in->bk], c);
+    } else {
+        if (in->tk + 1 < nt && r->pool[tl[in->tk + 1]].x0 == c)
+            in->ty = piece_y(r, tl[++in->tk], c);
+        else
+            in->ty = step1(in->ty, r->pool[tl[in->tk]].g);
+        if (in->bk + 1 < nb && r->pool[bl[in->bk + 1]].x0 == c)
+            in->by = piece_y(r, bl[++in->bk], c);
+        else
+            in->by = step1(in->by, r->pool[bl[in->bk]].g);
+    }
+    in->cc = c;
+    *top = row_of(in->ty);
+    *bot = row_of(in->by);
+    return true;
+}
+
+// The source column at screen column c (columns only increase): the one
+// whose left edge rounds to at or before c and whose right edge after it.
+static uint8_t inst_col(pt_inst *in, uint8_t c)
+{
+    while (((in->col_next + 128) >> 8) <= c) {
+        in->col++;
+        in->col_next += in->scale;
+    }
+    return in->col;
+}
+
+// EOR a toggle byte pair into canvas row `row` of byte column bc.
+static void tog_plot(pt_render *r, uint8_t bc, uint8_t row, uint8_t e, uint8_t o)
+{
+    pt_mode5_eor(r->fb, pt_mode5_at(bc, row), 0xFF, (pt_pattern) {.e = e, .o = o});
+}
+
+static void tog_remove(pt_render *r, uint8_t i)
+{
+    r->num_togs--;
+    for (uint8_t k = i; k < r->num_togs; k++)
+        r->togs[k] = r->togs[k + 1];
+}
+
+// Add a toggle at a row, keeping one entry per row: merged into the entry
+// at i - 1 or i if it is that row (and removed if it cancels out), else
+// inserted at i; the screen gets it either way. Returns the walk position
+// after the row.
+static uint8_t tog_put(pt_render *r, uint8_t bc, uint8_t i, uint8_t row, uint8_t e, uint8_t o)
+{
+    if ((e | o) == 0)
+        return i;
+    tog_plot(r, bc, row, e, o);
+    uint8_t k = i;
+    if (i > 0 && r->togs[i - 1].row == row)
+        k = (uint8_t)(i - 1);
+    else if (!(i < r->num_togs && r->togs[i].row == row))
+        k = 0xFF;
+    if (k != 0xFF) {
+        r->togs[k].e ^= e;
+        r->togs[k].o ^= o;
+        if ((r->togs[k].e | r->togs[k].o) == 0) {
+            tog_remove(r, k);
+            return k;
+        }
+        return (uint8_t)(k + 1);
+    }
+    RC_PANIC(r->num_togs < PT_MAX_TOGS);
+    for (uint8_t q = r->num_togs; q > i; q--)
+        r->togs[q] = r->togs[q - 1];
+    r->togs[i] = (pt_tog) {.row = row, .e = e, .o = o};
+    r->num_togs++;
+    return (uint8_t)(i + 1);
+}
+
+// Erase this pixel's world toggles at rows up to `last` from walk position
+// i on, folding them into acc (the world's value before this sprite). The
+// walk position after them.
+static uint8_t tog_erase(pt_render *r, uint8_t bc, uint8_t i, uint8_t last, uint8_t m,
+                         pt_pattern *acc)
+{
+    while (i < r->num_togs && r->togs[i].row <= last) {
+        pt_tog *t = &r->togs[i];
+        uint8_t e = t->e & m;
+        uint8_t o = t->o & m;
+        if ((e | o) != 0) {
+            acc->e ^= e;
+            acc->o ^= o;
+            tog_plot(r, bc, t->row, e, o);    // annuls the pixel's plotted toggle
+            t->e &= (uint8_t)~m;
+            t->o &= (uint8_t)~m;
+            if ((t->e | t->o) == 0) {
+                tog_remove(r, i);
+                continue;
+            }
+        }
+        i++;
+    }
+    return i;
+}
+
+// Paint one silhouette run of a pixel column over rows [ya, yb): colours
+// from the sprite column's runs, from byte p of the art, each run's rows
+// from the instance's row edges. The world's toggles the run covers are
+// erased and folded into acc, and the closing toggle at yb returns the
+// pixel to what lies below.
+static void paint(pt_render *r, const pt_inst *in, const pt_sprite_art *a, uint8_t bc, uint8_t m,
+                  const uint8_t *p, uint8_t ya, uint8_t yb)
+{
+    // the first colour: the last run starting at or above ya
+    uint8_t code = *p & 7;
+    for (p++; (*p >> 3) != 0 && in->rows[*p >> 3] <= ya; p++)
+        code = *p & 7;
+    pt_pattern pal = pt_shade(a->pal[code - 1]);
+
+    // the prefix: the world's value at ya
+    pt_pattern acc = {0, 0};
+    uint8_t i = 0;
+    while (i < r->num_togs && r->togs[i].row <= ya) {
+        acc.e ^= r->togs[i].e;
+        acc.o ^= r->togs[i].o;
+        i++;
+    }
+    i = tog_put(r, bc, i, ya, (uint8_t)((acc.e ^ pal.e) & m), (uint8_t)((acc.o ^ pal.o) & m));
+
+    // each change inside the run: the world's toggles down to it erased, the
+    // colour switched
+    for (; (*p >> 3) != 0; p++) {
+        uint8_t y = in->rows[*p >> 3];
+        if (y >= yb || (*p & 7) == 0)
+            break;
+        pt_pattern np = pt_shade(a->pal[(*p & 7) - 1]);
+        i = tog_erase(r, bc, i, y, m, &acc);
+        i = tog_put(r, bc, i, y, (uint8_t)((pal.e ^ np.e) & m), (uint8_t)((pal.o ^ np.o) & m));
+        pal = np;
+    }
+
+    // the end: the world's toggles above yb erased, and the world restored
+    // below (a toggle at yb itself is the world's, and stays)
+    if (yb > 0)
+        i = tog_erase(r, bc, i, (uint8_t)(yb - 1), m, &acc);
+    if (yb < PT_SCREEN_HEIGHT)
+        tog_put(r, bc, i, yb, (uint8_t)((pal.e ^ acc.e) & m), (uint8_t)((pal.o ^ acc.o) & m));
+}
+
+// The sprites, far to near, into the toggle image (spec 9.5): per byte
+// column, the plotted toggles are read into a sparse list, and each
+// instance's opaque runs over it are painted as toggles, clipped to the
+// bounds its segments recorded.
+static void sprite_pass(pt_render *r)
+{
+    if (r->order_head == 0)
+        return;
+    const pt_map *m = r->map;
+
+    // each instance's row edges and cursors, and the byte columns covered
+    uint8_t b0 = 0xFF;
+    uint8_t b1 = 0;
+    for (uint8_t ii = r->order_head; ii != 0; ii = r->insts[ii].next) {
+        pt_inst *in = &r->insts[ii];
+        const pt_sprite_art *a = &m->arts[m->sprites[in->sprite].art];
+        int32_t y = in->top;
+        for (uint8_t k = 0; k <= pt_sprite_height(a); k++, y += in->scale) {
+            int32_t row = (y + 128) >> 8;
+            in->rows[k] = (uint8_t)(row < 0 ? 0 : row > PT_SCREEN_HEIGHT ? PT_SCREEN_HEIGHT : row);
+        }
+        in->col = 0;
+        in->col_next = in->left + in->scale;
+        in->cseg = in->seg;
+        in->cc = 0xFF;
+        if (in->cx0 >> 2 < b0)
+            b0 = in->cx0 >> 2;
+        if ((in->cx1 - 1) >> 2 > b1)
+            b1 = (uint8_t)((in->cx1 - 1) >> 2);
+    }
+
+    for (uint8_t bc = b0; bc <= b1; bc++) {
+        uint8_t c0 = (uint8_t)(bc << 2);
+        uint8_t c1 = (uint8_t)(c0 + 4);
+
+        // how far down this byte column's sprites reach
+        uint8_t ymax = 0;
+        for (uint8_t ii = r->order_head; ii != 0; ii = r->insts[ii].next) {
+            const pt_inst *in = &r->insts[ii];
+            if (in->cx0 < c1 && in->cx1 > c0) {
+                uint8_t yb = in->rows[pt_sprite_height(&m->arts[m->sprites[in->sprite].art])];
+                if (yb > ymax)
+                    ymax = yb;
+            }
+        }
+        if (ymax == 0)
+            continue;
+        if (ymax >= PT_SCREEN_HEIGHT)
+            ymax = PT_SCREEN_HEIGHT - 1;
+
+        // the plotted toggles down to there, top to bottom
+        r->num_togs = 0;
+        pt_mode5_cur cur = pt_mode5_at(bc, 0);
+        for (uint8_t row = 0; row <= ymax; row++, pt_mode5_down(&cur)) {
+            uint8_t e = r->fb[cur.blk + cur.y];
+            uint8_t o = r->fb[cur.blk + cur.y + 1];
+            if ((e | o) != 0) {
+                RC_PANIC(r->num_togs < PT_MAX_TOGS);
+                r->togs[r->num_togs++] = (pt_tog) {.row = row, .e = e, .o = o};
+            }
+        }
+
+        for (uint8_t ii = r->order_head; ii != 0; ii = r->insts[ii].next) {
+            pt_inst *in = &r->insts[ii];
+            const pt_sprite_art *a = &m->arts[m->sprites[in->sprite].art];
+            uint8_t cs = in->cx0 > c0 ? in->cx0 : c0;
+            uint8_t ce = in->cx1 < c1 ? in->cx1 : c1;
+            for (uint8_t c = cs; c < ce; c++) {
+                uint8_t top;
+                uint8_t bot;
+                if (!inst_bounds(r, in, c, &top, &bot) || top >= bot)
+                    continue;
+                uint8_t j = inst_col(in, c);
+                if (j >= pt_sprite_width(a))
+                    continue;
+                uint8_t pm = pt_mode5_pixmask(c);
+
+                // each silhouette run: consecutive opaque runs, clipped
+                const uint8_t *p = &a->data[a->data[2 + j]];
+                for (;;) {
+                    while ((*p & 7) == 0 && ((*(p + 1) >> 3) != 0))
+                        p++;    // transparent: on to the next run
+                    if ((*p & 7) == 0)
+                        break;    // the column ends transparent
+                    const uint8_t *q = p + 1;
+                    while ((*q >> 3) != 0 && (*q & 7) != 0)
+                        q++;    // the silhouette ends at a transparent run or the column's end
+                    uint8_t ya = in->rows[*p >> 3];
+                    uint8_t yb = (*q >> 3) != 0 ? in->rows[*q >> 3] : in->rows[pt_sprite_height(a)];
+                    if (ya < top)
+                        ya = top;
+                    if (yb > bot)
+                        yb = bot;
+                    if (ya < yb)
+                        paint(r, in, a, bc, pm, p, ya, yb);
+                    if ((*q >> 3) == 0)
+                        break;
+                    p = q;
+                }
+            }
+        }
+        if (r->num_togs > r->togs_high)
+            r->togs_high = r->num_togs;
+    }
+}
+
 void pt_render_init(pt_render *r, const pt_map *m)
 {
     *r = (pt_render) {0};
     r->map = m;
     r->fb = r->fbmem + PT_FB_GUARD;
+    r->sprites = true;
 }
 
 void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle, uint8_t cell)
@@ -1529,6 +1978,11 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     r->pool_num = 1;
     r->pool[0] = (pt_piece) {0};
     r->num_visits = 1;
+    r->num_insts = 1;
+    r->order_head = 0;
+    r->order_tail = 0;
+    r->seg_num = 1;
+    r->num_pend = 0;
 
     // the root portal: a plotted top bound seeding the fill with the camera
     // cell's ceiling, and a dummy off-screen bottom bound
@@ -1538,12 +1992,16 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
     walk(r, root_portal(r, roott, rootb), 1);
 
     plot(r);
+    if (r->sprites)
+        sprite_pass(r);
     pt_mode5_fill(r->fb);
 
     if (r->pool_num > r->pool_high)
         r->pool_high = r->pool_num;
     if (r->num_visits > r->visits_high)
         r->visits_high = r->num_visits;
+    if (r->seg_num > r->segs_high)
+        r->segs_high = r->seg_num;
 
     // empty the visit cache: each record clears its own cell's index
     for (uint8_t i = 1; i < r->num_visits; i++)

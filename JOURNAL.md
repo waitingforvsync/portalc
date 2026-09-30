@@ -1562,3 +1562,113 @@ branch is worth over 1,000 cycles a frame.
 
 Sweep byte-identical; the plotters match the per-pixel DDA on 18.2M
 lines; 26/26 tests.
+
+## 2026-09-30 — Sprites, phase 1: art and a boulder in the pit
+
+The first step of the sprite plan (spec §9): data only, nothing drawn yet.
+
+Art format, as decided with Rich: the Baron sprite demo's, read top-down.
+A header of width and height (each up to 32), a byte offset per column,
+then per column one byte per run, `row * 8 + code`, the row where the run
+starts and a 3-bit colour code: 0 transparent, 1..7 a per-sprite palette
+of catalogue shades. A final 0 byte means every column's runs end at a
+byte whose row is 0. `pt_sprite_encode` turns a grid of code characters
+into it at startup (the assembler's job on the 6502), and
+`pt_sprite_code` walks a column back for tests and, later, the reference
+renderer.
+
+The map holds the art (`arts[]`) and the sprites (`sprites[]`, entry 0
+"none"); `pt_cell.sprite` names a cell's one sprite. A `pt_sprite` is its
+base centre in world units, its height in world units (Rich asked for the
+size in the vertex coordinates' scale; the width follows the art's aspect,
+so one scale serves both axes), and its art. It stands on its cell's
+floor. Validation requires it inside its cell, its width taken as a disc
+round the base, and no taller than the cell.
+
+The boulder is the demo's 14 x 16 art in black, black-red, red and
+red-green (`KKKK KKRR RRRR RRGG`), standing in the middle of the pit at
+(1536, 1536). The start camera faces it from 220 units away with the eye
+104 units above the pit floor, so a height of 128 projects to about 37
+rows, a little over half the screen (rows 25 to 62); the width follows as
+112, inside the pit's 200-unit square. Sweep byte-identical; 29/29 tests.
+
+## 2026-09-30 — Sprites, phase 2: instances, clip segments, draw order
+
+Still nothing drawn; the capture now records everything the sprite pass
+will need (spec §9.2 to §9.4).
+
+**Instances.** A cell's sprite is projected when the cell is first
+visited (`visit_new`): its base centre goes through `transform`, and it is
+skipped nearer than `PT_SPRITE_NEAR` (32) or wholly off the screen. From
+the depth, the scale (screen pixels per source pixel, `64·size / (h·x)`,
+u8.8), the top-left corner (u8.8, kept in 24 bits since it can lie far
+off the screen) and the covered columns `[cx0, cx1)`, the rounded edges
+clamped. The divisions go through a new `pt_project_q8`, `64·len/x` in
+u8.8 by the reciprocal tables (the exact 17-bit product for a byte
+length, the u16 form otherwise, saturating); its test allows 1/128, the
+most a u16 depth's normalising can overestimate `1/x` by. From the start
+position the boulder comes out at scale 2.33, rows 25.0 to 62.3 and
+columns 48 to 80, as planned.
+
+**Clip segments.** Every entry to a portal of a cell with an instance, at
+`walk`'s start or its tail call, records the bound pieces over the columns
+the portal and the instance share: `x0, x1, next, nT, nB`, then the top
+and bottom chains' pieces in x order, in a 256-byte pool. At entry the
+chains are still whole from `tcur`/`bcur` to `xr`.
+
+**Order.** A visit pops when `walk` returns, but one call walks a chain
+of tail-called portals that all pop at that return, innermost first. So
+each entry that recorded a segment pushes its instance on a pending
+stack, and the call's return issues the entries above its starting
+height, top first, each moving to the tail of the doubly linked draw
+order.
+
+Tests: the boulder's projection at the start position; and, with six
+more sprites placed in the ring's cells and room 2 (64 units tall), every
+frame of all cells at 64 angles plus a 4000-tick random walk checks the
+segments (x order, inside the instance, pieces in x order across them),
+that the draw order holds exactly the instances with segments, and, for
+every column two instances share, that the one whose cell the column's
+centre ray enters later is drawn first, by a Cyrus-Beck ray test against
+the cells. That compared 2045 column pairs, all in order. The segment
+pool peaked at 49 bytes and the pending stack at 4. Sweep byte-identical;
+32/32 tests.
+
+## 2026-09-30 — Sprites, phase 3: the sprite pass
+
+The boulder is drawn. `sprite_pass` runs between plotting and the fill
+(spec §9.5): for each byte column the sprites cover, it reads the plotted
+toggles into a sparse list (down to the lowest row a sprite there
+reaches), then paints each instance's silhouette runs over it, far to
+near, as toggles: the world's toggles each run covers erased and folded
+into `acc`, the colour changes put in, and a closing toggle at the run's
+end restoring the world below. Runs are clipped to the rows the
+instance's segments give at that column, from DDA cursors over the
+recorded pieces that step exactly as the plotter does. Each instance
+keeps the screen row of every source row edge (rounded, clamped to
+0..H) and steps its source column along the screen columns, so the pass
+has no division. `pt_render.sprites` turns the pass off, for comparisons.
+
+The spec's `paint` had a gap: it erased the world's toggles strictly
+above each internal colour change, leaving one exactly on a change row
+live under the sprite and out of `acc`, so the pixel went wrong below it
+and at the run's end. The pass erases those too, keeping only toggles at
+the run's end row. The spec is corrected.
+
+Checked against a direct reference: the same frame without the pass,
+filled, then every opaque sprite pixel painted over it far to near
+inside the recorded bounds. Over every cell's centroid at 64 angles and a
+4000-tick walk, with the boulder alone and with six more sprites, 4688
+frames (891 with sprites) match pixel for pixel. Putting the spec's gap
+back makes 822 of those 891 differ, so the test is sensitive to it. One
+slip was caught on reading the code back, before the reference existed:
+the bound cursor's "no column yet" marker was 0xFF, which column 0 minus
+one also is.
+
+The sweep changes in exactly the 143 frames that draw the boulder; every
+other frame is byte-identical to before. The toggle list peaks at 20 of
+its 32 entries. The pictures show the boulder at a little over half the
+screen from the start position, its base behind the pit's rim from
+farther back, whole across the two portals at the pit's corner, through
+the doorway from the corridor and room 2, huge from 64 units in the pit
+and gone at 24 (the near limit). 33/33 tests.

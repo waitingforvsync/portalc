@@ -5,6 +5,7 @@
 #include "map.h"
 
 #include <math.h>
+#include <stddef.h>
 
 #include "richc/macros.h"
 
@@ -18,7 +19,8 @@ typedef struct builder {
 static builder begin_map(pt_map *m)
 {
     *m = (pt_map) {0};
-    m->num_cells = 1;    // cell 0 is the outside
+    m->num_cells = 1;      // cell 0 is the outside
+    m->num_sprites = 1;    // sprite 0 is "none"
     return (builder) {.m = m};
 }
 
@@ -49,6 +51,24 @@ static uint8_t begin_cell(builder *b, uint16_t floor_z, uint16_t ceil_z, uint8_t
         .ceil = ceil,
     };
     return b->cur_cell;
+}
+
+static uint8_t add_art(builder *b, const char *const rows[], const uint8_t pal[7])
+{
+    pt_map *m = b->m;
+    RC_PANIC(m->num_arts < PT_MAX_ARTS);
+    pt_sprite_encode(&m->arts[m->num_arts], rows, pal);
+    return m->num_arts++;
+}
+
+// Stand a sprite in the current cell, on its floor.
+static void add_sprite(builder *b, uint16_t x, uint16_t y, uint16_t size, uint8_t art)
+{
+    pt_map *m = b->m;
+    RC_PANIC(m->num_sprites < PT_MAX_SPRITES);
+    RC_ASSERT(b->cur_cell != 0 && m->cells[b->cur_cell].sprite == 0);
+    m->sprites[m->num_sprites] = (pt_sprite) {.x = x, .y = y, .size = size, .art = art};
+    m->cells[b->cur_cell].sprite = m->num_sprites++;
 }
 
 static void add_edge(builder *b, uint8_t v, uint8_t colour)
@@ -175,6 +195,25 @@ bool pt_map_validate(const pt_map *m)
                         || c->ceil_z != b->ceil_z || c->floor != b->floor || c->ceil != b->ceil)
                         return false;
                 }
+            }
+
+            // a sprite stands inside its cell: its base centre at least half
+            // its width from every edge line (editor work, so floats)
+            if (c->sprite != 0) {
+                if (c->sprite >= m->num_sprites)
+                    return false;
+                const pt_sprite *sp = &m->sprites[c->sprite];
+                if (sp->art >= m->num_arts)
+                    return false;
+                const pt_sprite_art *a = &m->arts[sp->art];
+                double half = 0.5 * sp->size * pt_sprite_width(a) / pt_sprite_height(a);
+                pt_vertex ea = m->verts[e->v0];
+                double len = sqrt(((double)v1.x - ea.x) * ((double)v1.x - ea.x)
+                                  + ((double)v1.y - ea.y) * ((double)v1.y - ea.y));
+                if (pt_map_edge_side(m, c, ei, sp->x, sp->y) < half * len)
+                    return false;
+                if (sp->size > 8 * (c->floor_z - c->ceil_z))
+                    return false;
             }
 
             // the inward normal must point at the cell's centroid
@@ -326,10 +365,38 @@ void pt_scene_init(pt_map *m)
     uint8_t blue75 = PT_EDGE_COLOUR(PT_SH_KBBB);
     uint8_t blue100 = PT_EDGE_COLOUR(PT_SH_BBBB);
 
+    // The boulder, from the Baron sprite demo: 14 x 16, in black, black-red,
+    // red and red-green.
+    static const char *const boulder_rows[] = {
+        "00003333400000",
+        "00333344440000",
+        "03333344444300",
+        "03323334444300",
+        "33333333434430",
+        "33322333344330",
+        "33233323334433",
+        "23333223333333",
+        "22333333233433",
+        "22332333223330",
+        "22233323333330",
+        "02223333233300",
+        "02222333333000",
+        "00222223331100",
+        "01111111111110",
+        "00011111111000",
+        NULL,
+    };
+    static const uint8_t boulder_pal[7] = {PT_SH_KKKK, PT_SH_KKRR, PT_SH_RRRR, PT_SH_RRGG,
+                                           PT_SH_KKKK, PT_SH_KKKK, PT_SH_KKKK};
+    uint8_t boulder = add_art(&b, boulder_rows, boulder_pal);
+
     // Cell 1: the depressed central square (floor 24 units below the ring's);
     // its edge colours are the riser faces seen from inside the pit, lit like
     // the walls: the south riser faces the light, the north riser is dark.
+    // The boulder stands in its middle, sized to a little over half the
+    // screen's height from the start position (220 units away).
     begin_cell(&b, 536, 352, pit_floor, room1_ceil);
+    add_sprite(&b, 1536, 1536, 128, boulder);
     add_edge(&b, s0, pit_dark);   // north riser, faces south, in shadow
     add_edge(&b, s1, lit_w);      // east riser, faces west
     add_edge(&b, s2, lit_n);      // south riser, faces north

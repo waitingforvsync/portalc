@@ -21,6 +21,11 @@ still open is in §14.
 - Every edge has exactly one neighbour. The editor splits edges at T-junctions so the
   shared edge between two cells is a single edge in both (twin edges).
 - Vertices are stored in a shared vertex table; rings are index lists.
+- A cell may hold one **sprite** (index, 0 for none; §9): a base position in world
+  units, standing on the cell's floor, a height in world units (the width follows its
+  art's aspect), and an index into the map's sprite art. It lies wholly inside the
+  cell, its width taken as a disc around the base, and below the cell's ceiling, so any
+  ray that meets it passes through one of the cell's portals.
 
 ## 2. Definitions
 
@@ -925,23 +930,49 @@ area, and overlapping sprites and occlusion by nearer geometry come out right.
 
 ### 9.1 Art format
 
-A sprite is stored column-wise as a list of change points `(y, colour)` per column,
-`colour` a palette index 0..10 where 0 is transparent and 1..10 are the ten 2×2
-dither patterns of §5, given as `(E, O)` byte pairs in `pal[]`. A column is a
-sequence of runs; consecutive opaque runs form a **silhouette run** with internal
-colour changes, and transparent gaps separate silhouette runs.
+A sprite is stored column-wise as change points, top-down, over a per-sprite palette
+of seven catalogue shades (§5) plus transparent. The runtime format is the Baron
+sprite demo's, read top-down:
+
+```
+byte 0          width w in columns (up to 32)
+byte 1          height h in rows (up to 32)
+bytes 2..w+1    each column's offset from the art's start (the art stays under 256 bytes)
+per column      one byte per run, top to bottom: row·8 + code
+0               after the last column
+```
+
+`row` (5 bits) is where the run starts, 0 for the column's first, and `code` (3 bits)
+its colour: 0 transparent, 1..7 the palette's shades, whose `(E, O)` byte pairs form
+`pal[]`. A run ends where the next begins; a column's runs end at a byte whose row is
+0 (the next column's first run, or the final 0), and its last run at row `h`.
+Consecutive opaque runs form a **silhouette run** with internal colour changes, and
+transparent gaps separate silhouette runs. The encoder (the assembler's job on the
+6502, startup in the C) emits a byte at every row where the colour changes.
 
 ### 9.2 Instances
 
-A sprite **instance** is a sprite placed in a cell. Once per frame, when its cell is
-first visited, it is projected: depth, screen column range `[cx0, cx1)`, base row and
-scale. Per screen column the sprite column comes from a horizontal step table for the
-scale; per change point the screen row is `base + vscale[y]`. Both tables are per
-scale, not per instance. A cell's instances are sorted far to near at the same time.
+A sprite **instance** is a cell's sprite as projected for one frame, on the cell's
+first visit. Its base centre is transformed like a vertex; nearer than
+`PT_SPRITE_NEAR` (32 units; behind included) it is skipped, popping out rather than
+filling the screen. Otherwise, from the depth `x`:
 
-Per-frame instance record (~12 bytes): sprite, depth, `cx0, cx1`, base row, scale,
-head of its segment list, link in the order list, and during the sprite pass the
-DDA cursors of its current segment (~6 bytes).
+```
+scale  = 64·size / (h·x)                 u8.8 screen pixels per source pixel (size: the world height)
+centre = 64 ± 64·|y|/x                   the base's column, u8.8
+bottom = H/2 ± 64·8·|floor − eye|/x      the base's row, u8.8
+left   = centre − scale·w/2              the top-left corner, u8.8; 24 bits, as it can lie
+top    = bottom − scale·h                well off the screen
+[cx0, cx1) = [round(left), round(left + scale·w))   clamped to the screen
+```
+
+`h·x` is one 16×8 product, and each division is the reciprocal projection of §4
+(`pt_project_q8`). A pixel belongs to the sprite when its centre lies inside it, so a
+source column's screen columns run from the rounded position of its left edge to that
+of its right, and likewise rows; the sprite pass steps these edges from the corner by
+`scale`, with no per-column division. An instance with no columns, or wholly above
+or below the screen, is not kept. Record: sprite, `cx0, cx1`, segment list head and
+tail, draw order links, scale, corner (~16 bytes).
 
 ### 9.3 What capture records: clip segments
 
@@ -957,18 +988,20 @@ after allocation (splits shrink `x1` and allocate a new piece; relinking changes
 visit records *which pieces* bound each instance, and the sprite pass evaluates them.
 
 ```
-on push of a visit of cell X, span [l, r), chains T, B:     (root: rootT, rootB)
-    if X has instances:
-        if first visit of X this frame: project and sort X's instances
-        for each instance of X with [cx0, cx1) ∩ [l, r) non-empty:
-            seg = alloc segment over the overlap [s0, s1)
-            for each piece of T covering a column in [s0, s1), in x order: append its index to seg.T
-            for each piece of B likewise: append to seg.B
-            append seg to the instance's segment list
+on entering a portal of cell X, span [l, r), chains T, B:   (root: rootT, rootB)
+    if X's instance exists and [cx0, cx1) ∩ [l, r) is non-empty:
+        seg = alloc segment over the overlap [s0, s1)
+        for each piece of T covering a column in [s0, s1), in x order: append its index to seg.T
+        for each piece of B likewise: append to seg.B
+        append seg to the instance's segment list
+        push the instance on the pending stack                (§9.4)
 ```
 
+A portal is entered at `walk`'s start, or at its tail call to the last edge's child.
+
 A **segment** is `{x0, x1, next, nT, nB, T[nT], B[nB]}`: 5 bytes plus one per bound
-piece, typically 7–10 bytes, allocated from a per-frame byte pool. Consecutive
+piece, typically 7–10 bytes, allocated from a per-frame byte pool of 256 (offsets are
+a byte, 0 the null). Consecutive
 recorded pieces meet at the later one's `x0`, and the last runs to `seg.x1`, so no
 per-piece extent is stored. Visits occur in increasing x, so an instance's segments
 are appended in x order and never merged; a cell seen through two doorways gives its
@@ -992,18 +1025,22 @@ issuing instances at **pop** time gives that order with no sorting:
 
 ```
 on pop of a visit of cell X:
-    for each instance of X that received a segment from this visit, far to near:
+    if X's instance received a segment from this visit:
         if the instance is already in the order list: unlink it
         append it to the tail of the order list
 ```
 
+A visit pops when `walk` returns, but a call walks a chain of portals, each the tail
+call of the one before, and they all pop at that return, the innermost first (the
+tail child is its parent's last, so its pop comes just before its parent's). So each
+entry pushes its instance on a **pending stack** (§9.3), and the call's return issues
+the entries above the height it began with, top first. Children walked by nested calls
+have issued theirs by then. (On the 6502 the pending stack can be the hardware stack.)
+
 An instance is therefore issued once, at the pop of the *last* visit of its cell
 that overlaps it. That is after the descendants of all its visits (farther) and
-before its ancestors (nearer); the instances of X keep their far-to-near order among
-themselves because they are re-appended in that order. The order list is a linked
-list through the instance records; unlinking needs either a back link or a
-move-to-tail over a small array, either is fine for the number of instances a frame
-holds.
+before its ancestors (nearer). With one sprite per cell there is no order within a
+cell to keep. The order list is doubly linked through the instance records.
 
 ### 9.5 The sprite pass
 
@@ -1040,7 +1077,8 @@ paint(bc, px, ya, changes, yb):               ; changes = (row, colour) after th
     tog = (acc ^ pal[S]) & m
     put(ya, tog) ; plot(bc, ya, tog)
     for (y, S') in changes, then (yb, none):
-        while i < n and list[i].row < y:
+        last = (S' is none) ? y - 1 : y       ; a change row's own world toggle is covered too;
+        while i < n and list[i].row <= last:  ; the one at yb is below the sprite, and stays
             bits = list[i] & m
             if bits != 0:                     ; a toggle this pixel covers: erase it
                 acc ^= bits
@@ -1062,7 +1100,11 @@ plot(bc, row, bits):                          ; bits = (E, O), already masked to
 
 `acc` is always the world value at the current row *before this sprite*: the prefix
 at `ya`, then each erased toggle folded in, so the closing toggle at `yb` returns the
-pixel to what lies below. Insertions never touch `acc`, and masking distributes over
+pixel to what lies below. A world toggle exactly on an internal change row is erased
+like any other the run covers; leaving it (erasing only above the change) would leave
+it live under the sprite and out of `acc`, wrong below it and at `yb` alike, and a
+world line lands on a change row often enough that the reference comparison (§13)
+failed in most frames with a sprite until this was fixed. Insertions never touch `acc`, and masking distributes over
 EOR, so `acc` can stay a whole byte pair and be masked only where a toggle is
 written. After `paint` the list is exact again, so a nearer sprite sees this one as
 background, erases its toggles where it covers them (including its start or end
@@ -1078,6 +1120,22 @@ at `top` includes the bound's own toggle in `acc` (entries at `row ≤ ya` are f
 in), and a run clipped to end at `bot` leaves the bound's toggle in place (entries at
 `row == yb` are kept).
 
+In the implementation (`sprite_pass`, run between plotting and the fill):
+
+- The byte column's scan stops at the lowest row any of its sprites reaches, and
+  never reads the junk rows: bounds clamp to `0..H`, and a closing toggle at row `H`
+  is simply not written, as nothing below the screen is shown.
+- Each instance keeps the screen row of every source row edge, rounded and clamped to
+  `0..H` (`h + 1` bytes, from the corner stepped by `scale`), and steps the source
+  column along its screen columns with the same rounding, so no division is left in
+  the pass.
+- Its bound cursors are the segment's pieces and their biased u8.8 rows, stepped by
+  the pieces' gradients exactly as `row_step` would for one column, with one
+  evaluation on entering a segment or a piece.
+- A silhouette run is the consecutive opaque runs of a source column, ending at a
+  transparent run or the column's end; its first colour is the last run starting at
+  or above the clipped `ya`.
+
 ### 9.6 Cost and memory
 
 Per covered byte column: ~11 cycles per scanned row (so at most ~700), plus per
@@ -1089,12 +1147,13 @@ row (two read-modify-writes), i.e. ~104 per row per fully covered byte column, s
 the two break even at about seven rows of sprite height; a 16-row sprite is ~1.5×
 cheaper this way, a 32-row one ~3×, a full-height one ~6×.
 
-Scratch, reused per byte column: one list of (row, E, O), e.g. 24 × 3 = 72 bytes;
-the cap bounds how many distinct toggle rows one byte column may hold (world lines
-plus every opaque run edge of every overlapping sprite), and `put` clamps beyond it.
+Scratch, reused per byte column: one list of (row, E, O), 32 × 3 = 96 bytes; the cap
+bounds how many distinct toggle rows one byte column may hold (world lines plus every
+opaque run edge of every overlapping sprite). The sweep peaks at 20; exceeding it is a
+panic for now.
 Per frame: instance records (~18 bytes each including DDA cursors), clip segments
-(5 bytes + 1 per bound piece, typically 7–10), `pal[11]` (22 bytes), `pixmask[4]`,
-and the scale tables. Nothing is added to the piece record; the pool must stay
+(5 bytes + 1 per bound piece, typically 7–10), `pal[8]` per sprite (16 bytes, entry 0
+unused), `pixmask[4]`, and the scale tables. Nothing is added to the piece record; the pool must stay
 intact until the sprite pass has run, which it does anyway. Evaluating the bounds
 costs ~10 cycles per column per chain, the same DDA the plotter uses.
 
@@ -1266,6 +1325,16 @@ The closed-column telescoping argument (§7.9.4) was checked by hand on the
 lintel-over-step case: parent lines `CA^W`, `W^CB`, `FB^W` all above the parent's top
 bound `T` merge to `CA^CB^FB^W`; the child's stack contributes `CB^FB`; the fill below
 `T` is then `CA ^ (CA^CB^FB^W) ^ (CB^FB) = W`, the step face, as it should be.
+
+The sprite pass (§9.5) is checked against a direct reference (`test_sprite.c`): the
+same frame rendered without the pass and filled, then each instance's opaque pixels
+painted straight over it, far to near, inside the bounds its segments recorded
+(evaluated exactly), each source pixel covering the screen pixels whose centres it
+covers. Over every cell's centroid at 64 angles and a 4000-tick random walk, with the
+boulder alone and with six more sprites overlapping it, 4688 frames (891 drawing
+sprites) match pixel for pixel. The capture's bookkeeping (§9.3, §9.4) is checked
+separately: segments and their pieces in x order, and, for 2045 columns two sprites
+share, the one whose cell the column's centre ray enters later drawn first.
 
 ## 14. Open questions
 

@@ -371,6 +371,24 @@ uint16_t pt_project_col_q8(int16_t y, uint16_t d)
     return (uint16_t)(y < 0 ? (64u << 8) - q : (64u << 8) + q);
 }
 
+uint16_t pt_project_q8(uint16_t len, uint16_t x, pt_recip rx)
+{
+    RC_ASSERT(x > 0);
+
+    // k = 14: a byte len takes the exact 17-bit product, shifted by e - 6;
+    // a u16 len the u16 form, shifted by e - 14. Both shift left at small
+    // depths, where the result saturates soonest
+    uint32_t q;
+    if (len < 256) {
+        uint32_t p = mul_recip8((uint8_t)len, rx);
+        q = rx.e < 6 ? p << (6 - rx.e) : p >> (rx.e - 6);
+    } else {
+        uint32_t m = mul_recip16(len, rx);
+        q = rx.e < 14 ? m << (14 - rx.e) : m >> (rx.e - 14);
+    }
+    return q > 0xFFFF ? 0xFFFF : (uint16_t)q;
+}
+
 uint8_t pt_project_rowd(uint8_t h8, uint16_t x, pt_recip rx)
 {
     RC_ASSERT(x > 0);

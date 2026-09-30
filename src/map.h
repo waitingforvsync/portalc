@@ -11,11 +11,14 @@
 
 #include "arith.h"
 #include "palette.h"
+#include "sprite.h"
 
 #define PT_MAX_VERTS 64
 #define PT_MAX_CELLS 24
 #define PT_MAX_EDGES 96
 #define PT_MAX_CELL_EDGES 8
+#define PT_MAX_SPRITES 8
+#define PT_MAX_ARTS 4
 
 typedef struct pt_vertex {
     uint16_t x;
@@ -49,15 +52,29 @@ typedef struct pt_cell {
     uint8_t ceil_z;
     uint8_t floor;       // catalogue shade indices
     uint8_t ceil;
+    uint8_t sprite;      // the cell's sprite, 0 = none
 } pt_cell;
+
+// A sprite standing on its cell's floor. It lies wholly inside the cell
+// (its width as a disc around the base), and below the cell's ceiling.
+typedef struct pt_sprite {
+    uint16_t x;          // the base's centre, in world units
+    uint16_t y;
+    uint16_t size;       // height in world units; the width follows the art's aspect
+    uint8_t art;         // index into the map's art
+} pt_sprite;
 
 typedef struct pt_map {
     pt_vertex verts[PT_MAX_VERTS];
     pt_cell cells[PT_MAX_CELLS];    // cell 0 is the "outside" and never used
     pt_edge edges[PT_MAX_EDGES];
+    pt_sprite sprites[PT_MAX_SPRITES];    // sprite 0 is unused ("none")
+    pt_sprite_art arts[PT_MAX_ARTS];
     uint8_t num_verts;
     uint8_t num_cells;
     uint8_t num_edges;
+    uint8_t num_sprites;
+    uint8_t num_arts;
 } pt_map;
 
 // The ring successor of an edge of cell c (wraps within the cell).
@@ -75,13 +92,13 @@ static inline uint8_t pt_map_twin(const pt_map *m, uint8_t e)
 }
 
 // Build the demo scene: a pentagonal room with a depressed square in the
-// centre of its floor, and a corridor to a second, square room with a thin
-// pillar in its middle.
+// centre of its floor holding a boulder, and a corridor to a second, square
+// room with a thin pillar in its middle.
 void pt_scene_init(pt_map *m);
 
 // Check every structural invariant (twins, convexity, winding, soft-edge
-// attribute equality, collision data); trips an assert on failure in debug,
-// returns false in release.
+// attribute equality, collision data, sprites within their cells); trips an
+// assert on failure in debug, returns false in release.
 bool pt_map_validate(const pt_map *m);
 
 // The signed distance of a point from an edge's line, s16.8: positive on the

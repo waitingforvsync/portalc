@@ -172,6 +172,27 @@ RC_TEST_STEP(arith, project_rowd, fix)
     }
 }
 
+RC_TEST_STEP(arith, project_q8, fix)
+{
+    (void)fix;
+    // byte and u16 lengths, depths from 1 up: within the reciprocal's error
+    // plus a count, or saturated; a u16 depth's normalising truncates its low
+    // bits, which can overestimate 1/x by up to 1/128
+    static const uint16_t lens[] = {0, 1, 7, 100, 128, 255, 256, 300, 1000, 4000, 30000};
+    for (uint32_t i = 0; i < sizeof(lens) / sizeof(lens[0]); i++)
+        for (uint32_t x = 1; x < 60000; x = x * 3 / 2 + 1) {
+            uint32_t exact = ((uint32_t)lens[i] << 14) / x;
+            uint32_t got = pt_project_q8(lens[i], (uint16_t)x, pt_recip16((uint16_t)x));
+            if (exact >= 0xFFFF) {
+                RC_CHECK(got >= 0xFF00, ==, true);
+                continue;
+            }
+            int32_t err = (int32_t)got - (int32_t)exact;
+            int32_t slack = (int32_t)(exact / 128) + 2;
+            RC_CHECK(err >= -slack && err <= slack, ==, true);
+        }
+}
+
 RC_TEST_STEP(arith, grad_mag, fix)
 {
     (void)fix;

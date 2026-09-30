@@ -119,6 +119,11 @@ uint8_t pt_project_col(int16_t y, uint16_t x, pt_recip rx);
 // The same projection at depth d kept as u8.8 (the near clip's sx*).
 uint16_t pt_project_col_q8(int16_t y, uint16_t d);
 
+// 64*len/x in u8.8, saturating at 0xFFFF: a length's projected size at
+// depth x, in screen pixels (a sprite's scale, span and placement). rx is
+// pt_recip16(x).
+uint16_t pt_project_q8(uint16_t len, uint16_t x, pt_recip rx);
+
 // 64*h/x for a height magnitude h = 8*h8 (heights are quantised to 8-unit
 // steps so they fit a byte): the row offset of a line endpoint from the
 // screen centre, the caller adding or subtracting by the height's side.

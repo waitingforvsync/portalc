@@ -1672,3 +1672,52 @@ screen from the start position, its base behind the pit's rim from
 farther back, whole across the two portals at the pit's corner, through
 the doorway from the corridor and room 2, huge from 64 units in the pit
 and gone at 24 (the near limit). 33/33 tests.
+
+## 2026-09-30 — Sprites seen with their centre outside the view cone
+
+Porting research turned up a bug in the phase 2 projection: `inst_new`
+took the depth's reciprocal from `transform`, which forms one only inside
+the view cone (`rx` stays {0,0} outside it, the reciprocal of 1). A sprite
+whose centre had left the cone while part of it was still on screen was
+projected as if 1 unit away, its position saturated off the screen, and
+it was culled: the boulder vanished near the screen's sides instead of
+sliding off them. `inst_new` now forms its own reciprocal of the depth.
+The reference comparison couldn't see it (it takes the same instance
+data); a new test turns the camera through all 256 angles at the start
+position and checks every projection's columns against floating point to
+a pixel, including angles with the centre outside the cone, and fails
+without the fix. The sweep changes in 22 frames, each gaining the
+boulder's edge at a screen side; the reference comparison now covers 956
+frames with sprites (from 891). 34/34 tests.
+
+## 2026-10-01 — Reciprocal products in 16 bits and a carry
+
+The Beeb port found that no reciprocal multiply needs a third byte.
+`mul_recip8` and `mul_recip16` returned their 17-bit products in a
+`uint32_t`; they now return 16 bits with the 17th beside them (`prod17`),
+which is how the 6502 holds them: the 16 bits in the caller's variable,
+the 17th in the carry. Each caller handles that bit as its 6502 routine
+does:
+
+- **Clear, and now asserted.** `grad_mag` and `gradq8_mag` (dy <= 64
+  keeps the product under 2^15). `project_col`: the byte form is under
+  2^14, and the u16 form under 2 * uy, where uy <= 32768. `project_col_q8`:
+  the pre-shifted numerator is at most 16,511 (the old comment's "under
+  2^14" was a little out, since d's normaliser truncates), so the product
+  is under 2^15. `project_rowd` at depths 1 and 2, where h8 is 0.
+- **Saturation.** `div_t` shifts by at most 8, so a 17th bit means
+  t > 255. `div_q8` at a shift of 0. `project_q8` before a left shift, or
+  with no shift.
+- **Shifted in on the first right shift** (`shr17`). `div_cols`,
+  `div_q8`, `project_q8` and `project_rowd`.
+
+Checked exhaustively against the old arith.c over every composite's
+asserted domain, asserts on: 19 billion cases (`div_cols`, `div_q8` and
+`project_q8` 4.3 billion each), no differences and no assert fired. Every
+golden frame, camera stream, pose file, table, export and the sweep are
+byte-identical. The replay recorder keeps 7 more calls, because arith.c's
+new branches are basic blocks it hadn't seen; every old record is
+byte-identical, and all 3,120 reproduce. The coverage gate has three new
+lines, branches that used to share a covered line: `div_t`'s 17th-bit
+saturation (rare), and `div_q8` at den 128 (dead) and at 256-257 (rare).
+34/34 tests.

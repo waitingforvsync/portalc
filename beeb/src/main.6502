@@ -1,0 +1,149 @@
+\ **************************************************************************
+\ *
+\ *     main.6502 - start, and the main loop
+\ *
+\ **************************************************************************
+
+\\ The copy's destination (PLAN.md section 3.3, start): zero what the
+\\ program owns, set the real palette, start the clock (test builds), show
+\\ buffer A with B at the back, enable the vsync interrupt and go.
+.start
+{
+    CLD
+    LDA #0
+    LDX #15
+.mb
+    STA MB,X                        ; the mailbox (and the OS's old OSFILE block)
+    DEX : BPL mb
+
+    ; the per-frame state and the screens, junk rows included
+IF BSS_ORG < SCREENS_ORG
+    LDA #HI(BSS_ORG)
+ELSE
+    LDA #HI(SCREENS_ORG)
+ENDIF
+    LDX #HI(SCREENS_END)
+    JSR zero_pages
+
+    LDX #15
+.pal
+    LDA paldata,X : STA &FE21
+    DEX : BPL pal
+
+IF HARNESS
+    JSR arith_init                  ; (the release build has no arithmetic yet)
+    ; the clock: T2 one-shot (so it just counts on), from &FFFF
+    LDA &FE6B : AND #&DF : STA &FE6B
+    LDA #&FF
+    STA &FE68 : STA &FE69
+    STA t2last : STA t2last + 1
+    LDA #0
+    STA usecs : STA usecs + 1 : STA usecs + 2 : STA usecs + 3
+ENDIF
+
+    LDA #0
+    STA vsyncs : STA swapreq : STA swapstamp
+    LDA #1 : STA backbuf            ; the stub shows A: draw into B
+
+    LDA #&7F : STA &FE4D            ; nothing pending
+    LDA #&82 : STA &FE4E            ; vsync (CA1) only
+    CLI
+
+IF HARNESS
+    LDA #'1' : STA MB_MAGIC + 2     ; the magic, last of all
+    LDA #'C' : STA MB_MAGIC + 1
+    LDA #'P' : STA MB_MAGIC
+    JMP mailbox
+ELSE
+    JMP mainloop
+ENDIF
+}
+
+ZA_AUTO1 backbuf                    ; main loop state: the buffer being drawn, 0 = A, 1 = B
+
+IF NOT(HARNESS)
+\\ Phase 0's loop: each frame, draw one of two test patterns into the back
+\\ buffer, with a band that moves down a row each frame, and have the IRQ
+\\ swap it in. A tear, or drawing into the buffer on show, would show up as
+\\ a broken band.
+.mainloop
+{
+    ZA_AUTO1 frame                  ; local: frames drawn, for the band's position
+    LDA #0 : STA frame
+.loop
+.wait
+    LDA swapreq : BNE wait          ; the last swap not shown yet: B is busy
+
+    LDA backbuf : BNE drawb
+    JSR clear_a
+    LDA #HI(BUF_A) : STA draw.page
+    JMP drawn
+.drawb
+    JSR clear_b
+    LDA #HI(BUF_B) : STA draw.page
+.drawn
+    LDA backbuf : STA draw.kind
+    LDA frame : STA draw.frame
+    JSR draw
+
+    LDX backbuf
+    LDA r13_of,X : STA nextr13
+    LDA r12_of,X : STA nextr12
+    LDA #1 : STA swapreq
+    TXA : EOR #1 : STA backbuf
+    INC frame
+    JMP loop
+}
+
+\\ A test pattern into the 4K buffer at page `page`: kind 0, vertical bars
+\\ of the four colours a byte column each; kind 1, a red and blue
+\\ checkerboard. Then a band of solid green, 8 scanlines tall, from
+\\ scanline (frame * 2) MOD 128.
+.draw
+{
+    ZA_AUTO1 page                   ; in: the buffer's first page
+    ZA_AUTO1 kind                   ; in: 0 bars, 1 checkerboard
+    ZA_AUTO1 frame                  ; in: the band's position (2 scanlines a frame)
+    ZA_AUTO2 p                      ; local: the page being drawn
+    ZA_AUTO1 pages                  ; local: pages left to fill
+    ZA_AUTO1 rows                   ; local: the band's current scanline
+    ZA_AUTO1 lines                  ; local: band scanlines left
+    LDA page : STA p + 1
+    LDA #0 : STA p
+    LDA #16 : STA pages
+.pg
+    LDY #0                          ; Y = byte column * 8 + scanline in the row
+.byte
+    LDA kind : BNE checks
+    TYA : LSR A : LSR A : LSR A
+    AND #3 : TAX
+    LDA bars,X
+    JMP put
+.checks
+    TYA : AND #1 : BEQ even
+    LDA #&5A : BNE put              ; blue, red, blue, red
+.even
+    LDA #&A5                        ; red, blue, red, blue
+.put
+    STA (p),Y
+    INY : BNE byte
+    INC p + 1
+    DEC pages : BNE pg
+
+    LDA frame : ASL A : AND #127 : STA rows
+    LDA #8 : STA lines
+.band
+    LDA rows : LSR A : LSR A : LSR A    ; the character row: a page
+    CLC : ADC page : STA p + 1
+    LDA rows : AND #7 : TAY             ; the scanline within it
+.col
+    LDA #&FF : STA (p),Y
+    TYA : CLC : ADC #8 : TAY
+    BCC col                         ; on across the 32 byte columns
+    LDA rows : CLC : ADC #1 : AND #127 : STA rows
+    DEC lines : BNE band
+    RTS
+.bars
+    EQUB &00, &0F, &F0, &FF         ; colours 0, 1, 2, 3 in all four pixels
+}
+ENDIF

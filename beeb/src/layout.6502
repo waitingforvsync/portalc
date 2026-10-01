@@ -1,0 +1,60 @@
+\ **************************************************************************
+\ *
+\ *     layout.6502 - the memory map (PLAN.md section 2)
+\ *
+\ **************************************************************************
+\
+\ Once the IRQ routine is installed the OS is off: no OS calls at all, so
+\ everything from &300 up is ours.
+\
+\   &300-&EFF    fixed tables (Phase 1); the NMI handler at &D00
+\   &F00-...     code and data, up to CODE_GUARD
+\   BSS_ORG      the per-frame state (release: &4E00-&5CFF; harness: inside
+\                the screen buffer not under test)
+\   &5D00        junk character row above buffer A
+\   &5E00        buffer A (4K)
+\   &6E00        junk character row below A and above B, shared
+\   &6F00        buffer B (4K)
+\   &7F00        junk character row below B
+\
+\ Page 2 keeps &200-&205 (BRKV, IRQ1V) and never writes &27E-&29B (kept
+\ across BREAK); test builds talk to the host through a mailbox at
+\ &2F0-&2FF.
+
+CODE_ORG = &300
+TABLES_END = &F00
+NMI_ADDR = &D00                 ; the 6502's NMI vector enters RAM here
+
+\ MAP (from the Makefile, -D MAP=n): 0 the demo scene, 7 the demo scene
+\ with seven sprites, 9 the stress map. (A default here via DEFINED doesn't
+\ settle: from the second pass on the symbol counts as defined.)
+
+SCREENS_ORG = &5D00
+BUF_A = &5E00
+BUF_B = &6F00
+SCREENS_END = &8000
+
+IF HARNESS
+    CODE_GUARD = SCREENS_ORG    ; a harness image may reach the screens
+    IF TESTBUF == 0
+        BSS_ORG = BUF_B         ; buffer A is the one under test
+    ELSE
+        BSS_ORG = BUF_A
+    ENDIF
+    BSS_END = BSS_ORG + &1000
+ELSE
+    BSS_ORG = &4E00
+    CODE_GUARD = BSS_ORG
+    BSS_END = SCREENS_ORG
+ENDIF
+
+\ The mailbox (test builds, PLAN.md section 5.2): the host pokes the
+\ inputs and then cmd..seq in one request, and polls ack.
+MB = &2F0
+MB_MAGIC = MB + 0               ; 'P' 'C' '1', written last by start
+MB_CMD = MB + 3
+MB_ARG = MB + 4                 ; four argument bytes
+MB_SEQ = MB + 8                 ; the host's command number, from 1
+MB_ACK = MB + 9                 ; = seq once the command is done
+MB_ERR = MB + 10                ; 0 = ok, else a TRAP code; &FF = BRK
+MB_USECS = MB + 11              ; four bytes: a command's elapsed microseconds

@@ -1,0 +1,4 @@
+\ portal.6502 - the release program: PORTAL on the disc.
+HARNESS = FALSE
+PROG_NAME = "PORTAL"
+INCLUDE "src/top.6502"

@@ -1,0 +1,93 @@
+\ **************************************************************************
+\ *
+\ *     mailbox.6502 - the host's way in (PLAN.md section 5.2)
+\ *
+\ **************************************************************************
+\
+\ The host pokes a command's arguments, then cmd..seq in one request, and
+\ polls ack; the Beeb spins while seq == ack, so everything the host peeks
+\ is quiescent while it waits. Commands:
+\
+\   0 PING   nothing
+\   1 TIME   wait for a vsync, then time arg0 + 256 * arg1 more vsyncs:
+\            the elapsed microseconds to MB_USECS
+\   2 SPIKE  the recursion spike (spike.6502), seeded by arg0
+\   3 S2     an arithmetic routine against the C (s2.6502)
+
+CMD_PING = 0
+CMD_TIME = 1
+
+MACRO TRAP code                     ; test builds: stop with an error code
+    LDA #code : STA MB_ERR
+    JMP trapstop
+ENDMACRO
+
+.mailbox
+{
+.loop
+    LDA MB_SEQ : CMP MB_ACK : BEQ loop
+    LDA #0 : STA MB_ERR
+    LDA MB_CMD
+    CMP #CMD_PING : BEQ done
+    CMP #CMD_TIME : BNE @+
+    JSR cmd_time
+    JMP done
+.@  CMP #CMD_SPIKE : BNE @+
+    JSR cmd_spike
+    JMP done
+.@  CMP #CMD_S2 : BNE unknown
+    JSR cmd_s2
+    JMP done
+.unknown
+    LDA #1 : STA MB_ERR
+.done
+    LDA MB_SEQ : STA MB_ACK
+    JMP loop
+}
+
+\\ Stop after a TRAP: report it, then spin with interrupts on.
+.trapstop
+{
+    LDA MB_SEQ : STA MB_ACK
+.spin
+    JMP spin
+}
+
+.cmd_time
+{
+    ZA_AUTO2 n                      ; local: vsyncs left to time (in: MB_ARG, MB_ARG+1)
+    ZA_AUTO 4, t0                   ; local: the clock at the start (out: MB_USECS)
+    LDA MB_ARG : STA n
+    LDA MB_ARG + 1 : STA n + 1
+    ORA n : BEQ none                ; zero vsyncs: zero time
+    LDA vsyncs
+.edge
+    CMP vsyncs : BEQ edge           ; start just after a vsync
+    JSR now
+    ZA_DISCARD t0                   ; the old value's dead: the loop makes a new one
+    LDX #3
+.keep
+    LDA now.t,X : ZA_INDEXEDBY 0..3
+    STA t0,X : ZA_INDEXEDBY 0..3
+    DEX : BPL keep
+.count
+    LDA vsyncs
+.tick
+    CMP vsyncs : BEQ tick
+    LDA n : BNE @+
+    DEC n + 1
+.@  DEC n
+    LDA n : ORA n + 1 : BNE count
+    JSR now
+    SEC
+    FOR i = 0 ..< 4
+        LDA now.t + i : SBC t0 + i : STA MB_USECS + i
+    NEXT
+    RTS
+.none
+    LDX #3
+.zero
+    STA MB_USECS,X
+    DEX : BPL zero
+    RTS
+}

@@ -248,19 +248,39 @@ pt_recip pt_recip16(uint16_t n)
     return (pt_recip) {.f = recipf_[m - 128], .e = (uint8_t)(s + 8 - (m == 128))};
 }
 
+// A reciprocal product as the 6502 holds it: 16 bits, with the 17th (the
+// final add's carry) beside them. Each caller knows it's clear (its asserts
+// keep the product small), takes it as saturation, or shifts it back in.
+typedef struct prod17 {
+    uint16_t v;
+    bool c;
+} prod17;
+
 // num * (256 + f) for a byte numerator: one lookup with num added into the
-// high byte, exact in 17 bits (the top bit is the add's carry).
-static uint32_t mul_recip8(uint8_t num, pt_recip rc)
+// high byte, exact (the 17th bit is the add's carry).
+static prod17 mul_recip8(uint8_t num, pt_recip rc)
 {
-    return ((uint32_t)num << 8) + pt_mulu8(num, rc.f);
+    uint16_t p = pt_mulu8(num, rc.f);
+    uint16_t hi = (uint16_t)((p >> 8) + num);
+    return (prod17) {.v = (uint16_t)(hi << 8 | (p & 0xFF)), .c = hi > 0xFF};
 }
 
 // num * (256 + f) >> 8 for a u16 numerator: num plus the fractional product
-// (two lookups), 17 bits with the carry. Exact: only the low partial has
-// bits below the shift, and they are the true product's own.
-static uint32_t mul_recip16(uint16_t num, pt_recip rc)
+// (two lookups), the add's carry the 17th bit. Exact: only the low partial
+// has bits below the shift, and they are the true product's own.
+static prod17 mul_recip16(uint16_t num, pt_recip rc)
 {
-    return (uint32_t)num + pt_mulu16_frac(num, rc.f);
+    uint16_t v = (uint16_t)(num + pt_mulu16_frac(num, rc.f));
+    return (prod17) {.v = v, .c = v < num};
+}
+
+// p >> n for n >= 1: the 17th bit comes in on the first shift, and the rest
+// are 16-bit.
+static uint16_t shr17(prod17 p, uint8_t n)
+{
+    RC_ASSERT(n >= 1 && n <= 16);
+    uint16_t v = (uint16_t)((p.c ? 0x8000u : 0) | p.v >> 1);
+    return (uint16_t)(v >> (n - 1));
 }
 
 uint8_t pt_div_t(uint16_t num, uint16_t den)
@@ -268,15 +288,23 @@ uint8_t pt_div_t(uint16_t num, uint16_t den)
     RC_ASSERT(den > 0 && num <= den);
 
     // k = 8: a byte den leaves num a byte too, and the exact product shifts
-    // by e; a u16 den (e >= 8) takes the u16 form, shifted by e - 8
-    uint32_t t;
+    // by e; a u16 den (e >= 8) takes the u16 form, shifted by e - 8. Either
+    // way the shift is 8 at most, so a 17th bit means t > 255
+    prod17 p;
+    uint8_t s;
     if (den < 256) {
         pt_recip rc = pt_recip8((uint8_t)den);
-        t = mul_recip8((uint8_t)num, rc) >> rc.e;
+        p = mul_recip8((uint8_t)num, rc);
+        s = rc.e;
     } else {
         pt_recip rc = pt_recip16(den);
-        t = mul_recip16(num, rc) >> (rc.e - 8);
+        p = mul_recip16(num, rc);
+        s = (uint8_t)(rc.e - 8);
     }
+    RC_ASSERT(s <= 8);
+    if (p.c)
+        return 255;
+    uint16_t t = (uint16_t)(p.v >> s);
     return t > 255 ? 255 : (uint8_t)t;
 }
 
@@ -284,9 +312,12 @@ uint8_t pt_div_cols(uint16_t num_q8, uint16_t den_q8)
 {
     RC_ASSERT(den_q8 > 0);
 
-    // k = 0: the u16 form shifted by e
+    // k = 0: the u16 form shifted by e; e is 0 only for den_q8 = 1, whose f
+    // of 0 leaves no 17th bit
     pt_recip rc = pt_recip16(den_q8);
-    uint32_t q = mul_recip16(num_q8, rc) >> rc.e;
+    prod17 m = mul_recip16(num_q8, rc);
+    RC_ASSERT(rc.e > 0 || !m.c);
+    uint16_t q = rc.e == 0 ? m.v : shr17(m, rc.e);
     return q > 127 ? 127 : (uint8_t)q;
 }
 
@@ -296,14 +327,18 @@ uint16_t pt_div_q8(uint16_t num, uint16_t den)
 
     // an overflowing quotient saturates up front (only a byte den can
     // overflow: one compare of num's high byte); then k = 8 is the u16 form
-    // shifted right by e - 8 - or left by one for den = 128 exactly, the one
-    // power of two here whose e is 7
+    // shifted right by e - 8, where a shift of 0 (den 129..257) saturates on
+    // a 17th bit - or left by one for den = 128 exactly, the one power of two
+    // here whose e is 7
     if (den < 256 && (num >> 8) >= den)
         return 0xFFFF;
     pt_recip rc = pt_recip16(den);
-    uint32_t m = mul_recip16(num, rc);
-    uint32_t q = rc.e < 8 ? m << 1 : m >> (rc.e - 8);
-    return q > 0xFFFF ? 0xFFFF : (uint16_t)q;
+    prod17 m = mul_recip16(num, rc);
+    if (rc.e < 8)
+        return (m.c || (m.v & 0x8000)) ? 0xFFFF : (uint16_t)(m.v << 1);
+    if (rc.e == 8)
+        return m.c ? 0xFFFF : m.v;
+    return shr17(m, (uint8_t)(rc.e - 8));
 }
 
 uint16_t pt_grad_mag(uint8_t dy, uint8_t dx)
@@ -312,10 +347,12 @@ uint16_t pt_grad_mag(uint8_t dy, uint8_t dx)
     RC_ASSERT(dy <= 64);
 
     // k = 8: the exact product shifted by e (0..8: dx = 1 is f = 0, e = 0,
-    // giving dy << 8 with no special case)
+    // giving dy << 8 with no special case); dy <= 64 keeps it under 2^15
     pt_recip rc = pt_recip8(dx);
-    uint32_t q = mul_recip8(dy, rc) >> rc.e;
-    return q > 0x7FFF ? 0x7FFF : (uint16_t)q;
+    prod17 p = mul_recip8(dy, rc);
+    RC_ASSERT(!p.c);
+    uint16_t q = (uint16_t)(p.v >> rc.e);
+    return q > 0x7FFF ? 0x7FFF : q;
 }
 
 uint16_t pt_gradq8_mag(uint8_t dy, uint16_t dx_q8)
@@ -323,17 +360,19 @@ uint16_t pt_gradq8_mag(uint8_t dy, uint16_t dx_q8)
     RC_ASSERT(dx_q8 > 0);
     RC_ASSERT(dy <= 64);
 
-    // k = 16: the exact product shifted by e - 8 either way; a left shift
-    // saturates, tested against the product before shifting
+    // k = 16: the exact product (under 2^15: dy <= 64) shifted by e - 8
+    // either way; a left shift saturates, tested against the product before
+    // shifting
     pt_recip rc = pt_recip16(dx_q8);
-    uint32_t p = mul_recip8(dy, rc);
+    prod17 p = mul_recip8(dy, rc);
+    RC_ASSERT(!p.c);
     if (rc.e < 8) {
-        if (p >= (0x8000u >> (8 - rc.e)))
+        if (p.v >= (0x8000u >> (8 - rc.e)))
             return 0x7FFF;
-        return (uint16_t)(p << (8 - rc.e));
+        return (uint16_t)(p.v << (8 - rc.e));
     }
-    p >>= rc.e - 8;
-    return p > 0x7FFF ? 0x7FFF : (uint16_t)p;
+    uint16_t q = (uint16_t)(p.v >> (rc.e - 8));
+    return q > 0x7FFF ? 0x7FFF : q;
 }
 
 uint8_t pt_project_col(int16_t y, uint16_t x, pt_recip rx)
@@ -343,10 +382,13 @@ uint8_t pt_project_col(int16_t y, uint16_t x, pt_recip rx)
     uint16_t uy = (uint16_t)(y < 0 ? -y : y);
     RC_ASSERT(uy <= x);
 
-    // k = 6: below x = 32 (e < 6) uy is a byte and the exact product
-    // shifts by e + 2; otherwise the u16 form shifts by e - 6
-    uint32_t q = rx.e < 6 ? mul_recip8((uint8_t)uy, rx) >> (rx.e + 2)
-                          : mul_recip16(uy, rx) >> (rx.e - 6);
+    // k = 6: up to x = 32 (e < 6) uy is a byte and the exact product
+    // shifts by e + 2; otherwise the u16 form shifts by e - 6. Neither has a
+    // 17th bit: the byte form is under 2^14, and the u16 form under 2 * uy,
+    // where uy <= 32768
+    prod17 m = rx.e < 6 ? mul_recip8((uint8_t)uy, rx) : mul_recip16(uy, rx);
+    RC_ASSERT(!m.c);
+    uint16_t q = (uint16_t)(rx.e < 6 ? m.v >> (rx.e + 2) : m.v >> (rx.e - 6));
     if (q > 64)
         q = 64;
     return (uint8_t)(y < 0 ? 64 - q : 64 + q);
@@ -361,11 +403,14 @@ uint16_t pt_project_col_q8(int16_t y, uint16_t d)
         uy = d;    // interpolation rounding can nudge y just past the ray
 
     // k = 14: the shift e - 14 is negative at every near-clip depth, so the
-    // numerator is pre-shifted left (exact); uy <= d keeps it under
-    // n * 64 < 2^14
+    // numerator is pre-shifted left (exact); uy <= d keeps it at most
+    // 16,511 (d's normaliser truncates, so a little past 2^14), and the
+    // product under 2^15
     pt_recip rc = pt_recip16(d);
     RC_ASSERT(rc.e <= 14);
-    uint32_t q = mul_recip16((uint16_t)(uy << (14 - rc.e)), rc);
+    prod17 m = mul_recip16((uint16_t)(uy << (14 - rc.e)), rc);
+    RC_ASSERT(!m.c);
+    uint16_t q = m.v;
     if (q > 64u << 8)
         q = 64u << 8;
     return (uint16_t)(y < 0 ? (64u << 8) - q : (64u << 8) + q);
@@ -375,18 +420,24 @@ uint16_t pt_project_q8(uint16_t len, uint16_t x, pt_recip rx)
 {
     RC_ASSERT(x > 0);
 
-    // k = 14: a byte len takes the exact 17-bit product, shifted by e - 6;
-    // a u16 len the u16 form, shifted by e - 14. Both shift left at small
-    // depths, where the result saturates soonest
-    uint32_t q;
+    // k = 14: a byte len takes the exact product, shifted by e - 6; a u16
+    // len the u16 form, shifted by e - 14. A 17th bit comes in on a right
+    // shift and saturates otherwise, as does a left shift past 16 bits;
+    // both shift left at small depths, where the result saturates soonest
+    uint8_t k = 6;
+    prod17 p;
     if (len < 256) {
-        uint32_t p = mul_recip8((uint8_t)len, rx);
-        q = rx.e < 6 ? p << (6 - rx.e) : p >> (rx.e - 6);
+        p = mul_recip8((uint8_t)len, rx);
     } else {
-        uint32_t m = mul_recip16(len, rx);
-        q = rx.e < 14 ? m << (14 - rx.e) : m >> (rx.e - 14);
+        p = mul_recip16(len, rx);
+        k = 14;
     }
-    return q > 0xFFFF ? 0xFFFF : (uint16_t)q;
+    if (rx.e > k)
+        return shr17(p, (uint8_t)(rx.e - k));
+    if (p.c)
+        return 0xFFFF;
+    uint8_t l = (uint8_t)(k - rx.e);
+    return p.v > (0xFFFFu >> l) ? 0xFFFF : (uint16_t)(p.v << l);
 }
 
 uint8_t pt_project_rowd(uint8_t h8, uint16_t x, pt_recip rx)
@@ -394,10 +445,12 @@ uint8_t pt_project_rowd(uint8_t h8, uint16_t x, pt_recip rx)
     RC_ASSERT(x > 0);
     RC_ASSERT((uint32_t)x * PT_SCREEN_HEIGHT >= (uint32_t)h8 * (8 * 128));    // on screen
 
-    // k = 9 (64 * 8 * h8 / x): the exact product shifted by e - 1; e is 0
-    // only at depth 1, where h8 can only be 0
-    uint32_t p = mul_recip8(h8, rx);
-    uint32_t q = rx.e == 0 ? p << 1 : p >> (rx.e - 1);
+    // k = 9 (64 * 8 * h8 / x): the exact product shifted by e - 1, the 17th
+    // bit coming in on the shift. e is 0 or 1 only at depths 1 and 2, where
+    // h8 can only be 0
+    prod17 p = mul_recip8(h8, rx);
+    RC_ASSERT(rx.e >= 2 || !p.c);
+    uint16_t q = rx.e < 2 ? (uint16_t)(p.v << (1 - rx.e)) : shr17(p, (uint8_t)(rx.e - 1));
     if (q > PT_SCREEN_HEIGHT / 2)
         q = PT_SCREEN_HEIGHT / 2;
     return (uint8_t)q;

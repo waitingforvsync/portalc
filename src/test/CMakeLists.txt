@@ -8,6 +8,7 @@ add_executable(portalc_test
     test_palette.c
     test_render.c
     test_sprite.c
+    testmaps.c
     probes/probe_collision.c
     probes/probe_fan.c
     probes/probe_walk.c

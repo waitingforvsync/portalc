@@ -1,0 +1,10 @@
+\ **************************************************************************
+\ *
+\ *     bss.6502 - the per-frame state (PLAN.md section 2.1)
+\ *
+\ **************************************************************************
+\
+\ Zeroed by start. From Phase 5: the piece pool as parallel pages, the
+\ visits, the sprite instances, the segment pool, the toggle list.
+
+.bss_start

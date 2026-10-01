@@ -1,0 +1,16 @@
+\ bss.6502 (test) - the harness's own state, after the release BSS
+
+.spike_out SKIP 16                  ; the spike's results (spike.6502)
+
+\ check S2 (s2.6502): the host's arguments...
+.s2_fn SKIP 1                       ; the routine (S2_*)
+.s2_mode SKIP 1                     ; 0 counter, 1 random; +&80 skip the call
+.s2_start SKIP 4                    ; the first counter value, or the seed
+.s2_count SKIP 4                    ; cases
+\ ...the run's state...
+.s2_left SKIP 4                     ; cases still to go
+.s2_vec SKIP 2                      ; the driver
+\ ...and the results
+.s2_calls SKIP 4                    ; the cases used
+.s2_out SKIP 2                      ; the CRC
+.s2_last SKIP 4                     ; the last case's outputs

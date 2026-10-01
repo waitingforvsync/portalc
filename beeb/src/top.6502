@@ -1,0 +1,61 @@
+\ **************************************************************************
+\ *
+\ *     top.6502 - the program's sections (PLAN.md sections 2 and 3.2)
+\ *
+\ **************************************************************************
+\
+\ The screens and the per-frame state are labels only, never saved. The
+\ loader section is the file on disc: the payload, assembled for &300 but
+\ carried at &1200, then the stub, which copies the payload down to &300
+\ and starts it (Baron's relocation workflow: the nested Code section is
+\ rephased to &300 while its bytes stay in the loader).
+
+INCLUDE "layout.6502"
+INCLUDE "../data/consts.6502"
+
+ZA_POOL &00..&FB                ; &FC holds A across the OS's IRQ entry
+
+SECTION Screens, org = SCREENS_ORG
+.junk0  SKIP &100
+.bufa   SKIP &1000
+.junk1  SKIP &100
+.bufb   SKIP &1000
+.junk2  SKIP &100
+.screens_end
+ENDSECTION
+ASSERT bufa == BUF_A AND bufb == BUF_B AND screens_end == SCREENS_END
+
+SECTION Bss, org = BSS_ORG, guard = BSS_END
+    INCLUDE "bss.6502"
+    IF HARNESS
+        INCLUDE "../test/bss.6502"
+    ENDIF
+ENDSECTION
+
+SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filename = PROG_NAME, guard = &7C00
+.payload
+    SECTION Code, org = CODE_ORG, guard = CODE_GUARD
+        INCLUDE "tables.6502"
+        INCLUDE "hw.6502"
+        INCLUDE "main.6502"
+        INCLUDE "../data/shades.6502"
+        IF MAP == 7
+            INCLUDE "../data/map7.6502"
+        ELIF MAP == 9
+            INCLUDE "../data/map9.6502"
+        ELSE
+            INCLUDE "../data/map0.6502"
+        ENDIF
+        IF HARNESS
+            INCLUDE "../test/mailbox.6502"
+            INCLUDE "../test/spike.6502"
+            INCLUDE "arith.6502"
+            INCLUDE "../test/s2.6502"
+            INCLUDE "../test/pad.6502"
+        ENDIF
+    ENDSECTION
+.entry
+    INCLUDE "stub.6502"
+ENDSECTION
+
+PRINT "payload &", ~(entry - payload), " bytes, runs at &", ~CODE_ORG, "-&", ~(CODE_ORG + entry - payload - 1)

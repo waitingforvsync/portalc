@@ -12,6 +12,7 @@
 #include "richc/random.h"
 #include "richc/test.h"
 #include "sprite.h"
+#include "testmaps.h"
 
 static pt_map map_;
 static pt_render render_;
@@ -124,28 +125,52 @@ RC_TEST(sprite, boulder_projection)
     RC_CHECK(in->seg, !=, (uint8_t)0);
 }
 
-// A sprite in cells beyond the boulder's, so that frames hold several and
-// their order means something: the ring's five cells and room 2's first.
+RC_TEST(sprite, projection_all_angles)
+{
+    // turning on the spot at the start position sweeps the boulder across
+    // the screen and off it: whenever any of it should be on screen (its
+    // centre inside the view cone or not), it is projected, and its columns
+    // agree with floating point to a pixel
+    pt_arith_init();
+    pt_scene_init(&map_);
+    pt_render_init(&render_, &map_);
+    uint8_t cell = pt_map_find_cell(&map_, PT_CAM_START_X, PT_CAM_START_Y);
+    const pt_sprite *sp = &map_.sprites[map_.cells[1].sprite];
+    uint32_t outside = 0;
+    for (uint32_t a = 0; a < 256; a++) {
+        pt_render_frame(&render_, PT_CAM_START_X, PT_CAM_START_Y, (uint8_t)a, cell);
+        double th = a * (2 * 3.14159265358979323846 / 256);
+        double wx = (double)sp->x - PT_CAM_START_X;
+        double wy = (double)sp->y - PT_CAM_START_Y;
+        double x = wx * cos(th) + wy * sin(th);
+        double y = wy * cos(th) - wx * sin(th);
+        if (x < PT_SPRITE_NEAR + 2)
+            continue;
+        double half = 64.0 * 0.5 * sp->size * 14 / 16 / x;
+        double centre = 64 + 64 * y / x;
+        double c0 = floor(centre - half + 0.5);
+        double c1 = floor(centre + half + 0.5);
+        if (c0 < 0)
+            c0 = 0;
+        if (c1 > PT_SCREEN_WIDTH)
+            c1 = PT_SCREEN_WIDTH;
+        if (c1 - c0 < 2)
+            continue;    // too close to call at the screen's sides
+        if (fabs(y) > x)
+            outside++;
+        RC_CHECK(render_.num_insts, ==, (uint8_t)2);
+        if (render_.num_insts == 2) {
+            RC_CHECK(fabs(render_.insts[1].cx0 - c0) <= 1, ==, true);
+            RC_CHECK(fabs(render_.insts[1].cx1 - c1) <= 1, ==, true);
+        }
+    }
+    RC_CHECK(outside, >, (uint32_t)0);    // some with the centre outside the view cone
+}
+
+// The seven-sprite map (testmaps.c), checked valid.
 static void add_test_sprites(pt_map *m)
 {
-    static const uint8_t cells[] = {2, 3, 4, 5, 6, 8};
-    for (uint32_t i = 0; i < sizeof cells; i++) {
-        const pt_cell *c = &m->cells[cells[i]];
-        uint32_t sx = 0;
-        uint32_t sy = 0;
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            sx += m->verts[m->edges[c->first_edge + k].v0].x;
-            sy += m->verts[m->edges[c->first_edge + k].v0].y;
-        }
-        m->sprites[m->num_sprites] = (pt_sprite) {
-            .x = (uint16_t)(sx / c->num_edges),
-            .y = (uint16_t)(sy / c->num_edges),
-            .size = 64,
-            .art = 0,
-        };
-        m->cells[cells[i]].sprite = m->num_sprites++;
-    }
-    RC_CHECK_TRUE(pt_map_validate(m));
+    RC_CHECK_TRUE(pt_testmaps_add_sprites(m));
 }
 
 // Where the ray through column c's centre enters a cell, as a distance along

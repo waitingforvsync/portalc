@@ -800,6 +800,8 @@ static uint8_t inst_new(pt_render *r, uint8_t cell)
     if (v.x < PT_SPRITE_NEAR)
         return 0;
     uint16_t depth = (uint16_t)v.x;
+    pt_recip rd = pt_recip16(depth);    // transform forms one only inside the view cone,
+                                        // but a sprite can be on screen with its centre outside
 
     // screen pixels per source pixel: the height's projection over its rows,
     // 64 * size / (h * depth)
@@ -813,10 +815,10 @@ static uint8_t inst_new(pt_render *r, uint8_t cell)
     // the base's centre: its column from the lateral offset, its row from
     // the floor's height against the eye; then the corner, the width
     // centred and the height above
-    uint16_t dy = pt_project_q8((uint16_t)(v.y < 0 ? -v.y : v.y), depth, v.rx);
+    uint16_t dy = pt_project_q8((uint16_t)(v.y < 0 ? -v.y : v.y), depth, rd);
     int32_t centre = v.y < 0 ? (64 << 8) - dy : (64 << 8) + dy;
     int16_t fz = (int16_t)(c->floor_z - r->eye_z);    // below the eye when positive
-    uint16_t dz = pt_project_q8((uint16_t)(8 * (fz < 0 ? -fz : fz)), depth, v.rx);
+    uint16_t dz = pt_project_q8((uint16_t)(8 * (fz < 0 ? -fz : fz)), depth, rd);
     int32_t bottom = fz < 0 ? (PT_SCREEN_HEIGHT / 2 << 8) - dz : (PT_SCREEN_HEIGHT / 2 << 8) + dz;
     uint16_t width = pt_mulg_u16(scale, w);
     int32_t left = centre - (width >> 1);

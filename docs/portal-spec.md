@@ -967,7 +967,9 @@ top    = bottom − scale·h                well off the screen
 ```
 
 `h·x` is one 16×8 product, and each division is the reciprocal projection of §4
-(`pt_project_q8`). A pixel belongs to the sprite when its centre lies inside it, so a
+(`pt_project_q8`). The depth's reciprocal is formed here, not taken from the vertex
+transform, which forms one only inside the view cone: a sprite can be on screen with
+its centre outside it. A pixel belongs to the sprite when its centre lies inside it, so a
 source column's screen columns run from the rounded position of its left edge to that
 of its right, and likewise rows; the sprite pass steps these edges from the corner by
 `scale`, with no per-column division. An instance with no columns, or wholly above

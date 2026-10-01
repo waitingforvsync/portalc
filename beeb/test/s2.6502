@@ -1,0 +1,629 @@
+\ **************************************************************************
+\ *
+\ *     s2.6502 - check S2: the arithmetic against the C (PLAN.md 5.7)
+\ *
+\ **************************************************************************
+\
+\ CMD_S2 runs one routine over s2_count cases. Each case's input bits come
+\ from a counter (exhaustive runs, from s2_start) or xorshift32 (random
+\ runs, seeded by s2_start); the routine's driver makes them into valid
+\ inputs, calls it, and folds its outputs into a CRC-16 (XMODEM). The host
+\ computes the same CRC from the C (beebtool s2) and compares. A case the
+\ driver can't use (dy > 64 for grad_mag, say) is skipped, the same way on
+\ both sides.
+\
+\   s2_fn       the routine (S2_*)
+\   s2_mode     0 counter, 1 random; +&80 skip the call (the timing baseline)
+\   s2_start    4 bytes: the first counter value, or the seed
+\   s2_count    4 bytes: cases
+\ Out: s2_crc (2), s2_calls (4): the cases used, s2_last (6): the last
+\ case's outputs, and MB_USECS.
+
+CMD_S2 = 3
+
+S2_MULU8 = 0
+S2_MULU16_FRAC = 1
+S2_MULU16_FRAC_ROUND = 2
+S2_MULG_U16 = 3
+S2_RECIP8 = 4
+S2_RECIP16 = 5
+S2_MUL_RECIP8 = 6
+S2_MUL_RECIP16 = 7
+S2_DIV_T = 8
+S2_DIV_COLS = 9
+S2_DIV_Q8 = 10
+S2_GRAD_MAG = 11
+S2_GRADQ8_MAG = 12
+S2_PROJECT_COL = 13
+S2_PROJECT_COL_Q8 = 14
+S2_PROJECT_Q8 = 15
+S2_PROJECT_ROWD = 16
+S2_LERP16 = 17
+S2_ROT = 18
+S2_DIR8 = 19
+S2_RAY_BASIS = 20
+
+ZA_AUTO 4, s2_x                 ; the counter, or the generator's state
+ZA_AUTO 4, s2_in                ; this case's input bits (in to the drivers)
+ZA_AUTO 4, s2_in2               ; a second draw, for drivers wanting more (random runs)
+ZA_AUTO 4, s2_t                 ; local to s2_xorshift
+ZA_AUTO2 s2_crc                 ; the running CRC
+ZA_AUTO 3, s2_r                 ; a primitive's result, in its driver
+
+\ Fold A into the CRC.
+MACRO CRC
+    EOR s2_crc + 1 : TAX
+    LDA s2_crc : EOR crc_hi,X : STA s2_crc + 1
+    LDA crc_lo,X : STA s2_crc
+ENDMACRO
+
+\ Call the routine unless this is a timing baseline. (A primitive's driver
+\ expands it behind the same BIT and BMI instead.)
+MACRO CALL routine
+    BIT s2_mode : BMI @+
+    JSR routine
+.@
+ENDMACRO
+
+\\ CMD_S2.
+.cmd_s2
+{
+    ZA_AUTO 4, t0               ; local: the clock at the start
+    LDA s2_fn : ASL A : TAX
+    LDA s2_drivers,X : STA s2_vec
+    LDA s2_drivers + 1,X : STA s2_vec + 1
+    ZA_DISCARD s2_x                 ; rebuilt whole by the loop
+    LDX #3
+.init
+    LDA s2_start,X : STA s2_x,X : ZA_INDEXEDBY 0..3
+    LDA s2_count,X : STA s2_left,X
+    LDA #0 : STA s2_calls,X
+    DEX : BPL init
+    STA s2_crc : STA s2_crc + 1
+    JSR now
+    ZA_DISCARD t0
+    LDX #3
+.keep
+    LDA now.t,X : ZA_INDEXEDBY 0..3
+    STA t0,X : ZA_INDEXEDBY 0..3
+    DEX : BPL keep
+.case
+    LDA s2_left : ORA s2_left + 1 : ORA s2_left + 2 : ORA s2_left + 3
+    BEQ done
+    JSR s2_draw
+    JSR s2_call
+    LDX #0                      ; s2_left -= 1
+.dec
+    LDA s2_left,X : SEC : SBC #1 : STA s2_left,X
+    BCS case
+    INX : CPX #4 : BNE dec
+    JMP case
+.done
+    JSR now
+    SEC
+    FOR i = 0 ..< 4             ; (unrolled: a CPX would break the borrow)
+        LDA now.t + i : SBC t0 + i : STA MB_USECS + i
+    NEXT
+    LDA s2_crc : STA s2_out
+    LDA s2_crc + 1 : STA s2_out + 1
+    RTS
+}
+
+\\ The driver for s2_fn: s2_vec is one of s2_drivers.
+.s2_call
+{
+    JMP (s2_vec)
+    ZA_CANJUMP s2_drivers_list
+}
+
+\\ This case's input bits: the counter (then counted on), or the next draw.
+.s2_draw
+{
+    LDA s2_mode : AND #&7F : BNE random
+    ZA_DISCARD s2_in
+    LDX #3
+.copy
+    LDA s2_x,X : ZA_INDEXEDBY 0..3
+    STA s2_in,X : ZA_INDEXEDBY 0..3
+    DEX : BPL copy
+    INC s2_x : BNE done
+    INC s2_x + 1 : BNE done
+    INC s2_x + 2 : BNE done
+    INC s2_x + 3
+.done
+    RTS
+.random
+    JSR s2_xorshift
+    ZA_DISCARD s2_in
+    LDX #3
+.rcopy
+    LDA s2_x,X : ZA_INDEXEDBY 0..3
+    STA s2_in,X : ZA_INDEXEDBY 0..3
+    DEX : BPL rcopy
+    RTS
+}
+
+\\ A second draw into s2_in2 (random runs only).
+.s2_more
+{
+    JSR s2_xorshift
+    ZA_DISCARD s2_in2
+    LDX #3
+.copy
+    LDA s2_x,X : ZA_INDEXEDBY 0..3
+    STA s2_in2,X : ZA_INDEXEDBY 0..3
+    DEX : BPL copy
+    RTS
+}
+
+\\ xorshift32: x ^= x << 13; x ^= x >> 17; x ^= x << 5.
+.s2_xorshift
+{
+    LDA #0 : STA s2_t           ; t = x << 13: x << 8...
+    LDA s2_x : STA s2_t + 1
+    LDA s2_x + 1 : STA s2_t + 2
+    LDA s2_x + 2 : STA s2_t + 3
+    LDX #5
+.l13
+    ASL s2_t + 1 : ROL s2_t + 2 : ROL s2_t + 3    ; ...<< 5 (the low byte stays 0)
+    DEX : BNE l13
+    JSR fold
+    LDA s2_x + 2 : STA s2_t     ; t = x >> 17: x >> 16...
+    LDA s2_x + 3 : STA s2_t + 1
+    LDA #0 : STA s2_t + 2 : STA s2_t + 3
+    LSR s2_t + 1 : ROR s2_t     ; ...>> 1
+    JSR fold
+    ZA_DISCARD s2_t                 ; t = x << 5
+    LDX #3
+.copy
+    LDA s2_x,X : ZA_INDEXEDBY 0..3
+    STA s2_t,X : ZA_INDEXEDBY 0..3
+    DEX : BPL copy
+    LDX #5
+.l5
+    ASL s2_t : ROL s2_t + 1 : ROL s2_t + 2 : ROL s2_t + 3
+    DEX : BNE l5
+.fold
+    LDX #3                      ; x ^= t
+.f
+    LDA s2_x,X : ZA_INDEXEDBY 0..3
+    EOR s2_t,X : ZA_INDEXEDBY 0..3
+    STA s2_x,X : ZA_INDEXEDBY 0..3
+    DEX : BPL f
+    RTS
+}
+
+\ Count a used case.
+MACRO USED
+    INC s2_calls : BNE @+
+    INC s2_calls + 1 : BNE @+
+    INC s2_calls + 2 : BNE @+
+    INC s2_calls + 3
+.@
+ENDMACRO
+
+\ Keep an output byte (A) as s2_last + n, and fold it in.
+MACRO OUT n
+    STA s2_last + n
+    CRC
+ENDMACRO
+
+\ Fold s2_r in.
+MACRO OUT_R
+    LDA s2_r : OUT 0
+    LDA s2_r + 1 : OUT 1
+ENDMACRO
+
+\ ---- the drivers: inputs from s2_in (and s2_in2), outputs folded in ----
+
+.drv_mulu8
+{
+    USED
+    LDA s2_in : LDY s2_in + 1
+    BIT s2_mode : BMI out
+    SETMUL : MULX
+    STX s2_r : STA s2_r + 1
+.out
+    OUT_R
+    RTS
+}
+
+.drv_mulu16_frac
+{
+    USED
+    LDA s2_in + 2
+    BIT s2_mode : BMI out
+    SETMUL
+    MULU16_FRAC s2_in, s2_r
+.out
+    OUT_R
+    RTS
+}
+
+.drv_mulu16_frac_round
+{
+    USED
+    LDA s2_in + 2
+    BIT s2_mode : BMI out
+    SETMUL
+    MULU16_FRAC_ROUND s2_in, s2_r
+.out
+    OUT_R
+    RTS
+}
+
+.drv_mulg_u16
+{
+    USED
+    LDA s2_in + 2
+    BIT s2_mode : BMI out
+    SETMUL
+    MULG_U16 s2_in, s2_r
+.out
+    OUT_R
+    RTS
+}
+
+.drv_recip8
+{
+    LDY s2_in : BEQ skip        ; n > 0
+    USED
+    LDA #0 : LDX #0             ; (the baseline's outputs)
+    BIT s2_mode : BMI out
+    RECIP8
+.out
+    STX s2_r                    ; (OUT clobbers X)
+    OUT 0
+    LDA s2_r : OUT 1
+.skip
+    RTS
+}
+
+.drv_recip16
+{
+    LDA s2_in : ORA s2_in + 1 : BEQ skip
+    USED
+    LDA #0 : LDX #0
+    BIT s2_mode : BMI out
+    RECIP16 s2_in
+.out
+    STX s2_r
+    OUT 0
+    LDA s2_r : OUT 1
+.skip
+    RTS
+}
+
+\ Fold a 3-byte and a 2-byte result in.
+MACRO OUT_Q3 q
+    LDA q : OUT 0
+    LDA q + 1 : OUT 1
+    LDA q + 2 : OUT 2
+ENDMACRO
+
+MACRO OUT_Q2 q
+    LDA q : OUT 0
+    LDA q + 1 : OUT 1
+ENDMACRO
+
+.drv_mul_recip8
+{
+    USED
+    LDY s2_in : LDA s2_in + 1
+    BIT s2_mode : BMI out
+    MUL_RECIP8 s2_in, s2_r
+.out
+    LDA #0 : ROL A : STA s2_r + 2   ; the 17th bit, as the C's third byte
+    OUT_Q3 s2_r
+    RTS
+}
+
+.drv_mul_recip16
+{
+    USED
+    LDA s2_in + 2
+    BIT s2_mode : BMI out
+    MUL_RECIP16 s2_in, s2_r
+.out
+    LDA #0 : ROL A : STA s2_r + 2
+    OUT_Q3 s2_r
+    RTS
+}
+
+\ div_t: den = the larger of two u16s, num the smaller; den 0 becomes 1.
+.drv_div_t
+{
+    USED
+    LDA s2_in : CMP s2_in + 2
+    LDA s2_in + 1 : SBC s2_in + 3
+    BCC ordered                 ; in.lo < in.hi: num = lo, den = hi
+    LDA s2_in + 2 : STA div_t.num
+    LDA s2_in + 3 : STA div_t.num + 1
+    LDA s2_in : STA div_t.den
+    LDA s2_in + 1 : STA div_t.den + 1
+    JMP nonzero
+.ordered
+    LDA s2_in : STA div_t.num
+    LDA s2_in + 1 : STA div_t.num + 1
+    LDA s2_in + 2 : STA div_t.den
+    LDA s2_in + 3 : STA div_t.den + 1
+.nonzero
+    LDA div_t.den : ORA div_t.den + 1 : BNE call
+    INC div_t.den
+.call
+    LDA #0
+    CALL div_t
+    OUT 0
+    RTS
+}
+
+.drv_div_cols
+{
+    USED
+    LDA s2_in : STA div_cols.num
+    LDA s2_in + 1 : STA div_cols.num + 1
+    LDA s2_in + 2 : STA div_cols.den
+    LDA s2_in + 3 : STA div_cols.den + 1
+    ORA div_cols.den : BNE call
+    INC div_cols.den
+.call
+    LDA #0
+    CALL div_cols
+    OUT 0
+    RTS
+}
+
+\ div_q8: den's high byte 0 becomes 1 (den >= 256, the routine's domain).
+.drv_div_q8
+{
+    USED
+    LDA s2_in : STA div_q8.num
+    LDA s2_in + 1 : STA div_q8.num + 1
+    LDA s2_in + 2 : STA div_q8.den
+    LDA s2_in + 3 : BNE @+
+    LDA #1
+.@  STA div_q8.den + 1
+    CALL div_q8
+    OUT_Q2 div_q8.q
+    RTS
+}
+
+\ grad_mag: dy = in0 (<= 64), dx = in1 (>= 1); others skipped.
+.drv_grad_mag
+{
+    LDA s2_in : CMP #65 : BCS skip
+    LDY s2_in + 1 : BEQ skip
+    USED
+    LDA s2_in : LDY s2_in + 1
+    CALL grad_mag
+    OUT_Q2 grad_mag.q
+.skip
+    RTS
+}
+
+\ gradq8_mag: dy = in2 (<= 64), dx = in0, in1 (> 0); others skipped.
+.drv_gradq8_mag
+{
+    LDA s2_in + 2 : CMP #65 : BCS skip
+    LDA s2_in : ORA s2_in + 1 : BEQ skip
+    USED
+    LDA s2_in : STA gradq8_mag.dx
+    LDA s2_in + 1 : STA gradq8_mag.dx + 1
+    LDA s2_in + 2
+    CALL gradq8_mag
+    OUT_Q2 gradq8_mag.q
+.skip
+    RTS
+}
+
+\ x = in0, in1 (0 becomes 1) and its reciprocal: the projections' depth.
+.s2_depth
+{
+    ZA_AUTO2 x                  ; out
+    LDA s2_in : STA x
+    LDA s2_in + 1 : STA x + 1
+    ORA x : BNE @+
+    INC x
+.@  RECIP16 x                  ; A = f, X = e
+    RTS
+}
+
+\ project_col: x as s2_depth; y = in2, in3, clamped to [-x, x].
+.drv_project_col
+{
+    USED
+    JSR s2_depth
+    STA project_col.f : STX project_col.e
+    LDA s2_in + 2 : STA project_col.y
+    LDA s2_in + 3 : STA project_col.y + 1
+    BPL pos
+    LDA #0 : SEC : SBC project_col.y : STA s2_t     ; |y|
+    LDA #0 : SBC project_col.y + 1 : STA s2_t + 1
+    LDA s2_depth.x : CMP s2_t
+    LDA s2_depth.x + 1 : SBC s2_t + 1
+    BCS call                    ; |y| <= x
+    LDA #0 : SEC : SBC s2_depth.x : STA project_col.y   ; y = -x
+    LDA #0 : SBC s2_depth.x + 1 : STA project_col.y + 1
+    JMP call
+.pos
+    LDA s2_depth.x : CMP project_col.y
+    LDA s2_depth.x + 1 : SBC project_col.y + 1
+    BCS call
+    LDA s2_depth.x : STA project_col.y      ; y = x
+    LDA s2_depth.x + 1 : STA project_col.y + 1
+.call
+    LDA #0
+    CALL project_col
+    OUT 0
+    RTS
+}
+
+\ project_col_q8: y = in2, in3; d = in0, in1 AND &3FFF (0 becomes 1).
+.drv_project_col_q8
+{
+    USED
+    LDA s2_in + 2 : STA project_col_q8.y
+    LDA s2_in + 3 : STA project_col_q8.y + 1
+    LDA s2_in : STA project_col_q8.d
+    LDA s2_in + 1 : AND #&3F : STA project_col_q8.d + 1
+    ORA project_col_q8.d : BNE call
+    INC project_col_q8.d
+.call
+    CALL project_col_q8
+    OUT_Q2 project_col_q8.q
+    RTS
+}
+
+\ project_q8: len = in0, in1; x = in2, in3 (0 becomes 1).
+.drv_project_q8
+{
+    ZA_AUTO2 x                  ; local
+    USED
+    LDA s2_in + 2 : STA x
+    LDA s2_in + 3 : STA x + 1
+    ORA x : BNE @+
+    INC x
+.@  RECIP16 x
+    STA project_q8.f : STX project_q8.e
+    LDA s2_in : STA project_q8.len
+    LDA s2_in + 1 : STA project_q8.len + 1
+    CALL project_q8
+    OUT_Q2 project_q8.q
+    RTS
+}
+
+\ project_rowd: h8 = in0; x = in1, in2, raised to 16*h8 + in3 when below
+\ 16*h8 (the endpoint must be on screen); 0 becomes 1.
+.drv_project_rowd
+{
+    ZA_AUTO2 lim                ; local: 16 * h8
+    ZA_AUTO2 x                  ; local
+    USED
+    LDA #0 : STA lim + 1
+    LDA s2_in : STA lim
+    LDX #4
+.x16
+    ASL lim : ROL lim + 1
+    DEX : BNE x16
+    LDA s2_in + 1 : STA x
+    LDA s2_in + 2 : STA x + 1
+    LDA x : CMP lim
+    LDA x + 1 : SBC lim + 1
+    BCS high
+    LDA lim : CLC : ADC s2_in + 3 : STA x
+    LDA lim + 1 : ADC #0 : STA x + 1
+.high
+    LDA x : ORA x + 1 : BNE @+
+    INC x
+.@  RECIP16 x
+    LDY s2_in
+    CALL project_rowd
+    OUT 0
+    RTS
+}
+
+\ lerp16: va = in0, in1; vb = in2, in3; t = a second draw's low byte.
+.drv_lerp16
+{
+    USED
+    JSR s2_more
+    LDA s2_in : STA lerp16.va
+    LDA s2_in + 1 : STA lerp16.va + 1
+    LDA s2_in + 2 : STA lerp16.vb
+    LDA s2_in + 3 : STA lerp16.vb + 1
+    LDA s2_in2
+    CALL lerp16
+    LDA lerp16.r : OUT 0
+    LDA lerp16.r + 1 : OUT 1
+    RTS
+}
+
+\ rot. Random: x = in0, in1; y = in2, in3 (-32768 becomes -32767); the
+\ angle a second draw's low byte. Counter: a grid of every angle, 64 x
+\ 64 points - the angle is bits 0-7, gx bits 8-13, gy bits 14-19, and
+\ x = ((gx - 32) << 9) | (gx << 2), y likewise.
+.drv_rot
+{
+    ZA_AUTO1 gx, gy             ; local
+    USED
+    LDA s2_mode : AND #&7F : BEQ grid
+    JSR s2_more
+    LDA s2_in : STA rot.x
+    LDA s2_in + 1 : STA rot.x + 1
+    LDA s2_in + 2 : STA rot.y
+    LDA s2_in + 3 : STA rot.y + 1
+    LDA rot.x : BNE xok         ; -32768: -32767
+    LDA rot.x + 1 : CMP #&80 : BNE xok
+    INC rot.x
+.xok
+    LDA rot.y : BNE yok
+    LDA rot.y + 1 : CMP #&80 : BNE yok
+    INC rot.y
+.yok
+    LDA s2_in2
+    JMP call
+.grid
+    LDA s2_in + 1 : AND #&3F : STA gx
+    LDA s2_in + 2 : ASL A : ASL A : STA gy      ; gy = bits 14-19: in2 << 2...
+    LDA s2_in + 1 : LSR A : LSR A : LSR A : LSR A : LSR A : LSR A
+    ORA gy : AND #&3F : STA gy                  ; ...| in1 >> 6
+    LDA gx : ASL A : ASL A : STA rot.x          ; gx << 2
+    LDA gx : SEC : SBC #32 : ASL A : STA rot.x + 1  ; (gx - 32) << 9
+    LDA gy : ASL A : ASL A : STA rot.y
+    LDA gy : SEC : SBC #32 : ASL A : STA rot.y + 1
+    LDA s2_in
+.call
+    CALL rot
+    LDA rot.rx : OUT 0
+    LDA rot.rx + 1 : OUT 1
+    LDA rot.ry : OUT 2
+    LDA rot.ry + 1 : OUT 3
+    RTS
+}
+
+\ dir8: mag = in0 (<= 127; others skipped), angle = in1.
+.drv_dir8
+{
+    LDA s2_in : BMI skip
+    USED
+    LDA s2_in : LDX s2_in + 1
+    CALL dir8
+    LDA dir8.dx : OUT 0
+    LDA dir8.dx + 1 : OUT 1
+    LDA dir8.dy : OUT 2
+    LDA dir8.dy + 1 : OUT 3
+.skip
+    RTS
+}
+
+.drv_ray_basis
+{
+    USED
+    LDA s2_in
+    CALL ray_basis
+    LDA ray_basis.k1 : OUT 0
+    LDA ray_basis.k1 + 1 : OUT 1
+    LDA ray_basis.k2 : OUT 2
+    LDA ray_basis.k2 + 1 : OUT 3
+    RTS
+}
+
+s2_drivers_list = {drv_mulu8, drv_mulu16_frac, drv_mulu16_frac_round, drv_mulg_u16, drv_recip8,
+                   drv_recip16, drv_mul_recip8, drv_mul_recip16, drv_div_t, drv_div_cols, drv_div_q8,
+                   drv_grad_mag, drv_gradq8_mag, drv_project_col, drv_project_col_q8, drv_project_q8,
+                   drv_project_rowd, drv_lerp16, drv_rot, drv_dir8, drv_ray_basis}
+.s2_drivers
+    EQUW s2_drivers_list
+
+\ CRC-16/XMODEM: polynomial &1021, MSB first.
+FUNCTION crc16(c, k)
+    IF k == 0
+        r = c
+    ELSE
+        r = crc16(((c << 1) EOR (&1021 * ((c >> 15) AND 1))) AND &FFFF, k - 1)
+    ENDIF
+= r
+.crc_lo
+    FOR v = 0 ..< 256 : EQUB LO(crc16(v << 8, 8)) : NEXT
+.crc_hi
+    FOR v = 0 ..< 256 : EQUB HI(crc16(v << 8, 8)) : NEXT

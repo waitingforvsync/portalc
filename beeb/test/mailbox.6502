@@ -11,21 +11,26 @@
 \   0 PING   nothing
 \   1 TIME   wait for a vsync, then time arg0 + 256 * arg1 more vsyncs:
 \            the elapsed microseconds to MB_USECS
-\   2 SPIKE  the recursion spike (spike.6502), seeded by arg0
-\   3 S2     an arithmetic routine against the C (s2.6502)
-\   4 S3     a mode 5 buffer operation, to check against the C (s3.6502)
-\   5 S4     plot pools from the host, CRC each image (s4.6502)
+\   3 S2     an arithmetic routine against the C (s2.6502; SUITE 2)
+\   4 S3     a mode 5 buffer operation, to check against the C (s3.6502; SUITE 3)
+\   5 S4     plot pools from the host, CRC each image (s4.6502; SUITE 3)
 \   6 REPLAY replay a recorded call (s5.6502)
 \   7 S5T    every map vertex transformed, per pose, CRCed (s5.6502)
 \   8 S5M    make_line on the host's synthetic endpoints (s5.6502)
+\   9 S6     whole captures and frames at the host's poses (s6.6502)
 
 CMD_PING = 0
 CMD_TIME = 1
 
-MACRO TRAP code                     ; test builds: stop with an error code
-    LDA #code : STA MB_ERR
-    JMP trapstop
-ENDMACRO
+\ The image a check renders into: the buffer under test and its junk rows.
+IF TESTBUF == 0
+    IMG_BUF = BUF_A
+    IMG_END = BUF_A + &1100     ; to the end of the junk row below
+ELSE
+    IMG_BUF = BUF_B
+    IMG_END = BUF_B + &1000     ; (the junk row below is the ROM)
+ENDIF
+IMG_START = IMG_BUF - &100      ; the junk row above
 
 .mailbox
 {
@@ -37,32 +42,47 @@ ENDMACRO
     CMP #CMD_TIME : BNE @+
     JSR cmd_time
     JMP done
-.@  CMP #CMD_SPIKE : BNE @+
-    JSR cmd_spike
-    JMP done
-.@  CMP #CMD_S2 : BNE @+
+IF SUITE == 2
+.@  CMP #CMD_S2 : BNE unknown
     JSR cmd_s2
     JMP done
+ELIF SUITE == 3
 .@  CMP #CMD_S3 : BNE @+
     JSR cmd_s3
     JMP done
-.@  CMP #CMD_S4 : BNE @+
+.@  CMP #CMD_S4 : BNE unknown
     JSR cmd_s4
     JMP done
+ELSE
 .@  CMP #CMD_REPLAY : BNE @+
     JSR cmd_replay
     JMP done
 .@  CMP #CMD_S5T : BNE @+
     JSR cmd_s5t
     JMP done
-.@  CMP #CMD_S5M : BNE unknown
+.@  CMP #CMD_S5M : BNE @+
     JSR cmd_s5m
     JMP done
+.@  CMP #CMD_S6 : BNE unknown
+    JSR cmd_s6
+    JMP done
+ENDIF
 .unknown
     LDA #1 : STA MB_ERR
 .done
     LDA MB_SEQ : STA MB_ACK
     JMP loop
+}
+
+\\ A capacity overflow (OVERFLOW), its code in A: stop as TRAP does, or,
+\\ when a check asks for the release's way (ovf_abort), drop the frame.
+.overflow
+{
+    LDX ovf_abort : BNE drop
+    STA MB_ERR
+    JMP trapstop
+.drop
+    JMP capture_abort
 }
 
 \\ Stop after a TRAP: report it, then spin with interrupts on.

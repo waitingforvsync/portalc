@@ -9,19 +9,16 @@
 \ each, in the order p_x0, p_x1, p_y0, p_glo, p_ghi, p_ce, p_co. For each,
 \ it zeroes the image (the buffer under test and its junk rows; B's junk
 \ row below is ROM, so not that), plots, and leaves the image's CRC-16 and
-\ the plot's microseconds in s4_out, 4 bytes a pool.
+\ the plot's microseconds in s4_out, 4 bytes a pool. With arg0 0, the one
+\ pool is already in the pool's pages (too big for io_area), and arg1 is
+\ its pool_last.
 
 CMD_S4 = 5
 S4_MAX = 64
 
-IF TESTBUF == 0
-    S4_BUF = BUF_A
-    S4_END = BUF_A + &1100      ; to the end of the junk row below
-ELSE
-    S4_BUF = BUF_B
-    S4_END = BUF_B + &1000      ; (the junk row below is the ROM)
-ENDIF
-S4_START = S4_BUF - &100        ; the junk row above
+S4_BUF = IMG_BUF                ; (mailbox.6502)
+S4_START = IMG_START
+S4_END = IMG_END
 
 \ Copy the next pool field from the record into dest + 1..n, and move on.
 MACRO FIELD dest
@@ -48,7 +45,9 @@ ENDMACRO
     LDA #0 : STA k
     LDA MB_ARG : STA left
     BNE pool
-    RTS
+    LDA MB_ARG + 1 : STA pool_last  ; one pool, in place
+    INC left
+    JMP image
 .pool
     LDY #0 : LDA (rec),Y : STA pool_last
     INC rec : BNE @+
@@ -60,6 +59,7 @@ ENDMACRO
     FIELD p_ghi
     FIELD p_ce
     FIELD p_co
+.image
     LDA #HI(S4_START) : LDX #HI(S4_END)
     JSR zero_pages
     LDA #HI(S4_BUF) : STA scrnbase

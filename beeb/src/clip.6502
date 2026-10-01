@@ -13,6 +13,17 @@
 \ clipped as l_*. The visit's active pieces are vis_act, 4 slots of 24
 \ visits, and cx_act is this line's index in it.
 
+\ A capacity overflow (PLAN.md 4.4, D9): the release drops the frame, and
+\ a test build stops with the code (unless a check asks for the release's
+\ way: test/mailbox.6502's overflow).
+MACRO OVERFLOW code
+    IF HARNESS
+        LDA #code : JMP overflow
+    ELSE
+        JMP capture_abort
+    ENDIF
+ENDMACRO
+
 ST_ABOVE = 0                    ; clip statuses
 ST_BELOW = 1
 ST_VISIBLE = 2
@@ -102,7 +113,7 @@ ENDMACRO
     ZA_AUTO1 x0, x1, y0, ce, co ; in
     ZA_AUTO2 g                  ; in
     LDX pool_last : INX : BNE room
-    TRAP 2                      ; the pool's full
+    OVERFLOW 2                  ; the pool's full
 .room
     STX pool_last
     LDA x0 : STA p_x0,X
@@ -231,7 +242,7 @@ ENDMACRO
     RTS
 .new
     CPX #8 : BCC room
-    TRAP 3                      ; the closed list is full
+    OVERFLOW 3                  ; the closed list is full
 .room
     LDA l : STA cl_l,X
     LDA r : STA cl_r,X
@@ -684,18 +695,14 @@ ENDMACRO
 \ ---- chains: taking ownership of a span (spec 7.9.2) ----
 
 \\ Cut [xa, xb) out of the chain at the cursor: split at both ends, the
-\\ cursor left on the piece after. in: cursor, xa, xb. out: A = the
-\\ first piece, cursor.
+\\ cursor left on the piece after. The cursor's piece holds xa: in a
+\\ healthy ring it never lags (render.c's skip past it is dead, D10).
+\\ in: cursor, xa, xb. out: A = the first piece, cursor.
 .cut
 {
     ZA_AUTO1 cursor, xa, xb     ; in (cursor also out)
     ZA_AUTO1 head               ; local
     LDX cursor
-.skip
-    LDA p_x1,X : CMP xa : BEQ @+ : BCS found
-.@  LDA p_next,X : TAX
-    JMP skip
-.found
     LDA p_x0,X : CMP xa : BCS @+
     LDA xa : JSR pool_split     ; starts before xa: split there
     TYA : TAX

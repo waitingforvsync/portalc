@@ -24,8 +24,8 @@ render.c:531      make_line           rare: the clip column rounding left of a n
 render.c:547      make_line           dead: base + off is at most 16,512 + 32,639 (gm < &8000, fr < 256), so it never carries; the Beeb's has no clamp
 render.c:752-754  cut                 dead: in a healthy ring the cursor never lags xa (process_edge's own comment)
 render.c:988-990  child_portal        dead: the degenerate-ring guard, broken maps only (RC_ASSERT(0))
-render.c:1042-1044 close_columns      rare: a split at l needs a pinch whose open range starts inside a child bottom piece (a ceiling-line closure); descend's cap always lands on piece bounds
-render.c:1047     close_columns       rare: the same at rr
+render.c:1042-1044 close_columns      rare: a split at l needs a pinch whose open range starts inside a child bottom piece (a ceiling-line closure); descend's cap always lands on piece bounds; S6's synthetic close_columns records (beebtool synthclose)
+render.c:1047     close_columns       rare: the same at rr; the same records
 render.c:1095-1096 edge_line          dead: an edge starting past the right ray (BNEG, not ANEG) has sx0 = 128 = xa >= xb, and process_edge returns before edge_line
 render.c:1292-1293 root_exact         dead in these maps: the eye-vertex root needs every other vertex within pt_rot's rounding of the left ray, i.e. a sliver cell
 render.c:1684     seg_piece_at        dead: inst_bounds re-seeks only at a segment's first column (its cc + 1 != c test never fires), where the first piece covers it

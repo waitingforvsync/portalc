@@ -170,3 +170,21 @@ The shim times the call alone (`now` round the `JSR`), so each record's
 replay also gives its cycles. The host peeks everything back, re-encodes
 it as above and compares the after half byte for byte. A 24-bit `left` or
 `top` is sign-extended first (Phase 7).
+
+The walk's targets (Phase 6) take the visits too:
+
+- the visits as the Beeb's 19 tables of 24 (`spare.6502`: cell, k, xr,
+  then v0's and v1's eight bytes each) and `cell_visit`, poked in place;
+- `num_visits` staged, like `pool_last`;
+- each visit's sprite instance, and the sprite state after `cell_visit`,
+  taken from the C's after half until Phase 7 gives the Beeb sprites.
+
+A record's map is its CAM's first byte, and the Beeb holds one map a
+build, so each record replays on the build with its map (`harness0`,
+`harness0_map7`, `harness0_map9`). Phase 5's targets never read the map,
+which is why nobody noticed the records mix them.
+
+`close_columns_synth.bin` isn't recorded: `beebtool synthclose` (the
+trace build) writes it, from random bottom chains and column ranges, in
+the same format. Its splits at `l` and `rr` are the ones no golden pose
+reaches.

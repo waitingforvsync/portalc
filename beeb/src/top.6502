@@ -34,6 +34,11 @@ SECTION Bss, org = BSS_ORG, guard = BSS_END
     ENDIF
 ENDSECTION
 
+SECTION Spare, org = SPARE_ORG, guard = SPARE_END    ; (labels over the Screens' spare)
+    INCLUDE "spare.6502"
+ENDSECTION
+INCLUDE "scratch.6502"          ; (its own sections, over the junk rows)
+
 SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filename = PROG_NAME, guard = &7C00
 .payload
     SECTION Code, org = CODE_ORG, guard = CODE_GUARD
@@ -41,6 +46,12 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
         INCLUDE "hw.6502"
         INCLUDE "mode5.6502"
         INCLUDE "main.6502"
+        INCLUDE "arith.6502"
+        INCLUDE "plot.6502"
+        INCLUDE "clip.6502"
+        INCLUDE "lines.6502"
+        INCLUDE "walk.6502"
+        INCLUDE "sprites.6502"
         INCLUDE "../data/shades.6502"
         IF MAP == 7
             INCLUDE "../data/map7.6502"
@@ -51,15 +62,16 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
         ENDIF
         IF HARNESS
             INCLUDE "../test/mailbox.6502"
-            INCLUDE "../test/spike.6502"
-            INCLUDE "arith.6502"            ; (release-bound, once main calls them)
-            INCLUDE "plot.6502"
-            INCLUDE "clip.6502"
-            INCLUDE "lines.6502"
-            INCLUDE "../test/s2.6502"
-            INCLUDE "../test/s3.6502"
-            INCLUDE "../test/s4.6502"
-            INCLUDE "../test/s5.6502"
+            INCLUDE "../test/crc.6502"
+            IF SUITE == 2                   ; the checks, a suite a harness (PLAN.md 5.3)
+                INCLUDE "../test/s2.6502"
+            ELIF SUITE == 3
+                INCLUDE "../test/s3.6502"
+                INCLUDE "../test/s4.6502"
+            ELSE
+                INCLUDE "../test/s5.6502"
+                INCLUDE "../test/s6.6502"
+            ENDIF
             INCLUDE "../test/pad.6502"
         ENDIF
     ENDSECTION

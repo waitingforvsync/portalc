@@ -136,7 +136,6 @@ NEXT
 .done
 ENDMACRO
 
-IF HARNESS                      ; (release-bound, once main calls it)
 \\ Fill the buffer scrnbase names.
 .fill
     LDA scrnbase : CMP #HI(BUF_B) : BNE fill_a
@@ -148,4 +147,3 @@ IF HARNESS                      ; (release-bound, once main calls it)
 .fill_b
     FILLBODY BUF_B
     RTS
-ENDIF

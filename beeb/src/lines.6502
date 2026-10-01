@@ -488,16 +488,13 @@ ZA_AUTO1 cv_sx, cv_flags        ; ...column, flags
     RTS
 .made
     LDA el_have : BNE make
-    \ the side clip: the endpoints the lines are made from
+    \ the side clip: the endpoints the lines are made from (an edge starting
+    \ past the right ray never gets here: process_edge finds it no columns,
+    \ so render.c's arm for it is dead, D10)
     BIT ev_flags : BPL @+
     JSR clip_left               ; v0 outside the left ray
     LDA ep_xl : ASL A : STA clip_right.b0       ; on the left ray b = 2x
     LDA ep_xh : ROL A : STA clip_right.b0 + 1
-    JMP e1
-.@  BVC @+
-    LDX #0 : LDA #128           ; outside the right ray
-    JSR ep_unclipped
-    LDA #0 : STA clip_right.b0 : STA clip_right.b0 + 1
     JMP e1
 .@  LDX #0 : LDA ev_sx
     JSR ep_unclipped

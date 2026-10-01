@@ -9,15 +9,20 @@
 \
 \   &300-&EFF    fixed tables (Phase 1); the NMI handler at &D00
 \   &F00-...     code and data, up to CODE_GUARD
-\   BSS_ORG      the per-frame state (release: &4E00-&56FF; harness: inside
+\   BSS_ORG      the per-frame state (release: &5100-&56FF; harness: inside
 \                the screen buffer not under test)
 \   &5700        junk character row above buffer A
 \   &5800        buffer A (4K)
 \   &6800        junk character row below A
-\   &6900-&6EFF  spare: never plotted, filled, cleared or shown
+\   &6900-&6EFF  spare: never plotted, filled, cleared or shown; six of the
+\                pool's eight pages (D13)
 \   &6F00        junk character row above B
 \   &7000        buffer B (4K)
 \   &8000        B's junk row below is the paged ROM: stores go nowhere
+\
+\ The junk rows are scratch for what the capture alone uses (the visits,
+\ the pending stack, the active pieces, the closed list, cell_visit): only
+\ the plotters write them, and by then the capture's done with it (D13).
 \
 \ Both buffers start on a multiple of &800, so the CRTC's start address
 \ (the address DIV 8) has a low byte of 0: R13 stays 0 and a swap only
@@ -41,6 +46,9 @@ BUF_B = &7000
 SPARE_ORG = &6900
 SPARE_END = &6F00
 SCREENS_END = &8000
+JUNK0 = BUF_A - &100            ; the junk rows: above A...
+JUNK1 = BUF_A + &1000           ; ...below it...
+JUNK2 = BUF_B - &100            ; ...and above B
 
 IF HARNESS
     CODE_GUARD = SCREENS_ORG    ; a harness image may reach the screens
@@ -51,7 +59,7 @@ IF HARNESS
     ENDIF
     BSS_END = BSS_ORG + &1000
 ELSE
-    BSS_ORG = &4E00
+    BSS_ORG = &5100             ; (D13: the rest is in the spare and the junk rows)
     CODE_GUARD = BSS_ORG
     BSS_END = SCREENS_ORG
 ENDIF
@@ -66,3 +74,8 @@ MB_SEQ = MB + 8                 ; the host's command number, from 1
 MB_ACK = MB + 9                 ; = seq once the command is done
 MB_ERR = MB + 10                ; 0 = ok, else a TRAP code; &FF = BRK
 MB_USECS = MB + 11              ; four bytes: a command's elapsed microseconds
+
+MACRO TRAP code                 ; test builds: stop with an error code (mailbox.6502)
+    LDA #code : STA MB_ERR
+    JMP trapstop
+ENDMACRO

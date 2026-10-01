@@ -30,8 +30,9 @@ ENDIF
     LDA paldata,X : STA &FE21
     DEX : BPL pal
 
+    JSR arith_init
 IF HARNESS
-    JSR arith_init                  ; (the release build has no arithmetic yet)
+    JSR crc_init                    ; the checks' CRC tables
     ; the clock: T2 one-shot (so it just counts on), from &FFFF
     LDA &FE6B : AND #&DF : STA &FE6B
     LDA #&FF
@@ -60,77 +61,31 @@ ENDIF
 }
 
 IF NOT(HARNESS)
-\\ Phase 0's loop: each frame, draw one of two test patterns into the
-\\ buffer scrnbase names (bars in A, a checkerboard in B), with a band that
-\\ moves down a row each frame, then post it and wait for the IRQ to show
-\\ it and turn scrnbase to the other. A tear, or drawing into the buffer on
-\\ show, would show up as a broken band.
+\\ Phase 7's demo (Rich): the camera fixed at the map's start, turning an
+\\ angle unit a vsync (its angle at each capture is the vsync count, on
+\\ from the start's), and every frame drawn whole: clear, capture, plot,
+\\ sprites, fill, then posted and waited for. Phase 9 replaces it with the
+\\ real loop.
 .mainloop
 {
-    ZA_AUTO1 frame                  ; local: frames drawn, for the band's position
+    ZA_AUTO1 frame                  ; local: frames drawn
     LDA #0 : STA frame
+    LDA #LO(MAP_START_X) : STA fr_camx
+    LDA #HI(MAP_START_X) : STA fr_camx + 1
+    LDA #LO(MAP_START_Y) : STA fr_camy
+    LDA #HI(MAP_START_Y) : STA fr_camy + 1
+    LDA #MAP_START_CELL : STA fr_cell
 .loop
+    LDA vsyncs : CLC : ADC #MAP_START_ANGLE : STA fr_angle
     JSR clear
-    LDA scrnbase : STA draw.page
-    CMP #HI(BUF_B) : LDA #0 : ROL A : STA draw.kind     ; 1 in B
-    LDA frame : STA draw.frame
-    JSR draw
+    JSR capture : BCS loop          ; dropped on an overflow: on to the next
+    JSR plot
+    JSR sprite_pass
+    JSR fill
     LDA #1 : STA swapreq
 .wait
     LDA swapreq : BNE wait          ; shown, and scrnbase turned
     INC frame
     JMP loop
-}
-
-\\ A test pattern into the 4K buffer at page `page`: kind 0, vertical bars
-\\ of the four colours a byte column each; kind 1, a red and blue
-\\ checkerboard. Then a band of solid green, 8 scanlines tall, from
-\\ scanline (frame * 2) MOD 128.
-.draw
-{
-    ZA_AUTO1 page                   ; in: the buffer's first page
-    ZA_AUTO1 kind                   ; in: 0 bars, 1 checkerboard
-    ZA_AUTO1 frame                  ; in: the band's position (2 scanlines a frame)
-    ZA_AUTO2 p                      ; local: the page being drawn
-    ZA_AUTO1 pages                  ; local: pages left to fill
-    ZA_AUTO1 rows                   ; local: the band's current scanline
-    ZA_AUTO1 lines                  ; local: band scanlines left
-    LDA page : STA p + 1
-    LDA #0 : STA p
-    LDA #16 : STA pages
-.pg
-    LDY #0                          ; Y = byte column * 8 + scanline in the row
-.byte
-    LDA kind : BNE checks
-    TYA : LSR A : LSR A : LSR A
-    AND #3 : TAX
-    LDA bars,X
-    JMP put
-.checks
-    TYA : AND #1 : BEQ even
-    LDA #&5A : BNE put              ; blue, red, blue, red
-.even
-    LDA #&A5                        ; red, blue, red, blue
-.put
-    STA (p),Y
-    INY : BNE byte
-    INC p + 1
-    DEC pages : BNE pg
-
-    LDA frame : ASL A : AND #127 : STA rows
-    LDA #8 : STA lines
-.band
-    LDA rows : LSR A : LSR A : LSR A    ; the character row: a page
-    CLC : ADC page : STA p + 1
-    LDA rows : AND #7 : TAY             ; the scanline within it
-.col
-    LDA #&FF : STA (p),Y
-    TYA : CLC : ADC #8 : TAY
-    BCC col                         ; on across the 32 byte columns
-    LDA rows : CLC : ADC #1 : AND #127 : STA rows
-    DEC lines : BNE band
-    RTS
-.bars
-    EQUB &00, &0F, &F0, &FF         ; colours 0, 1, 2, 3 in all four pixels
 }
 ENDIF

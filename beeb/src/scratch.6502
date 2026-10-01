@@ -1,0 +1,46 @@
+\ **************************************************************************
+\ *
+\ *     scratch.6502 - the capture's own state, in the junk rows (D13)
+\ *
+\ **************************************************************************
+\
+\ What only the capture uses. Nothing else writes the junk rows until the
+\ plotters overrun into them, so it's set up afresh every capture
+\ (cell_visit is zeroed at its start). A visit (render.c's pt_visit) is a
+\ field a table, by visit (1..23; 0 is the C's null visit): ten tables in
+\ each of A's junk rows, in render.c's field order.
+
+SECTION Junk0, org = JUNK0, guard = JUNK0 + &100    ; (labels over the Screens' junk rows)
+.vs_cell SKIP PT_MAX_VISITS     ; the cell
+.vs_k   SKIP PT_MAX_VISITS      ; the current edge, as a ring index
+.vs_xr  SKIP PT_MAX_VISITS      ; the right column of the latest visit
+.vs0_xl SKIP PT_MAX_VISITS      ; the current edge's start vertex (pt_vv): depth...
+.vs0_xh SKIP PT_MAX_VISITS
+.vs0_yl SKIP PT_MAX_VISITS      ; ...lateral...
+.vs0_yh SKIP PT_MAX_VISITS
+.vs0_sx SKIP PT_MAX_VISITS      ; ...column, flags...
+.vs0_fl SKIP PT_MAX_VISITS
+.vs0_f  SKIP PT_MAX_VISITS      ; ...and its depth's reciprocal
+ENDSECTION
+
+SECTION Junk1, org = JUNK1, guard = JUNK1 + &100
+.vs0_e  SKIP PT_MAX_VISITS
+.vs1_xl SKIP PT_MAX_VISITS      ; its end vertex, likewise
+.vs1_xh SKIP PT_MAX_VISITS
+.vs1_yl SKIP PT_MAX_VISITS
+.vs1_yh SKIP PT_MAX_VISITS
+.vs1_sx SKIP PT_MAX_VISITS
+.vs1_fl SKIP PT_MAX_VISITS
+.vs1_f  SKIP PT_MAX_VISITS
+.vs1_e  SKIP PT_MAX_VISITS
+.vs_inst SKIP PT_MAX_VISITS     ; the cell's sprite instance this frame, 0 = none
+ENDSECTION
+
+SECTION Junk2, org = JUNK2, guard = JUNK2 + &100
+.cell_visit SKIP PT_MAX_VISITS  ; each cell's visit, 0 = none yet (a visit per cell at most)
+.pend   SKIP PT_MAX_PEND        ; the walked portals' instances, by nesting
+.vis_act SKIP 4 * 24            ; each visit's active pieces: slot * 24 + visit
+.cl_l   SKIP 8                  ; the current edge's closed column ranges, [l, r)
+.cl_r   SKIP 8
+.cl_num SKIP 1
+ENDSECTION

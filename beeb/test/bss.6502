@@ -1,7 +1,18 @@
 \ bss.6502 (test) - the harness's own state, after the release BSS
 
-.spike_out SKIP 16                  ; the spike's results (spike.6502)
+IO_SIZE = 1024
+.io_area SKIP IO_SIZE               ; the host's I/O area: poses, pools, records
+.io_end
 
+.crc_lo SKIP 256                    ; the CRC-16 of each byte (crc.6502)
+.crc_hi SKIP 256
+
+\ an overflow (OVERFLOW): nonzero drops the frame as the release does,
+\ rather than stopping; and where capture starts the pool, to force one
+.ovf_abort SKIP 1
+.ovf_pool SKIP 1
+
+IF SUITE == 2
 \ check S2 (s2.6502): the host's arguments...
 .s2_fn SKIP 1                       ; the routine (S2_*)
 .s2_mode SKIP 1                     ; 0 counter, 1 random; +&80 skip the call
@@ -14,12 +25,14 @@
 .s2_calls SKIP 4                    ; the cases used
 .s2_out SKIP 2                      ; the CRC
 .s2_last SKIP 4                     ; the last case's outputs
+ELIF SUITE == 3
 
 \ check S3 (s3.6502): the plots' patterns, two a plot
 .s3_pat SKIP 256
 
 \ check S4 (s4.6502): each pool's image CRC and plot microseconds
 .s4_out SKIP 4 * S4_MAX
+ELSE
 
 \ checks S5 and S5u (s5.6502): a replayed call's context, line, arguments and results
 .rp_pool SKIP 1                     ; pool_last
@@ -27,7 +40,13 @@
 .rp_line SKIP 7
 .rp_args SKIP 4
 .rp_out SKIP 2
-.rp_cam SKIP 9                      ; the record's CAM (for transform)
+.rp_cam SKIP 9                      ; the record's CAM (for transform and the walk)
+.rp_nvis SKIP 6                     ; num_visits, num_insts, the order, seg_next, num_pend (the walk's)
 .rp_buf SKIP 40                     ; the arguments, as the record has them (make_line on)
 .rp_res SKIP 41                     ; the results, likewise
 .s5t_out SKIP 2 * S5T_MAX           ; check S5: each pose's CRC of its view vertices
+
+\ check S6 (s6.6502): each pose's results
+.s6_out SKIP S6_REC * S6_MAX
+.s6_extra SKIP 5                    ; a diagnosis's zero-page counts: num_insts, the order, seg_next, num_pend
+ENDIF

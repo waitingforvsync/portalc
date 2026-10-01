@@ -614,16 +614,3 @@ s2_drivers_list = {drv_mulu8, drv_mulu16_frac, drv_mulu16_frac_round, drv_mulg_u
                    drv_project_rowd, drv_lerp16, drv_rot, drv_dir8, drv_ray_basis}
 .s2_drivers
     EQUW s2_drivers_list
-
-\ CRC-16/XMODEM: polynomial &1021, MSB first.
-FUNCTION crc16(c, k)
-    IF k == 0
-        r = c
-    ELSE
-        r = crc16(((c << 1) EOR (&1021 * ((c >> 15) AND 1))) AND &FFFF, k - 1)
-    ENDIF
-= r
-.crc_lo
-    FOR v = 0 ..< 256 : EQUB LO(crc16(v << 8, 8)) : NEXT
-.crc_hi
-    FOR v = 0 ..< 256 : EQUB HI(crc16(v << 8, 8)) : NEXT

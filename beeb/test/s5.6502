@@ -25,6 +25,18 @@
 \    14 transform        (the camera in rp_cam) w.x w.y; VV
 \    15 col_gt           VV c; ret
 \    16 col_ge           VV c; ret
+\
+\ and the walk's and the sprites' (Phases 6 and 7), likewise, with the
+\ visits, cell_visit, instances, segments and pending stack poked where the
+\ code keeps them, and their counts staged through rp_nvis:
+\
+\     5 inst_new         cell; ret
+\     6 seg_record       PORTAL
+\     7 inst_issue       pend
+\     8 child_portal     ei xl xr thead bhead tmax bmin VV; ret PORTAL
+\     9 next_open        CLOSED c xb; ret c ol orr
+\    10 close_columns    head l rr cbfb.e cbfb.o
+\    11 process_edge     PORTAL; ret PORTAL PORTAL
 
 CMD_REPLAY = 6
 
@@ -114,6 +126,10 @@ RP_BP = 34
 \\ CMD_REPLAY.
 .cmd_replay
 {
+    LDA MB_ARG : CMP #5 : BCC clip
+    CMP #12 : BCS clip
+    JMP rp_walk
+.clip
     JSR rp_unpack
     LDA MB_ARG : BNE notemit
     LDA rp_args : STA emit.r0
@@ -164,12 +180,7 @@ RP_BP = 34
     JMP rp_edge_line
 .notel
     CMP #14 : BNE nottf
-    LDA rp_cam + 1 : STA fr_camx
-    LDA rp_cam + 2 : STA fr_camx + 1
-    LDA rp_cam + 3 : STA fr_camy
-    LDA rp_cam + 4 : STA fr_camy + 1
-    LDA rp_cam + 5 : STA fr_eyez
-    LDA rp_cam + 6 : STA fr_angle
+    JSR rp_cam_in
     LDA rp_buf : STA transform.wx
     LDA rp_buf + 1 : STA transform.wx + 1
     LDA rp_buf + 2 : STA transform.wy
@@ -200,6 +211,150 @@ RP_BP = 34
     RTS
 .bad
     TRAP 4
+}
+
+\ The record's CAM into fr_*.
+.rp_cam_in
+{
+    LDA rp_cam + 1 : STA fr_camx
+    LDA rp_cam + 2 : STA fr_camx + 1
+    LDA rp_cam + 3 : STA fr_camy
+    LDA rp_cam + 4 : STA fr_camy + 1
+    LDA rp_cam + 5 : STA fr_eyez
+    LDA rp_cam + 6 : STA fr_angle
+    LDA rp_cam + 7 : STA fr_cell
+    RTS
+}
+
+\ The walk's targets and the sprites', 5 to 11.
+.rp_walk
+{
+    JSR rp_cam_in
+    LDA rp_pool : STA pool_last
+    LDA rp_nvis : STA num_visits
+    LDA rp_nvis + 1 : STA num_insts
+    LDA rp_nvis + 2 : STA order_head
+    LDA rp_nvis + 3 : STA order_tail
+    LDA rp_nvis + 4 : STA seg_next
+    LDA rp_nvis + 5 : STA num_pend
+    LDA MB_ARG
+    CMP #5 : BNE notnew
+    JSR rp_start
+    LDX rp_buf
+    JSR inst_new : JSR rp_stop
+    STA rp_res
+    JMP out
+.notnew
+    CMP #6 : BNE notseg
+    JSR rp_portal_in
+    JSR rp_start : JSR seg_record : JSR rp_stop
+    JMP out
+.notseg
+    CMP #7 : BNE notissue
+    LDA rp_buf
+    JSR rp_start : JSR inst_issue : JSR rp_stop
+    JMP out
+.notissue
+    CMP #8 : BNE notchild
+    LDA rp_buf + 1 : STA ch_x
+    LDA rp_buf + 2 : STA ch_xr
+    LDA rp_buf + 3 : STA ch_tcur
+    LDA rp_buf + 4 : STA ch_bcur
+    LDA rp_buf + 5 : STA ch_tmax
+    LDA rp_buf + 6 : STA ch_bmin
+    LDA rp_buf + 7 : STA ev_xl  ; P, the portal's start vertex
+    LDA rp_buf + 8 : STA ev_xh
+    LDA rp_buf + 9 : STA ev_yl
+    LDA rp_buf + 10 : STA ev_yh
+    LDA rp_buf + 11 : STA ev_sx
+    LDA rp_buf + 12 : STA ev_flags
+    LDA rp_buf + 13 : STA ev_f
+    LDA rp_buf + 14 : STA ev_e
+    LDA rp_buf
+    JSR rp_start : JSR child_portal : JSR rp_stop
+    JSR rp_bool_out
+    LDY #1 : JSR rp_child_out
+    JMP out
+.notchild
+    CMP #9 : BNE notopen
+    LDX #16
+.cl
+    LDA rp_buf,X : STA cl_l,X   ; (cl_r follows cl_l, then cl_num)
+    DEX : BPL cl
+    LDA rp_buf + 17 : STA next_open.c
+    LDA rp_buf + 18 : STA next_open.xb
+    JSR rp_start : JSR next_open : JSR rp_stop
+    JSR rp_bool_out
+    LDA next_open.c : STA rp_res + 1
+    LDA #0 : STA rp_res + 2 : STA rp_res + 3
+    LDA rp_res : BEQ @+         ; none: the C leaves ol and orr undefined
+    LDA next_open.ol : STA rp_res + 2
+    LDA next_open.orr : STA rp_res + 3
+.@  JMP out
+.notopen
+    CMP #10 : BNE notclose
+    LDA rp_buf + 1 : STA close_columns.l
+    LDA rp_buf + 2 : STA close_columns.rr
+    LDA rp_buf + 3 : STA close_columns.cbe
+    LDA rp_buf + 4 : STA close_columns.cbo
+    JSR rp_start
+    LDX rp_buf
+    JSR close_columns : JSR rp_stop
+    JMP out
+.notclose
+    JSR rp_portal_in
+    JSR rp_start : JSR process_edge : JSR rp_stop
+    JSR rp_bool_out
+    LDA po_cell : STA rp_res + 1
+    LDA po_x : STA rp_res + 2
+    LDA po_xr : STA rp_res + 3
+    LDA po_tcur : STA rp_res + 4
+    LDA po_bcur : STA rp_res + 5
+    LDA po_tmax : STA rp_res + 6
+    LDA po_bmin : STA rp_res + 7
+    LDY #8 : JSR rp_child_out
+.out
+    LDA pool_last : STA rp_pool
+    LDA num_visits : STA rp_nvis
+    LDA num_insts : STA rp_nvis + 1
+    LDA order_head : STA rp_nvis + 2
+    LDA order_tail : STA rp_nvis + 3
+    LDA seg_next : STA rp_nvis + 4
+    LDA num_pend : STA rp_nvis + 5
+    RTS
+}
+
+\ The record's PORTAL into po_*.
+.rp_portal_in
+{
+    LDA rp_buf : STA po_cell
+    LDA rp_buf + 1 : STA po_x
+    LDA rp_buf + 2 : STA po_xr
+    LDA rp_buf + 3 : STA po_tcur
+    LDA rp_buf + 4 : STA po_bcur
+    LDA rp_buf + 5 : STA po_tmax
+    LDA rp_buf + 6 : STA po_bmin
+    RTS
+}
+
+\ The child portal into rp_res + Y, or zeros if rp_res says there's none
+\ (the C leaves it undefined).
+.rp_child_out
+{
+    LDA ch_cell : STA rp_res,Y
+    LDA ch_x : STA rp_res + 1,Y
+    LDA ch_xr : STA rp_res + 2,Y
+    LDA ch_tcur : STA rp_res + 3,Y
+    LDA ch_bcur : STA rp_res + 4,Y
+    LDA ch_tmax : STA rp_res + 5,Y
+    LDA ch_bmin : STA rp_res + 6,Y
+    LDA rp_res : BNE done
+    LDX #7
+.zero
+    STA rp_res,Y
+    INY : DEX : BNE zero
+.done
+    RTS
 }
 
 \ The clock before a replayed call...

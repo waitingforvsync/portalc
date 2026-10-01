@@ -938,8 +938,10 @@ costs:
 | `cut` | 340 | 209 |
 
 They're per call, not per frame, and the records are picked for novelty,
-not frequency. But `transform`, for one, is about 830 where the cost
-model has about 650 (its guess of 90 on top of the measured rotation).
+not frequency. Where they can be held against the cost model, they
+agree. `transform` is about 720 for a vertex outside the frustum and
+about 1,000 inside, where the model has 664 and about 1,050. (Its
+rotation, reciprocal and column are S2's, counted apart.)
 
 ### Breaking it on purpose
 
@@ -993,3 +995,239 @@ is 775, less the patching). Or there's the 16K of sideways RAM.
 ### Phase 5: done
 
 Next: the walk, with its saves on the hardware stack.
+
+## 2026-10-01 — Phase 6: the walk
+
+### What's there
+
+`src/walk.6502` (2,199 bytes) is the rest of render.c's capture:
+
+- the visits;
+- `child_portal`, `next_open` and `close_columns`;
+- `process_edge` (841 of the bytes);
+- the root search and its exact retry;
+- `walk`;
+- `capture`, the frame's half of `pt_render_frame`.
+
+Sprites wait for Phase 7, so nothing calls `inst_new`, `seg_record` or
+`inst_issue` yet.
+
+The shapes:
+
+- **The portal is zero page.** `po_*` is the one being walked, and `ch_*`
+  the child `process_edge` finds. A descent is a copy, some pushes and a
+  `JSR`:
+
+```
+    LDA po_cell : PHA           ; ...the portal's seven bytes, then
+    LDA steps : PHA
+    JSR take                    ; ch_* into po_*
+    INC depth
+    JSR walk
+    DEC depth
+    PLA : STA steps             ; ...and back
+```
+
+  That's 8 bytes a level, until Phase 7's pending count makes it D15's 9.
+  The tail call is `JSR take : JMP portal`.
+- **A visit is 19 tables of 24, in the spare**: cell, k, xr, then v0's
+  and v1's eight bytes each. With `cell_visit`, that's 480 bytes, there
+  until D13 decides where everything lives. Release BSS didn't have room.
+- **`process_edge` keeps its colours and heights in locals**, and
+  `edge_clip` does the dull part of each line: the active piece's index,
+  fresh cursors, `clip_edge_line`. The C's three `pt_clip`s come down to
+  which fields get set when: the clip only ever writes the cursors.
+- **The root's bounds** come from `pool_alloc`'s own indices, not an
+  assumed 1 and 2, so the abort check (below) can start the pool
+  anywhere.
+- **`root_exact` needs only the sign** of a = rx k1 + ry k2. But it needs
+  it exactly, so it gets a 16 by 16 signed multiply (194 bytes, for a
+  path only boundary poses take). On a convex ring the sign changes once,
+  so it stops at the first transition. The camera's multiplies in Phase 8
+  may want to share it.
+
+Folded in, or gone:
+
+- An edge starting past the right ray has an sx0 of 128, which is its xa,
+  so it has no columns. `process_edge` says so at once, rather than via
+  render.c's arm for it.
+- Two arms I ported in Phase 5 are dead now there's a `process_edge` to
+  prove it (D10): `cut`'s skip past a lagging cursor (render.c:752-754)
+  and `edge_line`'s start past the right ray (1095-1096).
+- `next_open` never needs its `l == c` test. Once the first loop is done
+  nothing covers c, so nothing starts there either. The mutations said so
+  first; see below.
+
+### The overflow (D9)
+
+`OVERFLOW n` sits wherever the C panics: the pool (2), the closed list (3)
+and the visits (5). In the release it's `JMP capture_abort`: S back to
+where `capture` saved it, `cell_visit` emptied, `INC aborts`, and C set.
+In a test build it stops with the code, unless the check sets
+`ovf_abort`.
+
+The abort check starts the pool high (`ovf_pool`) so about half of 16
+frames run out of pieces. It passes: 5 dropped, exactly the 5 whose pools
+were too big, 5 counted, `cell_visit` empty, and the next 16 frames
+exactly as the C draws them.
+
+### Baron's turn
+
+The walk wouldn't assemble. Baron's recursion check refused `JSR capture`,
+naming `pool_last`, `num_visits`, the rotation's outputs and five more.
+Two sound shapes were getting refused, each with a 20-line repro:
+
+- A routine outside the cycle seeds a count, then calls into the
+  recursion, and its caller reads the count after. That's `capture`
+  seeding `pool_last`.
+- A helper's result is used within one level, and read again by `main`
+  after the whole recursion returns.
+
+The check ran at every call whose callees recurse, and its live set
+counted reads by whoever runs after the outermost return. Rich OK'd a
+narrower rule. A value is per-level only if a level reads it back after
+its own recursive call, so a seed before the recursion and a result read
+after it are one value each.
+
+So the check now:
+
+- runs only at a call that can come back round to itself;
+- judges on liveness with the return edges left out.
+
+That also caught a per-level value it used to miss: one stored on a
+guarded path. Baron's tests: 445, green under asan. Its examples and the
+release disc were byte-identical either way. Rich committed it.
+
+### The harness ran out of room
+
+The release code plus every check came to 1,833 bytes past &5700:
+
+| | Bytes |
+|---|---|
+| Release code so far | 12.7K |
+| Test code | 7.5K, against the 2.5K the plan budgeted |
+| of which S2's drivers | 3.3K |
+
+So it's a suite a harness now (Rich):
+
+- `-D SUITE=2` is S2 alone, `harness_s2`.
+- `SUITE=0` is the rest: `harness0`, `harness1` and the map builds.
+- The Phase 1 spike is gone, since the real walk has done its job.
+- The CRC tables moved to `test/crc.6502`, as every suite folds with
+  them.
+
+S4's full pool (1,786 bytes) no longer fits the 1,750 of I/O area left.
+A pool that big is poked straight into the pool's pages and plotted in
+place.
+
+### Checking it
+
+S5u replays the walk's recorded calls with the visits poked in, and all
+701 match. They had to go to the right build first, though. A record's
+map is its CAM's first byte, and the files mix all three. Phase 5's
+targets never read the map, so it never mattered. `child_portal`'s
+record 108 is a map 9 record, and on map 0 it walked a ring that never
+ends.
+
+S6 renders whole frames, sprites off, at every golden pose, and CRCs the
+capture (pieces, visits, `cell_visit`) and the image:
+
+| | Poses | |
+|---|---|---|
+| Map 0, buffer A | 7,545 | identical |
+| Map 0, buffer B | 7,545 | identical |
+| Map 7 | 2,344 | identical |
+| The stress map | 10,520 | identical |
+
+That's 27,954 frames. The first run said 1,160 of the sweep's 1,172
+differed, while pose 0 alone was fine: `s6_out`'s index is a byte, and 64
+records of 16 is 1,024. Batches of 16 now.
+
+`close_columns` splits a piece at l or rr only for pinches no pose finds
+(host/uncovered.txt: rare). So `beebtool synthclose` writes 4,000
+synthetic calls on random chains, 89% of them splitting, and all 4,000
+match.
+
+Breaking it on purpose:
+
+| Broken | Caught by |
+|---|---|
+| The depth cap a level early | S6 on the stress map (78 of 1,500) |
+| The top chain's `bmin` always 0 | `process_edge`'s replays, and every S6 set |
+| `visit_advance` keeping the floor bound's active piece | S6: 418 of the sweep's 1,172 |
+| The root search missing a vertex exactly on the left ray | S6 on the rim poses (8 of 1,500) |
+| `cell_visit` left full | S6: the next frame hangs, or overflows the pool |
+| `close_columns` not splitting at rr | the synthetic set (2,938 of 4,000), nothing golden |
+| A first visit starting at the twin | nothing: equivalent |
+| `next_open`'s end test taking l == c | nothing: equivalent |
+
+The twin one undoes itself. Its v1 is P, which is never strictly right of
+xl, so the seek's first step lands where the C starts, one transform
+later. The `next_open` one is the redundant test above, now gone.
+
+S3 and S4 pass again on the new harness.
+
+### What it costs
+
+Capture, measured against the cost model's figure for the same poses
+(cycles):
+
+| | Model median | Measured | Model 90% | Measured | Model max | Measured |
+|---|---|---|---|---|---|---|
+| sweep | 26.9k | 39.2k | 78.6k | 114.5k | 177k | 264k |
+| map7 | 29.9k | 42.2k | 83.5k | 114.9k | 185k | 264k |
+| rim | 18.9k | 27.0k | 72.9k | 105.3k | 181k | 261k |
+| stress | 41.4k | 57.9k | 117.5k | 156.1k | 207k | 283k |
+
+It runs about 40% over the model everywhere. Where the model guessed (60
+for `process_edge`, 160 for `child_portal`), the 6502 says 3,852 and
+1,520 a call, though those include the clipping and transforms they
+call.
+
+A whole frame (clear, capture, plot, fill, no sprites or camera) is a
+median of 108k on the sweep, 128k on the stress map, and at most 368k. At
+the median that's 3 vsyncs, 16.7 frames a second, before sprites and the
+camera.
+
+Zero page reaches &B5 in the harness (it was &95). The stack never gets
+below &153.
+
+### Budget
+
+The walk is 2.2K against Phase 5's estimate of 2.0K. The projection
+becomes about 16.8K, against 16,128 (or about 16,900 with D13). Still
+right on the line, and Phase 7 is next.
+
+### Optimisation: later
+
+Rich: a pass of its own, after the sprites. Pricing every recorded call
+both ways shows where the model's 40% went. Where it used S2's measured
+arithmetic it's right: `transform` 0.91 of the model, `child_portal`
+1.08. Where it guessed it's short: the clip group up to 1.68
+(`clip_edge_line`), `edge_line` 1.40 and `process_edge` 1.43. It missed
+the glue: `row_step`'s setup under every `piece_y` and `line_y`, the
+chain helpers, arguments copied into zero page, each line's context, and
+the vertex copies per edge.
+
+On the sweep, roughly:
+
+| | Share of capture |
+|---|---|
+| clipping lines | 36% |
+| transforms | 26% |
+| making lines | 23% |
+| cuts | 9% |
+| `child_portal`'s own | 6% |
+
+The candidates so far:
+
+- the `transform` trims, about 150 cycles a vertex;
+- reading the visits' tables in place, not copying 22 bytes an edge;
+- the vertex cache, if it comes back;
+- whatever a sampling profiler finds in the clipping (system VIA T1
+  every 2,000 or so cycles, the interrupted PC to the host, mapped to
+  labels).
+
+### Phase 6: done
+
+Next: sprites.

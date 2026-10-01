@@ -414,6 +414,14 @@ edge for a later visit to resume from. So the depth grows only with portals nest
 along a line of sight, not with the number of edges walked. In the demo the deepest
 frame nests 11 (typically 2–4); at about 10 bytes of 6502 stack per level (the portal
 state above plus the return address) the cap of 16 fits in page 1 beside the MOS.
+
+On the Beeb (beeb/src/walk.6502) the portal being walked lives in zero page. A descent
+pushes its seven bytes and the edges left, `LDA v : PHA`, round the recursive `JSR`, and
+pulls them back after: 10 bytes a level with the return address, 11 once the sprites'
+pending count joins them. `descend` is inlined: at depth 16 the child's columns are
+closed instead. The stress map, which reaches the cap, never takes the stack below
+&153. The pool's count is `pool_last`, the last piece used (0..255), since the C's
+`pool_num` runs to 256 and won't fit a byte.
 Past the cap a child's columns are closed instead of walked: the closed-column fix-up
 (§7.9.4) stands in for its whole stack, so the opening shows its ceiling colour flat,
 a draw-distance cutoff rather than a glitch.
@@ -1053,7 +1061,10 @@ call of the one before, and they all pop at that return, the innermost first (th
 tail child is its parent's last, so its pop comes just before its parent's). So each
 entry pushes its instance on a **pending stack** (§9.3), and the call's return issues
 the entries above the height it began with, top first. Children walked by nested calls
-have issued theirs by then. (On the 6502 the pending stack can be the hardware stack.)
+have issued theirs by then. On the Beeb the pending stack is a table of its own, `pend`,
+in a junk row with the capture's other scratch (beeb/src/scratch.6502), not the hardware
+stack: the walk pushes its saves round the recursive call there (§7.5), and only the
+walk's count at entry joins them.
 
 An instance is therefore issued once, at the pop of the *last* visit of its cell
 that overlaps it. That is after the descendants of all its visits (farther) and

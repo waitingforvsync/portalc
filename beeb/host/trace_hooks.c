@@ -920,6 +920,95 @@ static void record(const char *dir)
     }
 }
 
+// ---- synthetic records ----
+//
+// close_columns splits a piece at l or at rr only for a pinch whose open
+// range starts or ends inside a bottom-chain piece, which no golden pose
+// reaches (host/uncovered.txt: rare). So: random bottom chains over the
+// whole screen, a piece order shuffled as the pool's real ones are, and a
+// column range landing inside pieces more often than not; each call
+// recorded as the recorder would, to DIR/replay/close_columns_synth.bin.
+static void synth_close(const char *dir, uint32_t seed, uint32_t count)
+{
+    static pt_render r;
+    static uint8_t before[TR_BUF], after[TR_BUF];
+    load_map(0);
+    rc_random rng = rc_random_make(seed);
+    char path[1024];
+    snprintf(path, sizeof path, "%s/replay/close_columns_synth.bin", dir);
+    FILE *o = open_out(NULL, path);
+    uint8_t hdr[8] = {'P', 'C', 'R', 'P', 1, TR_close_columns, 0, 0};
+    fwrite(hdr, 1, sizeof hdr, o);
+    for (uint32_t k = 0; k < count; k++) {
+        pt_render_init(&r, &map_);
+        r.num_visits = 1;
+        r.num_insts = 1;
+        r.seg_num = 1;
+        uint32_t n = 1 + rc_random_next(&rng) % 12;
+        uint8_t cut[13] = {0};    // the pieces' bounds, 0 = cut[0] < ... < cut[n] = 128
+        cut[n] = 128;
+        for (uint32_t i = 1; i < n; i++)
+            cut[i] = (uint8_t)(1 + rc_random_next(&rng) % 127);
+        for (uint32_t i = 1; i < n; i++)    // sorted, and distinct, or the chain is shorter
+            for (uint32_t j = i + 1; j < n; j++)
+                if (cut[j] < cut[i]) {
+                    uint8_t t = cut[i];
+                    cut[i] = cut[j];
+                    cut[j] = t;
+                }
+        uint32_t m = 1;
+        for (uint32_t i = 1; i <= n; i++)
+            if (cut[i] != cut[m - 1])
+                cut[m++] = cut[i];
+        n = m - 1;
+        uint8_t order[12];
+        for (uint32_t i = 0; i < n; i++)
+            order[i] = (uint8_t)(i + 1);
+        for (uint32_t i = n; i > 1; i--) {
+            uint32_t j = rc_random_next(&rng) % i;
+            uint8_t t = order[i - 1];
+            order[i - 1] = order[j];
+            order[j] = t;
+        }
+        r.pool_num = (uint16_t)(n + 1);
+        for (uint32_t i = 0; i < n; i++) {
+            uint32_t a = rc_random_next(&rng), c = rc_random_next(&rng);
+            uint16_t mag = (a >> 8) % 4 == 0 ? 0 : (uint16_t)((a >> 10) % 0x800);
+            r.pool[order[i]] = (pt_piece) {.x0 = cut[i], .x1 = cut[i + 1], .y0 = (uint8_t)(a % 65),
+                                           .g = pt_g_make(mag, (uint8_t)((a >> 9) & 1)),
+                                           .ce = (uint8_t)c, .co = (uint8_t)(c >> 8),
+                                           .next = i + 1 < n ? order[i + 1] : 0};
+        }
+        // the range: each end inside a piece, three times in four
+        uint32_t a = rc_random_next(&rng);
+        uint8_t l = (uint8_t)(a % 128), rr = (uint8_t)(l + 1 + (a >> 8) % (uint32_t)(128 - l));
+        if ((a >> 16) % 4 == 0)
+            l = cut[(a >> 18) % n];
+        if ((a >> 20) % 4 == 0) {
+            uint8_t e = cut[1 + (a >> 22) % n];
+            if (e > l)
+                rr = e;
+        }
+        pt_pattern cbfb = {.e = (uint8_t)(a >> 24), .o = (uint8_t)~(a >> 24)};
+        tr_buf b = {.p = before, .cap = TR_BUF}, ab = {.p = after, .cap = TR_BUF};
+        enc_cam(&b, &r, 0);
+        put8(&b, order[0]);
+        put8(&b, l);
+        put8(&b, rr);
+        put8(&b, cbfb.e);
+        put8(&b, cbfb.o);
+        enc_fs(&b, &r);
+        close_columns__impl(&r, order[0], l, rr, cbfb);
+        enc_fs(&ab, &r);
+        uint32_t len = b.n + ab.n;
+        uint8_t lh[2] = {(uint8_t)len, (uint8_t)(len >> 8)};
+        fwrite(lh, 1, 2, o);
+        fwrite(before, 1, b.n, o);
+        fwrite(after, 1, ab.n, o);
+    }
+    fclose(o);
+}
+
 // ---- the self-check ----
 
 // Replay one record: restore it into a fresh renderer, run the function
@@ -1148,6 +1237,39 @@ static void replaycheck(const char *dir)
     printf("%u records, %s\n", total, bad ? "FAIL" : "all reproduce");
     if (bad)
         exit(1);
+}
+
+// The cost model's counters for each recorded call alone, replayed on the
+// host: a CSV line a record (function, record, then every counter), for
+// holding the model's price of a call against the Beeb's measured one.
+static void replaycost(const char *dir, const char *out)
+{
+    static uint8_t gbuf[TR_BUF];
+    tr_buf got = {.p = gbuf, .cap = TR_BUF};
+    FILE *o = open_out(NULL, out);
+    fprintf(o, "fn,record");
+    for (uint32_t i = 0; i < TC_N; i++)
+        fprintf(o, ",%s", tc_names_[i]);
+    fputc('\n', o);
+    char path[1024];
+    for (uint32_t fn = 0; fn < TR_N; fn++) {
+        snprintf(path, sizeof path, "%s/replay/%s.bin", dir, tr_names_[fn]);
+        size_t n;
+        uint8_t *buf = read_file(path, &n);
+        uint32_t k = 0;
+        for (size_t i = 8; i + 2 <= n; k++) {
+            uint32_t len = (uint32_t)(buf[i] | buf[i + 1] << 8);
+            memset(tc_, 0, sizeof tc_);
+            (void) replay_one(fn, buf + i + 2, len, &got);
+            fprintf(o, "%s,%u", tr_names_[fn], k);
+            for (uint32_t c = 0; c < TC_N; c++)
+                fprintf(o, ",%lu", tc_[c]);
+            fputc('\n', o);
+            i += 2 + len;
+        }
+        free(buf);
+    }
+    fclose(o);
 }
 
 // ---- the cost model (D1d) ----

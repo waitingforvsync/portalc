@@ -21,12 +21,18 @@
 //                                     run an input stream through the
 //                                     camera from the map's start: x, y
 //                                     (u16.8), angle, cell per tick
+//   beebtool s6|s7 MAP POSES OUT [N DUMP]
+//                                     check S6's (sprites off) or S7's (on)
+//                                     expected records (test/s6.6502); pose
+//                                     N's capture and image into DUMP
 //   beebtool search DIR N             (the search build) N random poses on
 //                                     each map; those that reach code the
 //                                     goldens in DIR miss go to
 //                                     DIR/searchM_poses.bin
 //   beebtool record DIR               (the trace build) unit-replay records
 //                                     from the golden poses, to DIR/replay
+//   beebtool synthclose DIR SEED N    (the trace build) N synthetic close_columns
+//                                     records (rare splits), to DIR/replay
 //   beebtool replaycheck DIR          (the trace build) replay every record
 //                                     on the host: each must reproduce itself
 //   beebtool cost DIR                 (the trace build) the frame-cost model
@@ -1415,6 +1421,101 @@ static void s4_crc(const char *in, const char *out)
     free(p);
 }
 
+// ---- checks S6 and S7: whole captures and frames (PLAN.md 5.7) ----
+//
+// Per pose, what test/s6.6502 forms: a CRC-16 of the capture - the pieces
+// 1.. as the Beeb's pages hold them (x0 x1 y0 g ce co next), the visits
+// 1.. (cell k xr, v0, v1, inst, active[4]), the instances 1.. (sprite cx0
+// cx1 seg seg_tail prev next, scale, left and top in 24 bits), the order's
+// head and tail, seg_num (a byte: 256 is 0) and the segments 1.., num_pend
+// - and two of the image, as S4's. The sprites on (S7) or off (S6). A
+// record is the pose (6), then those three CRCs, pool_last and num_visits:
+// 14 bytes.
+
+// The capture as s6.6502 CRCs it, into out; its length.
+static size_t s6_state(uint8_t *out)
+{
+    size_t n = 0;
+    for (uint32_t i = 1; i < render_.pool_num; i++) {
+        const pt_piece *p = &render_.pool[i];
+        uint8_t v[8] = {p->x0, p->x1, p->y0, (uint8_t)p->g, (uint8_t)(p->g >> 8), p->ce, p->co, p->next};
+        memcpy(out + n, v, 8);
+        n += 8;
+    }
+    for (uint32_t i = 1; i < render_.num_visits; i++) {
+        const pt_visit *vs = &render_.visits[i];
+        const pt_vv *vv[2] = {&vs->v0, &vs->v1};
+        out[n++] = vs->cell;
+        out[n++] = vs->k;
+        out[n++] = vs->xr;
+        for (int k = 0; k < 2; k++) {
+            out[n++] = (uint8_t)vv[k]->x;
+            out[n++] = (uint8_t)((uint16_t)vv[k]->x >> 8);
+            out[n++] = (uint8_t)vv[k]->y;
+            out[n++] = (uint8_t)((uint16_t)vv[k]->y >> 8);
+            out[n++] = vv[k]->sx;
+            out[n++] = vv[k]->flags;
+            out[n++] = vv[k]->rx.f;
+            out[n++] = vv[k]->rx.e;
+        }
+        out[n++] = vs->inst;
+        for (int s = 0; s < PT_NUM_SLOTS; s++)
+            out[n++] = vs->active[s];
+    }
+    for (uint32_t i = 1; i < render_.num_insts; i++) {
+        const pt_inst *in = &render_.insts[i];
+        uint8_t v[15] = {in->sprite, in->cx0, in->cx1, in->seg, in->seg_tail, in->prev, in->next,
+                         (uint8_t)in->scale, (uint8_t)(in->scale >> 8),
+                         (uint8_t)in->left, (uint8_t)(in->left >> 8), (uint8_t)(in->left >> 16),
+                         (uint8_t)in->top, (uint8_t)(in->top >> 8), (uint8_t)(in->top >> 16)};
+        memcpy(out + n, v, 15);
+        n += 15;
+    }
+    out[n++] = render_.order_head;
+    out[n++] = render_.order_tail;
+    out[n++] = (uint8_t)render_.seg_num;
+    for (uint32_t i = 1; i < render_.seg_num; i++)
+        out[n++] = render_.segs[i];
+    out[n++] = render_.num_pend;
+    return n;
+}
+
+// Every pose's record; and, for pose number dump (if any), the capture's
+// bytes as s6_state lays them out, then the image, into dumpfile.
+static void s6(int which, const char *poses, const char *out, long dump, const char *dumpfile, bool sprites)
+{
+    crc16_init();
+    load_map(which);
+    pt_render_init(&render_, &map_);
+    render_.sprites = sprites;
+    size_t n;
+    uint8_t *p = read_file(poses, &n);
+    FILE *f = open_out(NULL, out);
+    static uint8_t state[8 * 256 + 24 * PT_MAX_VISITS + 15 * PT_MAX_INSTS + PT_SEG_POOL + 8];
+    for (size_t i = 0; i + 6 <= n; i += 6) {
+        memset(render_.fbmem, 0, sizeof(render_.fbmem));
+        pt_render_frame(&render_, (uint16_t)(p[i] | p[i + 1] << 8),
+                        (uint16_t)(p[i + 2] | p[i + 3] << 8), p[i + 4], p[i + 5]);
+        size_t sn = s6_state(state);
+        uint16_t c = crc16(state, sn);
+        uint16_t a = crc16(render_.fbmem, sizeof(render_.fbmem));
+        uint16_t b = crc16(render_.fbmem, sizeof(render_.fbmem) - PT_FB_GUARD);
+        uint8_t rec[14] = {p[i], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5],
+                           (uint8_t)c, (uint8_t)(c >> 8), (uint8_t)a, (uint8_t)(a >> 8),
+                           (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(render_.pool_num - 1),
+                           render_.num_visits};
+        fwrite(rec, 1, sizeof rec, f);
+        if (dump >= 0 && (size_t)dump == i / 6) {
+            FILE *d = open_out(NULL, dumpfile);
+            fwrite(state, 1, sn, d);
+            fwrite(render_.fbmem, 1, sizeof(render_.fbmem), d);
+            fclose(d);
+        }
+    }
+    fclose(f);
+    free(p);
+}
+
 #ifdef BEEBTOOL_TRACE
 #include "trace_hooks.c"
 #endif
@@ -1424,6 +1525,14 @@ int main(int argc, char **argv)
 #ifdef BEEBTOOL_TRACE
     if (argc >= 3 && !strcmp(argv[1], "record")) {
         record(argv[2]);
+        return 0;
+    }
+    if (argc >= 4 && !strcmp(argv[1], "replaycost")) {
+        replaycost(argv[2], argv[3]);
+        return 0;
+    }
+    if (argc >= 5 && !strcmp(argv[1], "synthclose")) {
+        synth_close(argv[2], (uint32_t)strtoul(argv[3], NULL, 0), (uint32_t)strtoul(argv[4], NULL, 0));
         return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "replaycheck")) {
@@ -1472,6 +1581,11 @@ int main(int argc, char **argv)
     }
     if (argc >= 5 && !strcmp(argv[1], "s5t")) {
         s5t(atoi(argv[2]), argv[3], argv[4]);
+        return 0;
+    }
+    if (argc >= 5 && (!strcmp(argv[1], "s6") || !strcmp(argv[1], "s7"))) {
+        s6(atoi(argv[2]), argv[3], argv[4], argc >= 7 ? atol(argv[5]) : -1, argc >= 7 ? argv[6] : NULL,
+           argv[1][1] == '7');
         return 0;
     }
     if (argc >= 4 && !strcmp(argv[1], "s4crc")) {

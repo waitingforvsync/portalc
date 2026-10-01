@@ -66,7 +66,7 @@ def main(argv):
         rows = list(csv.DictReader(f))
     plot = []
     for name in STREAMS:
-        path = os.path.join(BUILD, 's4', '%s_harness0.cycles' % name)
+        path = os.path.join(BUILD, 's4', '%s_harness_s34_0.cycles' % name)
         with open(path) as f:
             plot += json.load(f)
     if len(plot) != len(rows):

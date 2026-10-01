@@ -12,11 +12,12 @@ make                          # the release disc and the harness discs
 make run                      # start b2 (if ours isn't running) and boot the release disc
 B2_VIDEO=offscreen make phase0   # the Phase 0 checks, with no b2 window
 B2_VIDEO=offscreen make phase1   # the Phase 1 checks: image, tables, maps
-B2_VIDEO=offscreen make spike    # the recursion spike against its model
 B2_VIDEO=offscreen make phase2   # check S2: every arithmetic routine against the C, and its cycles
 B2_VIDEO=offscreen make phase3   # check S3: fill, clear and the cursor against the C, both buffers
 B2_VIDEO=offscreen make phase4   # check S4: the plotters on every golden pose, both buffers
 B2_VIDEO=offscreen make phase5   # check S5u (every recorded clip-group call replayed) and S5
+B2_VIDEO=offscreen make phase6   # check S5u for the walk, and S6: whole frames, sprites off
+B2_VIDEO=offscreen make phase7   # check S5u for the sprites, and S7: whole frames with them
 make stop                     # stop our b2
 ```
 
@@ -42,7 +43,7 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | Path | What |
 |---|---|
 | `portal.6502`, `boot.6502` | the release program (`PORTAL`) and its `!BOOT` |
-| `harness.6502`, `tboot.6502` | the test harness (`HARNESS`), built with `-D TESTBUF=0` or `1`, and `-D MAP=0`, `7` or `9` |
+| `harness.6502`, `tboot.6502` | the test harness (`HARNESS`): the release code so far and one suite of checks, `-D SUITE=0` (S5 onwards; `harness0`, `harness1` and the map builds), `3` (S3 and S4: `harness_s34_0`, `_1`) or `2` (S2: `harness_s2`), with `-D TESTBUF=0` or `1` and `-D MAP=0`, `7` or `9` |
 | `src/top.6502` | the sections: screens, BSS, and the loader carrying the payload |
 | `src/layout.6502` | the memory map and the mailbox |
 | `src/stub.6502` | the loader's entry: takes the machine over, copies the payload to &300 |
@@ -52,14 +53,19 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | `src/plot.6502` | the plotters: flat, shallow (the carry tree) and steep, over the pool |
 | `src/clip.6502` | pieces and chains, and the clip group: `emit`, `resolve_block`, `clip_line`, `clip_edge_line`, `cut` |
 | `src/lines.6502` | `transform`, the column tests, the side clips, `make_line` and `edge_line` |
+| `src/walk.6502` | the capture walk: visits, `child_portal`, `process_edge`, the root, `walk` and `capture` |
+| `src/sprites.6502` | sprite instances, clip segments, the draw order and the sprite pass |
+| `src/spare.6502` | six of the pool's pages, in the spare |
+| `src/scratch.6502` | the capture's own state, in the junk rows |
 | `src/arith.6502` | the fixed-point arithmetic: quarter-square multiplies, reciprocal divisions, projections, rotation |
 | `src/main.6502` | `start` and the main loop |
 | `test/mailbox.6502` | the host's commands (test builds) |
-| `test/spike.6502` | the recursion spike: walk's skeleton, checked against `host/spike.py` |
 | `test/s2.6502` | check S2: drives each arithmetic routine over a counter or xorshift32, CRCs the results |
 | `test/s3.6502` | check S3: fill, clear, and the cursor walked over every pixel pair of a buffer |
 | `test/s4.6502` | check S4: plots the host's pools and CRCs each image |
 | `test/s5.6502` | checks S5 and S5u: the replay shim, and every vertex transformed at every pose |
+| `test/s6.6502` | check S6: whole frames at the host's poses, the capture and image CRCed |
+| `test/crc.6502` | the CRC-16 tables the checks fold their results with |
 | `test/bss.6502` | the harness's own state |
 | `host/b2up.sh`, `host/b2.py` | b2 start-up and automation |
 | `host/beebtool.c` | the C side: exports, goldens, renders, the search, the recorder, the cost model |
@@ -76,13 +82,13 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | &00-&FB | zero page, allocated by Baron (`ZA_POOL`) |
 | &200-&205 | BRKV, IRQ1V; &27E-&29B never written; &2F0-&2FF the mailbox (test builds) |
 | &300-&EFF | fixed tables (Phase 1); the NMI handler at &D00 |
-| &F00-&4DFF | code and data |
-| &4E00-&56FF | per-frame state (in harness builds, inside the buffer not under test) |
-| &5700 | junk row above buffer A |
+| &F00-&50FF | code and data |
+| &5100-&56FF | per-frame state that crosses the plot (in harness builds, inside the buffer not under test) |
+| &5700 | junk row above buffer A; the capture's scratch until the plot |
 | &5800-&67FF | buffer A |
-| &6800 | junk row below A |
-| &6900-&6EFF | spare: never plotted, filled or shown |
-| &6F00 | junk row above B |
+| &6800 | junk row below A; the capture's scratch |
+| &6900-&6EFF | spare: never plotted, filled or shown; six of the pool's pages |
+| &6F00 | junk row above B; the capture's scratch |
 | &7000-&7FFF | buffer B |
 | &8000 | B's junk row below: the paged ROM, where stores go nowhere |
 

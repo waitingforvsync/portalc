@@ -44,9 +44,9 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | D9 | Phase 6 | What the release build does when a capacity limit overflows (pool, segments, toggles, pending, closed). The C panics at these points, so there is no reference. | Abort the frame: restore S, clear `cell_visit`, skip the swap so the previous frame stays on screen, and count the abort. Test builds TRAP instead. |
 | D10 | End of Phase 1 | Ported lines that no golden input reaches, even after the pose search and the stress map. Accept them as verified by code review only, or build more stress inputs? | *Settled by Rich:* dead code is not ported. The rest is listed with reasons in `host/uncovered.txt`. |
 | D11 | Phase 2 | Should the JOURNAL's Python 6502 interpreter be used alongside b2 to get exact cycle counts per routine? | No. Batch timing comes from T2 on b2; exact per-routine cycles, when wanted, from jsbeeb-mcp (§5.10). |
-| D13 | Phases 6-7 | *Rich's idea, Phases 3-4:* the junk rows (&5700, &6800 and &6F00, 768 bytes) double as scratch. Only the plotters write them, so they hold anything whose lifetime doesn't cross the plot: the visits (24 fields of 24 bytes, three rows' worth), `cell_visit`, pending and the clip scratch, about 730 bytes. Test builds zero them between capture and plot, so whole-frame checks still compare the overruns. The spare &6900-&6EFF (1.5K) is never written by anything but us, so it takes what does cross the plot: six of the pool's eight pages (each field page stands alone). BSS below the screens then needs about 1.35K (two pool pages, instances 480, segments 256, toggles 96), and `BSS_BASE` can rise from &4E00 to about &5100, about 768 bytes more for code. | Place it so when Phase 7 settles `BSS_BASE`. |
+| D13 | Phases 6-7 | *Rich's idea, Phases 3-4:* the junk rows (&5700, &6800 and &6F00, 768 bytes) double as scratch. Only the plotters write them, so they hold anything whose lifetime doesn't cross the plot: the visits (24 fields of 24 bytes, three rows' worth), `cell_visit`, pending and the clip scratch, about 730 bytes. Test builds zero them between capture and plot, so whole-frame checks still compare the overruns. The spare &6900-&6EFF (1.5K) is never written by anything but us, so it takes what does cross the plot: six of the pool's eight pages (each field page stands alone). BSS below the screens then needs about 1.35K (two pool pages, instances 480, segments 256, toggles 96), and `BSS_BASE` can rise from &4E00 to about &5100, about 768 bytes more for code. | Placed in Phase 7 (§2.1): `BSS_BASE` &5100. |
 | D14 | Phase 4 | *Settled by Rich:* `scrnbase` (`ZA_AUTO`, a page) is the buffer being drawn. Clear, plot and fill work on it (clear and fill by picking their unrolled body; plot through `AT`). The main loop sets `swapreq`; the IRQ writes R12 = `scrnbase` DIV 8, turns `scrnbase` to the other buffer and clears `swapreq`. | Done. Open for Phase 9: Rich's loop posts the swap and waits for it straight away; waiting just before the render instead lets camera and capture (which never touch a buffer) overlap the wait, about 13% more frames a second on the goldens (JOURNAL.md, Phase 4). |
-| D15 | Phase 6 | *Settled by Rich, Phase 5:* the walk saves its 9 per-level bytes on the hardware stack, `LDA : PHA` before the recursive `JSR` and `PLA : STA` after, not in depth-indexed arrays. The spike's case for the arrays was the hardware stack's depth, but page 1 holds both either way, so the total is the same (about 195 bytes at depth 16); pushes are about 20 cycles a descent cheaper, and simpler. | Pushes. |
+| D15 | Phase 6 | *Settled by Rich, Phase 5:* the walk saves its 9 per-level bytes on the hardware stack, `LDA : PHA` before the recursive `JSR` and `PLA : STA` after, not in depth-indexed arrays. The spike's case for the arrays was the hardware stack's depth, but page 1 holds both either way, so the total is the same (about 195 bytes at depth 16); pushes are about 20 cycles a descent cheaper, and simpler. | Pushes. Done in Phase 6: 8 bytes until Phase 7's pending count makes 9; S6's stress map, at the cap, never takes the stack below &153. |
 | D12 | Phase 2 | *Settled by Rich:* the arithmetic primitives (`mulu8` through `mul_recip16`, and the accumulator shifts) are macros, expanded inline on the caller's variables. The composites stay routines. This costs about 410 bytes over routines (2,241 against 1,831). | Macros, named after their C functions. |
 
 **Process.** Each phase ends with a JOURNAL.md entry. The spec is updated on the schedule in §7. Nothing is committed until you have reviewed it.
@@ -61,7 +61,7 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 |---|---|---|
 | &00-&FB | 252 | Zero page: `ZA_POOL &00..&FB`, the same in every build. Estimated use is about 100 bytes. |
 | &FC-&FF | 4 | Reserved. The ROM IRQ entry saves A in &FC. The ROM's BRK path writes the BRK address+1 into &FD/&FE before doing anything else, so a crash dump always shows it. &FF is the OS Escape flag. |
-| &100-&1FF | 256 | Hardware stack, the walk's saves included (D15): at depth 16, 9 bytes a level pushed round the recursive `JSR` plus its 2-byte return (176), a seven-call leaf chain (about 16, from the Phase 1 spike) and the IRQ's 3: about 195. Test builds keep a canary in &100-&12F. |
+| &100-&1FF | 256 | Hardware stack, the walk's saves included (D15): at depth 16, 9 bytes a level pushed round the recursive `JSR` plus its 2-byte return (176), a seven-call leaf chain (about 16, from the Phase 1 spike) and the IRQ's 3: about 195. S6 runs a canary from &100 to just under its own stack: the stress map's frames reach &153, so &100-&152 is never touched. |
 | &200-&203 | 4 | Kept. BRKV (&202) points at our `trap` in every build. |
 | &204-&205 | 2 | IRQ1V, pointing at `irq`. |
 | &206-&27D | 120 | Scratch block 1: camera tick `cur_y` lo/hi (64) and `cands` (32). |
@@ -73,18 +73,17 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | &C00-&CFF | 256 | `k8` |
 | &D00-&DFF | 256 | `nrm`. Entry 0 is never read, so it holds **&40 = RTI**: the ROM's NMI vector jumps straight to &0D00, which makes it a free NMI handler. |
 | &E00-&EFF | 256 | `sbyte` |
-| &F00-&4DFF | 16,128 | Code, map, art, shades, masks, IRQ, keyboard tables. `Code guard = BSS_BASE`. |
-| &4E00-&55FF | 2048 | Piece pool as 8 parallel pages: `p_x0`, `p_x1`, `p_y0`, `p_glo`, `p_ghi`, `p_ce`, `p_co`, `p_next`. |
-| &5600-&56FF | 256 | The rest of BSS: instances (8 × about 60), segment pool (256), toggles (96), until D13 places them (with visits, `cell_visit`, pending and the clip scratch in the junk rows) |
-| &5700-&57FF | 256 | Junk row above A; scratch outside the plot (D13) |
+| &F00-&50FF | 16,896 | Code, map, art, shades, masks, IRQ, keyboard tables. `Code guard = BSS_BASE`. |
+| &5100-&56FF | 1536 | BSS, what crosses the plot (D13, Phase 7): the pool's `p_co` and `p_next` pages, the segment pool (256), the instances (27 tables of 8), their row edges (7 × 33), the sprite pass's toggles (3 × 32), `aborts`: 1,312 bytes |
+| &5700-&57FF | 256 | Junk row above A. Capture's scratch (D13): ten of the visits' twenty tables |
 | &5800-&67FF | 4096 | **Buffer A.** R12 = &0B, R13 = &00. |
-| &6800-&68FF | 256 | Junk row below A; scratch outside the plot (D13) |
-| &6900-&6EFF | 1536 | Spare: never plotted, filled, cleared or shown (D13) |
-| &6F00-&6FFF | 256 | Junk row above B; scratch outside the plot (D13) |
+| &6800-&68FF | 256 | Junk row below A. Capture's scratch: the other ten visit tables |
+| &6900-&6EFF | 1536 | Spare: never plotted, filled, cleared or shown. Six of the pool's eight pages (D13) |
+| &6F00-&6FFF | 256 | Junk row above B. Capture's scratch: `cell_visit`, the pending stack, the active pieces, the closed list (169 bytes) |
 | &7000-&7FFF | 4096 | **Buffer B.** R12 = &0E, R13 = &00. The displayed MA stays below &1000, so the hardware wrap latch plays no part. |
 | &8000-&80FF | 256 | B's junk row below: the paged ROM, so stores go nowhere (D2) |
 
-`BSS_BASE = &4E00` is a single constant in `layout.6502` and moves by whole pages after Phase 7. Bss is a top-level section with no filename, so it never goes on disc.
+`BSS_BASE = &5100` is a single constant in `layout.6502`. The junk rows hold only what capture alone uses: the plot overruns into them after, so capture zeroes `cell_visit` at its start (the C clears it at the frame's end), and test builds CRC the capture before zeroing the image's junk rows for the plot. Bss is a top-level section with no filename, so it never goes on disc.
 
 ### 2.2 Harness layouts
 
@@ -361,10 +360,11 @@ These numbers are replaced at the fps go/no-go point at the end of Phase 4 (§5.
 
 ### 4.4 Capacity overflow
 
-- **Test builds:** `TRAP n` at every C `RC_PANIC` and at every `RC_ASSERT` whose failure would make the frame meaningless. That covers render.c:141, 230, 836, 857, 885, 899, 936, 1773, 1908 and the others.
+- **One macro, `OVERFLOW n`** (clip.6502), at every C `RC_PANIC`: the pool (2), the closed list (3), the visits (5), and Phase 7's.
+- **Test builds:** it stops with the code, as `TRAP n` does, unless a check has set `ovf_abort`, when it takes the release's way. `TRAP n` (test builds only) stands at the `RC_ASSERT`s whose failure would make the frame meaningless.
 - **Release build** (D9):
   - `capture` saves S with `TSX : STX capsp`.
-  - On overflow: `LDX capsp : TXS`, clear `cell_visit` for the visits made so far, skip the rest of the frame and the swap, and `INC aborts`.
+  - On overflow (`capture_abort`): `LDX capsp : TXS`, clear `cell_visit` for the visits made so far, `INC aborts`, and return from `capture` with C set. The caller skips the rest of the frame and the swap.
   - The same applies to overflows in the sprite pass. The half-drawn back buffer is cleared next frame.
 
 ---
@@ -411,6 +411,7 @@ These numbers are replaced at the fps go/no-go point at the end of Phase 4 (§5.
 
 - One `harness.6502`, built with `TESTBUF=0` and `TESTBUF=1` (§2.2), and with `MAP=0|7|S`.
 - It carries the full release Code implemented so far, with the mailbox as a second `ZA_ENTRY`. Zero-page allocation therefore matches the release build closely.
+- **One suite of checks a harness** (Rich, Phase 6). The release code and every check's shims stopped fitting under &5700 at Phase 6 (test code 7.5K against the 2.5K budgeted). So `-D SUITE=n` picks the checks: `SUITE=2` is S2's alone (`harness_s2`), `SUITE=0` the rest (`harness0`, `harness1` and the map builds). A later phase that runs out of room splits off another suite the same way. The Phase 1 spike is gone: the real walk does its job.
 - `check.py zpdiff` reports every zero-page address that differs between `harness*.json` and `portal.json`.
 - Every stage that writes a buffer runs on **both** buffers. Before each test, both of that buffer's junk rows are zeroed, and the junk rows are part of the comparison. B's junk row below is the ROM at &8000: it can't be zeroed or compared, so checks only confirm it still reads the same.
 - **Batch sizes** are floor(I/O area / record size), taken from the symbols.
@@ -456,7 +457,7 @@ These numbers are replaced at the fps go/no-go point at the end of Phase 4 (§5.
 | **S4 plot** | For every golden pose: poke the C's pool, `plot` into a zeroed buffer and junk rows, peek. Also random single-piece stress and a full pool (`pool_last`=255). Both buffers. | Identical |
 | **S5 lines** | `transform` of every vertex at each pose, with outside vertices fed straight after inside ones (`sx` and `rx` compared only inside the frustum, where the C defines them). `make_line` and `edge_line` records. | Identical |
 | **S5u replay** | §5.6, per routine. | Identical after-state |
-| **S6 capture** | `pool_last`, the pieces in index order, visits, `cell_visit` cleared afterwards, the stack high-water mark. Then whole frames with sprites off, on both buffers, on the demo and stress maps. The stress map runs the depth cap at 16 and measures the real stack worst case. `-D ABORTTEST` forces an overflow through a pokeable starting pool index: the frame must be skipped and the next pose must render exactly. | Identical; canary intact |
+| **S6 capture** | `pool_last`, the pieces in index order, visits, `cell_visit` cleared afterwards, the stack high-water mark. Then whole frames with sprites off, on both buffers, on the demo and stress maps. The stress map runs the depth cap at 16 and measures the real stack worst case. The abort check forces an overflow through a pokeable starting pool index (`ovf_pool`), with `ovf_abort` set so the test build takes the release's way instead of TRAPping: the frame must be dropped, `cell_visit` emptied, the drop counted, and the next pose must render exactly. | Identical; canary intact |
 | **S7 sprites** | Instances, segments and order links; the sprite pass on poked capture state; whole frames with sprites on against `sweep.bin` and all other goldens. Includes sprite centres just outside each ray, and `map7`'s 4,688 frames. | Identical |
 | **S8 camera** | Per `camera_step(input, n)`: x and y (u24), angle and cell over the walk, collision and combo streams (84,000 steps, with n drawn from 1..12), in batches sized to the I/O area or as a CRC per 64 steps with a full dump on mismatch. Coverage must show `corner_deflect` and `mulu16x8_lo` executed. | Identical at every step |
 | **S9 integration** | The release loop with real IRQs, swaps and N counting, with input taken from a ring (see below). Runs of 500 and 5,000 frames. `oracle replay` runs the logged (input, N) sequence through `pt_camera_step`. | Every frame's pose and checksum match; the final buffers and camera state match in full; ΣN = vsyncs elapsed less clamp losses. The N distribution is reported. |
@@ -557,7 +558,7 @@ The total through Phase 9 is roughly **35-51 days**.
    - *Mitigation:* the Phase 0 spike, a visible window as fallback, the pidfile and config/ROM check.
 9. **Load time.** Only the 1770 DFS is tested. Whether that DFS uses &1100-&18FF during `*RUN` is resolved by S0 at the maximum image size. The NMI risk is covered by RTI at &D00 and the Phase 0 NMI soak.
 10. **Overflow behaviour** has no C reference.
-    - *Mitigation:* D9, the C's own caps, TRAPs in test builds, and the `ABORTTEST` check.
+    - *Mitigation:* D9, the C's own caps, TRAPs in test builds, and S6's abort check.
 11. **Branch range and page-crossing costs** in hot loops.
     - *Mitigation:* `BNEP`/`FITPAGE`/`JNE` macros, fill operands laid out so `abs,X` never crosses a page, and `ASSERT HI(t)==HI(t+size-1)` on page-sensitive tables.
 

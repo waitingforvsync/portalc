@@ -4,26 +4,52 @@
 \ *
 \ **************************************************************************
 \
-\ Zeroed by start. The piece pool (Phase 4); from Phase 5 the visits, the
-\ sprite instances, the segment pool, the toggle list.
+\ Zeroed by start. What crosses the plot: two of the pool's pages (the
+\ other six are in the spare), the segment pool, the sprite instances, and
+\ the sprite pass's toggles. The capture's own state is in the junk rows
+\ (scratch.6502, D13).
+
+IN_ROWS = 33                    ; row edges an instance keeps: its art's height + 1, at most
 
 .bss_start
-\ The pool: a page a field, indexed by piece (1..255; 0 is the C's null
-\ piece). Pages first, so every one is aligned.
-.p_x0   SKIP 256                ; first column
-.p_x1   SKIP 256                ; one past the last
-.p_y0   SKIP 256                ; the row at x0
-.p_glo  SKIP 256                ; the gradient: its fraction...
-.p_ghi  SKIP 256                ; ...and its sign (bit 7) and whole rows
-.p_ce   SKIP 256                ; the colour's even pattern...
-.p_co   SKIP 256                ; ...and odd; both 0: a bound, not plotted
+.p_co   SKIP 256                ; the pool's odd colour pattern (both 0: a bound, not plotted)
 .p_next SKIP 256                ; the next piece in its chain, 0 = the end
+.segs   SKIP PT_SEG_POOL        ; clip segments: offsets into here, 0 = none
 
-\ Each visit's active pieces: a slot's 24 visits at a time (slot * 24 +
-\ visit), the last visible piece of each of the edge's lines.
-.vis_act SKIP 4 * 24
+\ The sprite instances (pt_inst), a field a table, by instance (1..7).
+.in_sprite SKIP PT_MAX_INSTS    ; the map's sprite
+.in_cx0 SKIP PT_MAX_INSTS       ; the screen columns it covers, [cx0, cx1)
+.in_cx1 SKIP PT_MAX_INSTS
+.in_seg SKIP PT_MAX_INSTS       ; its clip segments, in x order
+.in_segt SKIP PT_MAX_INSTS
+.in_prev SKIP PT_MAX_INSTS      ; the draw order, far to near
+.in_next SKIP PT_MAX_INSTS
+.in_scl SKIP PT_MAX_INSTS       ; screen pixels per source pixel, u8.8
+.in_sch SKIP PT_MAX_INSTS
+.in_l0  SKIP PT_MAX_INSTS       ; the left edge's column, u8.8, 24 bits
+.in_l1  SKIP PT_MAX_INSTS
+.in_l2  SKIP PT_MAX_INSTS
+.in_t0  SKIP PT_MAX_INSTS       ; the top edge's row, likewise
+.in_t1  SKIP PT_MAX_INSTS
+.in_t2  SKIP PT_MAX_INSTS
+\ ...and the sprite pass's, stepped along its columns
+.in_col SKIP PT_MAX_INSTS       ; the source column at the current one
+.in_cn0 SKIP PT_MAX_INSTS       ; its right edge, u8.8, 24 bits
+.in_cn1 SKIP PT_MAX_INSTS
+.in_cn2 SKIP PT_MAX_INSTS
+.in_cseg SKIP PT_MAX_INSTS      ; the segment the bound cursors are in, 0 = none yet
+.in_cc  SKIP PT_MAX_INSTS       ; the column they're at, &FF = none
+.in_tk  SKIP PT_MAX_INSTS       ; their pieces, as positions in the segment's lists
+.in_bk  SKIP PT_MAX_INSTS
+.in_tyl SKIP PT_MAX_INSTS       ; and those pieces' rows there, biased u8.8
+.in_tyh SKIP PT_MAX_INSTS
+.in_byl SKIP PT_MAX_INSTS
+.in_byh SKIP PT_MAX_INSTS
+.in_rows SKIP (PT_MAX_INSTS - 1) * IN_ROWS  ; each one's row edges (rowbase)
 
-\ The current edge's closed column ranges: [l, r) each.
-.cl_l   SKIP 8
-.cl_r   SKIP 8
-.cl_num SKIP 1
+\ The sprite pass's byte column: its toggle rows, top to bottom.
+.tg_row SKIP PT_MAX_TOGS
+.tg_e   SKIP PT_MAX_TOGS
+.tg_o   SKIP PT_MAX_TOGS
+
+.aborts SKIP 1                  ; frames dropped on an overflow (D9)

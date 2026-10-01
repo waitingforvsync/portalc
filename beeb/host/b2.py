@@ -19,6 +19,10 @@ Test builds talk through the mailbox at &2F0-&2FF (src/layout.6502).
     b2.py phase3 [TRIALS]    check S3: fill, clear and the cursor, both buffers
     b2.py phase4             check S4: the plotters on every golden pose, both buffers
     b2.py phase5 [FNS [N]]   check S5u: the clip group's recorded calls, replayed
+    b2.py phase6 [WHAT]      check S5u and S6: the walk's recorded calls, whole frames
+                             at every golden pose (both buffers), the overflow abort
+    b2.py phase7 [WHAT]      check S5u and S7: the sprites' recorded calls (and all
+                             before), whole frames with the sprites on
 """
 
 import json
@@ -272,7 +276,8 @@ def phase1():
         ok = ok and good
         print('%-6s %s: %s' % ('ok' if good else 'FAIL', name, detail))
 
-    for build, which in (('harness0', 0), ('harness1', 0), ('harness0_map7', 7), ('harness0_map9', 9)):
+    for build, which in (('harness0', 0), ('harness1', 0), ('harness0_map7', 7), ('harness0_map9', 9),
+                         ('harness_s2', 0), ('harness_s34_0', 0), ('harness_s34_1', 0)):
         boot(os.path.join(BUILD, build + '.ssd'))
         n, bad = check_image(build, 'HARNESS')
         result('S0', not bad, '%s: &%X bytes at &300 %s' % (
@@ -358,7 +363,7 @@ S2_RUNS = [
 
 def phase2(only=None, scale=1.0):
     """Check S2: every arithmetic routine against the C, and its cost."""
-    build = 'harness0'
+    build = 'harness_s2'
     boot(os.path.join(BUILD, build + '.ssd'))
     syms = symbols(build)
     mb = Mailbox()
@@ -417,7 +422,7 @@ def phase3(trials=8, seed=3):
     """Check S3: fill, clear and the cursor macros against the C, on both buffers."""
     rng = random.Random(seed)
     ok = True
-    for build, buf in (('harness0', 'bufa'), ('harness1', 'bufb')):
+    for build, buf in (('harness_s34_0', 'bufa'), ('harness_s34_1', 'bufb')):
         boot(os.path.join(BUILD, build + '.ssd'))
         syms = symbols(build)
         mb = Mailbox()
@@ -499,7 +504,7 @@ def s4_sets():
 
 def s4_beeb(mb, syms, pools):
     """Plot pools on the Beeb, as many a call as fit: (CRC, microseconds) each."""
-    room = syms['junk0'] - syms['io_area']
+    room = syms['io_end'] - syms['io_area']
     out = []
     i = 0
     while i < len(pools):
@@ -509,8 +514,16 @@ def s4_beeb(mb, syms, pools):
                 and size + len(pools[i + len(batch)]) <= room:
             size += len(pools[i + len(batch)])
             batch.append(pools[i + len(batch)])
-        poke(syms['io_area'], b''.join(batch))
-        err, _ = mb.call(CMD_S4, (len(batch),), timeout=300)
+        if batch:
+            poke(syms['io_area'], b''.join(batch))
+            err, _ = mb.call(CMD_S4, (len(batch),), timeout=300)
+        else:
+            # too big for io_area: its fields straight into the pool's pages, plotted in place
+            batch = [pools[i]]
+            n = batch[0][0]
+            for k, page in enumerate(('p_x0', 'p_x1', 'p_y0', 'p_glo', 'p_ghi', 'p_ce', 'p_co')):
+                poke(syms[page] + 1, batch[0][1 + k * n:1 + (k + 1) * n])
+            err, _ = mb.call(CMD_S4, (0, n), timeout=300)
         if err:
             raise B2Error('S4: error %d' % err)
         r = peek(syms['s4_out'], 4 * len(batch))
@@ -538,11 +551,11 @@ def s4_culprit(mb, syms, pool, which):
     return 'no single piece fails on its own'
 
 
-def phase4(builds=('harness0', 'harness1')):
+def phase4(builds=('harness_s34_0', 'harness_s34_1')):
     """Check S4: every golden pose's pool, and random ones, plotted on both buffers."""
     sets = s4_sets()
     ok = True
-    for build, which in (('harness0', 0), ('harness1', 1)):
+    for build, which in (('harness_s34_0', 0), ('harness_s34_1', 1)):
         if build not in builds:
             continue
         boot(os.path.join(BUILD, build + '.ssd'))
@@ -627,7 +640,7 @@ def s5_make(count=50000, seed=1):
     with open(out, 'rb') as f:
         data = f.read()
     recs = [data[i:i + S5M_REC] for i in range(0, len(data), S5M_REC)]
-    per = min(255, (syms['junk0'] - syms['io_area']) // S5M_REC)
+    per = min(255, (syms['io_end'] - syms['io_area']) // S5M_REC)
     bad = []
     for i in range(0, len(recs), per):
         batch = recs[i:i + per]
@@ -657,62 +670,283 @@ def phase5(fns=None, limit=None):
         ok = s5_transform()
         print('phase 5:', 'all checks pass' if ok else 'FAILURES')
         return ok
-    boot(os.path.join(BUILD, 'harness0.ssd'))
-    syms = symbols('harness0')
-    mb = Mailbox()
-    ok = True
-    base = replay.baseline(mb)
-    for name in (fns or S5U_FNS):
-        path = os.path.join(BUILD, 'golden', 'replay', name + '.bin')
-        times = []
-        n, bad = replay.check(sys.modules[__name__], mb, syms, path, limit, times)
-        if bad:
-            ok = False
-            print('FAIL   S5u %-15s %d of %d records differ; first, record %d: %s'
-                  % (name, len(bad), n, bad[0][0], bad[0][1]))
-        else:
-            cyc = sorted(2 * (us - base) for us in times)
-            print('ok     S5u %-15s %4d records, cycles a call: median %5d, mean %5.0f, max %6d'
-                  % (name, n, cyc[len(cyc) // 2], statistics.mean(cyc), cyc[-1]))
+    ok = s5u(fns or S5U_FNS, limit)
     print('phase 5:', 'all checks pass' if ok else 'FAILURES')
     return ok
 
 
-def spike(seeds=range(256)):
-    """The recursion spike (test/spike.6502) against host/spike.py's model, seed by seed."""
-    import spike as model
-    build = 'harness0'
+S5U_BUILDS = ((0, 'harness0'), (7, 'harness0_map7'), (9, 'harness0_map9'))
+
+
+def s5u(fns, limit=None):
+    """Check S5u for the functions fns: every recorded call, replayed on the
+    Beeb, each on the build that holds its record's map."""
+    import replay
+    count = {name: 0 for name in fns}
+    bad = {name: [] for name in fns}
+    times = {name: [] for name in fns}
+    for which, build in S5U_BUILDS:
+        boot(os.path.join(BUILD, build + '.ssd'))
+        syms = symbols(build)
+        mb = Mailbox()
+        base = replay.baseline(mb)
+        for name in fns:
+            path = os.path.join(BUILD, 'golden', 'replay', name + '.bin')
+            us = []
+            n, b = replay.check(sys.modules[__name__], mb, syms, path, limit, us, which)
+            count[name] += n
+            bad[name] += [(k, '%s: %s' % (build, why)) for k, why in b]
+            times[name] += [2 * (t - base) for t in us]
+    ok = True
+    for name in fns:
+        if bad[name]:
+            ok = False
+            first = min(bad[name])
+            print('FAIL   S5u %-15s %d of %d records differ; first, record %d: %s'
+                  % (name, len(bad[name]), count[name], first[0], first[1]))
+        else:
+            cyc = sorted(times[name])
+            print('ok     S5u %-15s %4d records, cycles a call: median %5d, mean %5.0f, max %6d'
+                  % (name, count[name], cyc[len(cyc) // 2], statistics.mean(cyc), cyc[-1]))
+    return ok
+
+
+S6U_FNS = ['child_portal', 'next_open', 'close_columns', 'process_edge']
+S7U_FNS = ['inst_new', 'seg_record', 'inst_issue']
+CMD_S6 = 9
+S6_MAX = 16
+S6_REC = 16                             # the Beeb's record (test/s6.6502)
+S6_ORACLE = 14                          # the oracle's: the pose, the CRCs, pool_last, num_visits
+S6_SETS = (('harness0', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
+           ('harness1', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
+           ('harness0_map7', 7, ['map7_poses.bin']),
+           ('harness0_map9', 9, ['stress_poses.bin', 'search9_poses.bin']))
+
+
+def s6_expect(which, name, dump=None, sprites=False):
+    """The oracle's S6 (or, with sprites, S7) records for a golden stream; with
+    dump, that pose's capture and image as well (s6_state's layout, then the
+    image)."""
+    check = 's7' if sprites else 's6'
+    out = os.path.join(BUILD, 's6', '%s_%d_%s' % (check, which, name.replace('_poses', '')))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    cmd = [TOOL, check, str(which), os.path.join(BUILD, 'golden', name), out]
+    if dump is not None:
+        cmd += [str(dump), out + '.dump']
+    subprocess.run(cmd, check=True)
+    with open(out, 'rb') as f:
+        data = f.read()
+    return [data[i:i + S6_ORACLE] for i in range(0, len(data), S6_ORACLE)]
+
+
+def s6_beeb(mb, syms, poses, sprites=False, capture_only=False):
+    """Poses (6 bytes each) through CMD_S6, a batch at a time: the Beeb's records."""
+    out = []
+    for i in range(0, len(poses), S6_MAX):
+        batch = poses[i:i + S6_MAX]
+        poke(syms['io_area'], b''.join(batch))
+        err, _ = mb.call(CMD_S6, (len(batch), int(sprites), int(capture_only)), timeout=600)
+        if err:
+            raise B2Error('S6: error %d in the batch from pose %d' % (err, i))
+        r = peek(syms['s6_out'], S6_REC * len(batch))
+        out += [bytes(r[k * S6_REC:(k + 1) * S6_REC]) for k in range(len(batch))]
+    return out
+
+
+S6_POOL = ['p_x0', 'p_x1', 'p_y0', 'p_glo', 'p_ghi', 'p_ce', 'p_co', 'p_next']
+S6_INST = ['in_sprite', 'in_cx0', 'in_cx1', 'in_seg', 'in_segt', 'in_prev', 'in_next', 'in_scl', 'in_sch',
+           'in_l0', 'in_l1', 'in_l2', 'in_t0', 'in_t1', 'in_t2']
+
+
+def s6_state(syms, pool_last, num_visits):
+    """The capture the Beeb left (after a capture-only CMD_S6), as the oracle's
+    s6_state lays it out."""
+    pool = [peek(syms[p], 256) for p in S6_POOL]
+    tables = peek(syms['vs_cell'], 10 * 24) + peek(syms['vs0_e'], 10 * 24)
+    act = peek(syms['vis_act'], 4 * 24)
+    num_insts, head, tail, seg_next, num_pend = peek(syms['s6_extra'], 5)
+    insts = [peek(syms[f], 8) for f in S6_INST]
+    out = bytearray()
+    for i in range(1, pool_last + 1):
+        out += bytes(page[i] for page in pool)
+    for v in range(1, num_visits):
+        out += bytes(tables[t * 24 + v] for t in range(20))
+        out += bytes(act[s * 24 + v] for s in range(4))
+    for i in range(1, num_insts):
+        out += bytes(f[i] for f in insts)
+    out += bytes([head, tail, seg_next])
+    out += peek(syms['segs'], 256)[1:seg_next or 256]
+    out.append(num_pend)
+    return bytes(out)
+
+
+S6_PIECE = ['x0', 'x1', 'y0', 'glo', 'ghi', 'ce', 'co', 'next']
+S6_VISIT = ['cell', 'k', 'xr'] + ['v0.' + f for f in ('xl', 'xh', 'yl', 'yh', 'sx', 'flags', 'f', 'e')] \
+    + ['v1.' + f for f in ('xl', 'xh', 'yl', 'yh', 'sx', 'flags', 'f', 'e')] + ['inst'] \
+    + ['active%d' % s for s in range(4)]
+
+
+def s6_where(i, pool_last, num_visits):
+    """Name byte i of an s6_state layout."""
+    if i < 8 * pool_last:
+        return 'piece %d %s' % (i // 8 + 1, S6_PIECE[i % 8])
+    i -= 8 * pool_last
+    if i < 24 * (num_visits - 1):
+        return 'visit %d %s' % (i // 24 + 1, S6_VISIT[i % 24])
+    i -= 24 * (num_visits - 1)
+    return 'byte %d of the sprite state (instances, order, segments, pending)' % i
+
+
+def s6_diagnose(mb, syms, build, which, name, k, want, sprites):
+    """Pose k of a stream again, alone, with everything compared: where it first goes wrong."""
+    s6_expect(which, name, dump=k, sprites=sprites)
+    path = os.path.join(BUILD, 's6', '%s_%d_%s.dump' % ('s7' if sprites else 's6', which,
+                                                         name.replace('_poses', '')))
+    with open(path, 'rb') as f:
+        dump = f.read()
+    w = want[k]
+    image_n = 256 + 4096 + 256
+    state = dump[:len(dump) - image_n]
+    g = s6_beeb(mb, syms, [w[:6]], sprites, capture_only=True)[0]
+    if (g[4], g[5]) != (w[12], w[13]):
+        print('       pool_last %d, num_visits %d (C %d, %d)' % (g[4], g[5], w[12], w[13]))
+    got = s6_state(syms, g[4], g[5])
+    for i, (a, b) in enumerate(zip(state, got)):
+        if a != b:
+            print('       first capture difference: %s, C &%02X, Beeb &%02X' % (s6_where(i, w[12], w[13]), a, b))
+            return
+    if len(state) != len(got):
+        print('       the capture differs in length: C %d, Beeb %d' % (len(state), len(got)))
+        return
+    s6_beeb(mb, syms, [w[:6]], sprites)
+    image = dump[len(state):]
+    beeb = peek(syms['junk0'] if build != 'harness1' else syms['junk2'],
+                image_n if build != 'harness1' else image_n - 256)
+    for i, (a, b) in enumerate(zip(image, beeb)):
+        if a != b:
+            print('       capture identical; first image difference at offset &%X (row %d, byte column %d):'
+                  ' C &%02X, Beeb &%02X' % (i, (i - 256) // 256 * 4 + (i % 8) // 2 if i >= 256 else -1,
+                                            (i % 256) // 8, a, b))
+            return
+    print('       nothing differs on its own: the pose depends on what ran before it')
+
+
+def s6_frames(build, which, names, sprites=False):
+    """Check S6 (or, with sprites, S7) on one build: every pose of each stream,
+    a whole frame, against the C."""
+    check = 'S7' if sprites else 'S6'
     boot(os.path.join(BUILD, build + '.ssd'))
     syms = symbols(build)
-    out = syms['spike_out']
     mb = Mailbox()
-    bad = 0
-    lows = 0xFF
-    total_nodes = 0
-    total_us = 0
-    depths = set()
-    for seed in seeds:
-        err, _ = mb.call(2, (seed,))
-        r = peek(out, 13)
-        got = {'sum': r[0] | r[1] << 8, 'nodes': r[2] | r[3] << 8, 'closes': r[4] | r[5] << 8,
-               'dhigh': r[6]}
-        want = model.spike(seed)
-        if err or got != want or r[8]:
-            bad += 1
-            if bad <= 5:
-                print('FAIL   seed %d: err %d, got %s, want %s, canary %d' % (seed, err, got, want, r[8]))
-        lows = min(lows, r[7])
-        depths.add(got['dhigh'])
-        total_nodes += got['nodes']
-        total_us += int.from_bytes(bytes(r[9:13]), 'little')
-    n = len(seeds)
-    print('%-6s spike: %d seeds, %d portals walked, deepest level %d..%d: %s'
-          % ('ok' if not bad else 'FAIL', n, total_nodes, min(depths), max(depths),
-             'all match the model' if not bad else '%d differ' % bad))
-    print('       lowest S at the bottom of the chain &%02X: %d bytes of hardware stack, %d with an IRQ on top'
-          % (lows, 0xFF - lows, 0xFF - lows + 3))
-    print('       %.1f us a portal (dummy chain, IRQ on)' % (total_us / total_nodes))
+    ok = True
+    for name in names:
+        want = s6_expect(which, name, sprites=sprites)
+        if not want:
+            print('ok     %s %s %s: no poses (the search found none)' % (check, build, name))
+            continue
+        got = s6_beeb(mb, syms, [w[:6] for w in want], sprites)
+        bad = []
+        for k, (w, g) in enumerate(zip(want, got)):
+            img = w[10:12] if build == 'harness1' else w[8:10]   # B's junk row below is the ROM
+            if g[7] or g[0:2] != w[6:8] or g[2:4] != img or (g[4], g[5]) != (w[12], w[13]):
+                bad.append(k)
+        clear = [2 * int.from_bytes(g[8:10], 'little') for g in got]
+        cap = sorted(2 * int.from_bytes(g[10:13], 'little') for g in got)
+        frame = sorted(c + 2 * int.from_bytes(g[10:13], 'little') + 2 * int.from_bytes(g[13:16], 'little')
+                       for c, g in zip(clear, got))
+        low = min(g[6] for g in got)
+        what = '%s %s, %d poses' % (build, name, len(want))
+        if bad:
+            ok = False
+            w = want[bad[0]]
+            print('FAIL   %s %s: %d differ; first, pose %d (camera %d, %d, angle %d, cell %d)'
+                  % (check, what, len(bad), bad[0], w[0] | w[1] << 8, w[2] | w[3] << 8, w[4], w[5]))
+            s6_diagnose(mb, syms, build, which, name, bad[0], want, sprites)
+        else:
+            print('ok     %s %s' % (check, what))
+        print('       capture cycles: median %d, 90%% %d, max %d; the frame: median %d, 90%% %d, max %d;'
+              ' stack to &1%02X' % (cap[len(cap) // 2], cap[len(cap) * 9 // 10], cap[-1], frame[len(frame) // 2],
+                                    frame[len(frame) * 9 // 10], frame[-1], low))
+    return ok
+
+
+def s6_abort():
+    """D9: an overflow mid-capture drops the frame - S unwound, counted - and
+    the next frames, sprites on, render exactly (each capture starts its own
+    state afresh, cell_visit included)."""
+    boot(os.path.join(BUILD, 'harness0.ssd'))
+    syms = symbols('harness0')
+    mb = Mailbox()
+    want = s6_expect(0, 'sweep_poses.bin', sprites=True)[:2 * S6_MAX]
+    first, then = want[:S6_MAX], want[S6_MAX:]
+    lasts = sorted(w[12] for w in first)
+    start = 255 - lasts[len(lasts) // 2]    # about half the frames need more pieces than are left
+    count = peek(syms['aborts'], 1)[0]
+    poke(syms['ovf_abort'], b'\x01')
+    poke(syms['ovf_pool'], bytes([start]))
+    got = s6_beeb(mb, syms, [w[:6] for w in first], True)
+    poke(syms['ovf_abort'], b'\x00')
+    poke(syms['ovf_pool'], b'\x00')
+    expect = [1 if w[12] > 255 - start else 0 for w in first]
+    dropped = [g[7] for g in got]
+    counted = (peek(syms['aborts'], 1)[0] - count) & 0xFF
+    good = dropped == expect and counted == sum(expect)
+    print('%-6s S6 abort: pool started at %d, %d of %d frames dropped (%d expected), %d counted'
+          % ('ok' if good else 'FAIL', start, sum(dropped), len(first), sum(expect), counted))
+    got = s6_beeb(mb, syms, [w[:6] for w in then], True)
+    bad = [k for k, (w, g) in enumerate(zip(then, got))
+           if g[7] or g[0:2] != w[6:8] or g[2:4] != w[8:10] or (g[4], g[5]) != (w[12], w[13])]
+    print('%-6s S6 abort: the %d frames after, as the C draws them%s'
+          % ('ok' if not bad else 'FAIL', len(then), '' if not bad else ': %d differ' % len(bad)))
+    return good and not bad
+
+
+def s6_synth():
+    """close_columns on synthetic chains (beebtool synthclose): the splits at l
+    and rr no golden pose reaches."""
+    import replay
+    boot(os.path.join(BUILD, 'harness0.ssd'))
+    syms = symbols('harness0')
+    mb = Mailbox()
+    path = os.path.join(BUILD, 'golden', 'replay', 'close_columns_synth.bin')
+    n, bad = replay.check(sys.modules[__name__], mb, syms, path, None, None, 0)
+    if bad:
+        print('FAIL   S5u close_columns, synthetic: %d of %d records differ; first, record %d: %s'
+              % (len(bad), n, bad[0][0], bad[0][1]))
+    else:
+        print('ok     S5u close_columns, synthetic: %d records' % n)
     return not bad
+
+
+def phase7(what='all'):
+    """Check S5u for the sprites (and everything before them), and S7: whole
+    frames with the sprites on."""
+    ok = True
+    if what in ('all', 'replay'):
+        ok = s5u(S5U_FNS + S6U_FNS + S7U_FNS) and ok
+    if what in ('all', 'frames'):
+        for build, which, names in S6_SETS:
+            ok = s6_frames(build, which, names, sprites=True) and ok
+    if what in ('all', 'abort'):
+        ok = s6_abort() and ok
+    print('phase 7:', 'all checks pass' if ok else 'FAILURES')
+    return ok
+
+
+def phase6(what='all'):
+    """Check S5u for the walk, and S6: whole frames with the sprites off."""
+    ok = True
+    if what in ('all', 'replay'):
+        ok = s5u(S5U_FNS + S6U_FNS) and ok
+    if what in ('all', 'synth'):
+        ok = s6_synth() and ok
+    if what in ('all', 'frames'):
+        for build, which, names in S6_SETS:
+            ok = s6_frames(build, which, names) and ok
+    if what in ('all', 'abort'):
+        ok = s6_abort() and ok
+    print('phase 6:', 'all checks pass' if ok else 'FAILURES')
+    return ok
 
 
 def main(argv):
@@ -738,8 +972,6 @@ def main(argv):
         return 0 if phase0() else 1
     if cmd == 'phase1':
         return 0 if phase1() else 1
-    if cmd == 'spike':
-        return 0 if spike() else 1
     if cmd == 'phase2':
         only = set(argv[2].split(',')) if len(argv) > 2 and argv[2] != 'all' else None
         scale = float(argv[3]) if len(argv) > 3 else 1.0
@@ -748,6 +980,10 @@ def main(argv):
         fns = argv[2].split(',') if len(argv) > 2 and argv[2] != 'all' else None
         limit = int(argv[3]) if len(argv) > 3 else None
         return 0 if phase5(fns, limit) else 1
+    if cmd == 'phase6':
+        return 0 if phase6(argv[2] if len(argv) > 2 else 'all') else 1
+    if cmd == 'phase7':
+        return 0 if phase7(argv[2] if len(argv) > 2 else 'all') else 1
     if cmd == 'phase4':
         return 0 if (phase4(argv[2].split(',')) if len(argv) > 2 else phase4()) else 1
     if cmd == 'phase3':

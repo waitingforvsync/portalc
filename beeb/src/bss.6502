@@ -18,3 +18,12 @@
 .p_ce   SKIP 256                ; the colour's even pattern...
 .p_co   SKIP 256                ; ...and odd; both 0: a bound, not plotted
 .p_next SKIP 256                ; the next piece in its chain, 0 = the end
+
+\ Each visit's active pieces: a slot's 24 visits at a time (slot * 24 +
+\ visit), the last visible piece of each of the edge's lines.
+.vis_act SKIP 4 * 24
+
+\ The current edge's closed column ranges: [l, r) each.
+.cl_l   SKIP 8
+.cl_r   SKIP 8
+.cl_num SKIP 1

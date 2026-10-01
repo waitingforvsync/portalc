@@ -15,6 +15,9 @@
 \   3 S2     an arithmetic routine against the C (s2.6502)
 \   4 S3     a mode 5 buffer operation, to check against the C (s3.6502)
 \   5 S4     plot pools from the host, CRC each image (s4.6502)
+\   6 REPLAY replay a recorded call (s5.6502)
+\   7 S5T    every map vertex transformed, per pose, CRCed (s5.6502)
+\   8 S5M    make_line on the host's synthetic endpoints (s5.6502)
 
 CMD_PING = 0
 CMD_TIME = 1
@@ -43,8 +46,17 @@ ENDMACRO
 .@  CMP #CMD_S3 : BNE @+
     JSR cmd_s3
     JMP done
-.@  CMP #CMD_S4 : BNE unknown
+.@  CMP #CMD_S4 : BNE @+
     JSR cmd_s4
+    JMP done
+.@  CMP #CMD_REPLAY : BNE @+
+    JSR cmd_replay
+    JMP done
+.@  CMP #CMD_S5T : BNE @+
+    JSR cmd_s5t
+    JMP done
+.@  CMP #CMD_S5M : BNE unknown
+    JSR cmd_s5m
     JMP done
 .unknown
     LDA #1 : STA MB_ERR

@@ -54,9 +54,12 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
             INCLUDE "../test/spike.6502"
             INCLUDE "arith.6502"            ; (release-bound, once main calls them)
             INCLUDE "plot.6502"
+            INCLUDE "clip.6502"
+            INCLUDE "lines.6502"
             INCLUDE "../test/s2.6502"
             INCLUDE "../test/s3.6502"
             INCLUDE "../test/s4.6502"
+            INCLUDE "../test/s5.6502"
             INCLUDE "../test/pad.6502"
         ENDIF
     ENDSECTION

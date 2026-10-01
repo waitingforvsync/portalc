@@ -9,7 +9,7 @@
 5. Each stage is checked through a page-2 mailbox over b2's HTTP API. Results are diffed field by field against a C oracle (a unity build of the engine), then whole frames are compared with `sweep.bin` and the new goldens.
 6. A coverage gate requires the goldens to execute every C line that is ported. The extra goldens are: searched poses, a deep-corridor stress map, the 7-sprite map's 4,688 frames, and camera input over all 64 key combinations. Any line still missed is listed with a reason.
 7. The clip group and the walk internals get their own before/after state replay tests. Every buffer-writing check runs on both buffers. Harness builds carry the full release code, with BSS moved into the buffer not under test, and the integration test logs every frame.
-8. The recursion keeps its 9 bytes per level on a depth-indexed software stack in page 1. A Phase 1 spike checks stack and zero-page behaviour before any clip code is written.
+8. The recursion pushes its 9 bytes per level on the hardware stack, round the recursive `JSR` (D15). A Phase 1 spike checks stack and zero-page behaviour before any clip code is written.
 9. There are ten phases, taking about 35-51 working days to a verified, playable port. Memory checkpoints fall after Phases 2, 5 and 7, and a frame-rate go/no-go after Phase 4.
 10. All decisions (D1-D11) are settled: Rich accepted every default, D3 became a C fix, and D4 is his camera design. Nothing is committed until Rich has reviewed it.
 
@@ -46,6 +46,7 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | D11 | Phase 2 | Should the JOURNAL's Python 6502 interpreter be used alongside b2 to get exact cycle counts per routine? | No. Batch timing comes from T2 on b2; exact per-routine cycles, when wanted, from jsbeeb-mcp (§5.10). |
 | D13 | Phases 6-7 | *Rich's idea, Phases 3-4:* the junk rows (&5700, &6800 and &6F00, 768 bytes) double as scratch. Only the plotters write them, so they hold anything whose lifetime doesn't cross the plot: the visits (24 fields of 24 bytes, three rows' worth), `cell_visit`, pending and the clip scratch, about 730 bytes. Test builds zero them between capture and plot, so whole-frame checks still compare the overruns. The spare &6900-&6EFF (1.5K) is never written by anything but us, so it takes what does cross the plot: six of the pool's eight pages (each field page stands alone). BSS below the screens then needs about 1.35K (two pool pages, instances 480, segments 256, toggles 96), and `BSS_BASE` can rise from &4E00 to about &5100, about 768 bytes more for code. | Place it so when Phase 7 settles `BSS_BASE`. |
 | D14 | Phase 4 | *Settled by Rich:* `scrnbase` (`ZA_AUTO`, a page) is the buffer being drawn. Clear, plot and fill work on it (clear and fill by picking their unrolled body; plot through `AT`). The main loop sets `swapreq`; the IRQ writes R12 = `scrnbase` DIV 8, turns `scrnbase` to the other buffer and clears `swapreq`. | Done. Open for Phase 9: Rich's loop posts the swap and waits for it straight away; waiting just before the render instead lets camera and capture (which never touch a buffer) overlap the wait, about 13% more frames a second on the goldens (JOURNAL.md, Phase 4). |
+| D15 | Phase 6 | *Settled by Rich, Phase 5:* the walk saves its 9 per-level bytes on the hardware stack, `LDA : PHA` before the recursive `JSR` and `PLA : STA` after, not in depth-indexed arrays. The spike's case for the arrays was the hardware stack's depth, but page 1 holds both either way, so the total is the same (about 195 bytes at depth 16); pushes are about 20 cycles a descent cheaper, and simpler. | Pushes. |
 | D12 | Phase 2 | *Settled by Rich:* the arithmetic primitives (`mulu8` through `mul_recip16`, and the accumulator shifts) are macros, expanded inline on the caller's variables. The composites stay routines. This costs about 410 bytes over routines (2,241 against 1,831). | Macros, named after their C functions. |
 
 **Process.** Each phase ends with a JOURNAL.md entry. The spec is updated on the schedule in §7. Nothing is committed until you have reviewed it.
@@ -60,8 +61,7 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 |---|---|---|
 | &00-&FB | 252 | Zero page: `ZA_POOL &00..&FB`, the same in every build. Estimated use is about 100 bytes. |
 | &FC-&FF | 4 | Reserved. The ROM IRQ entry saves A in &FC. The ROM's BRK path writes the BRK address+1 into &FD/&FE before doing anything else, so a crash dump always shows it. &FF is the OS Escape flag. |
-| &100-&18F | 144 | Walk save stack: 9 arrays × 16 levels (`cell`, `x`, `xr`, `tcur`, `bcur`, `tmax`, `bmin`, `steps`, `pend`), indexed by depth. Confirmed by the Phase 1 spike (JOURNAL.md). |
-| &190-&1FF | 112 | Hardware stack. The spike measured 48 bytes at depth 16 with a seven-call leaf chain (2 per level with `descend` inlined into `walk`, plus the chain), and the IRQ adds 3. Test builds keep a canary in &190-&1BF. |
+| &100-&1FF | 256 | Hardware stack, the walk's saves included (D15): at depth 16, 9 bytes a level pushed round the recursive `JSR` plus its 2-byte return (176), a seven-call leaf chain (about 16, from the Phase 1 spike) and the IRQ's 3: about 195. Test builds keep a canary in &100-&12F. |
 | &200-&203 | 4 | Kept. BRKV (&202) points at our `trap` in every build. |
 | &204-&205 | 2 | IRQ1V, pointing at `irq`. |
 | &206-&27D | 120 | Scratch block 1: camera tick `cur_y` lo/hi (64) and `cands` (32). |
@@ -195,7 +195,7 @@ ENDSECTION
    ```
 
 **`start`:**
-1. Zero &2F0-&2FF (the mailbox and OSFILE block), both page-2 scratch blocks, the walk save stack and BSS.
+1. Zero &2F0-&2FF (the mailbox and OSFILE block), both page-2 scratch blocks and BSS.
 2. Clear both buffers, the junk rows and the spare. In test builds, fill the stack canary.
 3. Write the real palette (`physcols = {0,4,1,2}`, 16 bytes).
 4. User VIA T2: ACR bit 5 = 0, load &FFFF, IER bit 5 off.
@@ -246,7 +246,7 @@ The plan's `test_poses.bin` (the C tests' concrete poses) was dropped: the cover
   - Allocate with `LDX pool_last : INX : BEQ full : STX pool_last`.
   - `plot` walks X from `pool_last` down to 1. Order doesn't matter, because EOR commutes.
   - `seg_last` works the same way. The oracle reports `num = last + 1`.
-- **Frame-wide counters are `ZA_AUTO`** (Rich, Phase 1: no fixed addresses where Baron can allocate). `pool_last`, `seg_last`, `num_visits`, `num_insts`, `num_pend` and `depth` are set by the frame driver, outside the walk, and inside it the walk reads each before writing it, so Baron treats each as one running value however it's updated (`LDX pool_last : INX : STX pool_last`, `LDA seg_last : CLC : ADC #5 : STA seg_last`). A variable the walk writes before reading it, and still needs after a recursive call, is a per-level value, and Baron refuses it: that's what the page-1 save stack is for. (Baron learned the running-value rule during Phase 1: JOURNAL.md.)
+- **Frame-wide counters are `ZA_AUTO`** (Rich, Phase 1: no fixed addresses where Baron can allocate). `pool_last`, `seg_last`, `num_visits`, `num_insts`, `num_pend` and `depth` are set by the frame driver, outside the walk, and inside it the walk reads each before writing it, so Baron treats each as one running value however it's updated (`LDX pool_last : INX : STX pool_last`, `LDA seg_last : CLC : ADC #5 : STA seg_last`). A variable the walk writes before reading it, and still needs after a recursive call, is a per-level value, and Baron refuses it: that's what the pushes round the recursive call are for (D15). (Baron learned the running-value rule during Phase 1: JOURNAL.md.)
 - **`transform` stores `rx` only inside the frustum**, as the C does; `inst_new` forms its own reciprocal of the sprite's depth (D3), so nothing reads `rx` outside it.
 - **Signed values.**
   - `>> 8` of negative values floors, as C's arithmetic shift does (render.c:827-828, 833, 1869). On the 6502 that means taking the high byte of a sign-kept 24-bit value.
@@ -257,7 +257,7 @@ The plan's `test_poses.bin` (the C tests' concrete poses) was dropped: the cover
 - **Baron:** `DIV`, never `/`. `>>` is logical, so use `FLOOR(x/2^n)`.
 - **The walk.**
   - `descend` is inlined into `walk`: `depth ≥ 16` means `close_columns`, otherwise save, `INC depth : JSR walk : DEC depth`, restore.
-  - Saving is to the depth-indexed page-1 arrays, so nothing zero-page is live across the `JSR`. That is the form Baron's allocator accepts.
+  - Saving is `LDA v : PHA` for each of the 9 values before the `JSR`, and `PLA : STA v` after (D15). The store after the call kills the old value, so nothing zero-page is live across the `JSR`, which is the form Baron's allocator accepts.
   - The last edge's child is a `JMP` (tail call).
 
 ### 3.7 Build commands
@@ -530,7 +530,7 @@ The total through Phase 9 is roughly **35-51 days**.
 | Every phase | A JOURNAL.md entry |
 | 0 | `beeb/README.md`: build, run, harness use, memory map |
 | 3 | Spec §8.3: the shared junk page, per-buffer clear and fill bodies, and why the line buffer is ruled out on memory |
-| 6 | Spec §7.5: the walk's depth-indexed save stack, inlined `descend`, `pool_last` |
+| 6 | Spec §7.5: the walk's saves pushed on the hardware stack, inlined `descend`, `pool_last` |
 | 7 | Spec §9.4: pending entries kept in BSS rather than on the hardware stack |
 | 8 | Spec §10.4: measured camera cost per tick, which is well above "a few hundred" |
 | 9 | Spec §12 (measured costs) and §13 (verification done), and §14 if anything is still open |
@@ -548,7 +548,7 @@ The total through Phase 9 is roughly **35-51 days**.
 4. **Camera: one tick per frame on a summed move.** Its cost (about 4.4k cycles typical, 11k worst) is paid once a frame. The risk is the collision's small-move assumption (`|M| < 16` units, camera.c:150) once the 50 Hz speeds are set and N is large.
    - *Mitigation:* per Rich, revisit once speeds are tuned: options are capping the summed move, lowering the N clamp, or widening the candidate search. S8 draws n from 1..12 so any break shows up.
 5. **Stack and recursion.**
-   - *Mitigation:* the save stack in page 1 plus inlined `descend` (about 60 bytes of hardware stack), the Phase 1 spike, the stress map exercising the real cap of 16, and the canary in every test.
+   - *Mitigation:* pushes round the recursive call plus inlined `descend` (about 195 bytes of page 1 at depth 16), the Phase 1 spike, the stress map exercising the real cap of 16, and the canary in every test.
 6. **Zero-page allocator** problems (refusals on recursion, pool exhaustion, aliasing that shows only in the release build).
    - *Mitigation:* the spike before Phase 5, a harness that carries the full code, the `zpdiff` report, per-frame checks in S9.
 7. **The frame-cost model is uncalibrated.**

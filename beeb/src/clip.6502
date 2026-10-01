@@ -1,0 +1,713 @@
+\ **************************************************************************
+\ *
+\ *     clip.6502 - pieces, chains and the clip group (render.c; spec 7.9)
+\ *
+\ **************************************************************************
+\
+\ A row is a biased u8.8 value: the row in the high byte and the rounding
+\ bias, 128, in the low, so the nearest row is just the high byte. A
+\ gradient is a sign (bit 7 of its high byte) and a u7.8 magnitude.
+\
+\ One clip runs at a time, so its context is zero-page globals: render.c's
+\ pt_clip as cx_*, the chain it builds (if any) as cb_*, the line being
+\ clipped as l_*. The visit's active pieces are vis_act, 4 slots of 24
+\ visits, and cx_act is this line's index in it.
+
+ST_ABOVE = 0                    ; clip statuses
+ST_BELOW = 1
+ST_VISIBLE = 2
+ST_OPEN = 3
+ROLE_NONE = 0                   ; clip roles
+ROLE_BOTTOM = 1
+ROLE_TOP = 2
+
+ZA_AUTO1 cx_thead, cx_bhead     ; the bound chains (bhead 0: all closed)
+ZA_AUTO1 cx_tmax, cx_bmin       ; their row extents
+ZA_AUTO1 cx_role                ; ROLE_*
+ZA_AUTO1 cx_build               ; nonzero: a chain is being built, in cb_*
+ZA_AUTO1 cx_cbfbe, cx_cbfbo     ; child ceiling EOR child floor: the closed-range stand-in
+ZA_AUTO1 cx_act                 ; this line's active piece: its index in vis_act
+ZA_AUTO1 cx_tp, cx_bpset, cx_bp ; the walk cursors (tp 0: not placed yet)
+ZA_AUTO1 cb_head, cb_tail       ; the chain being built...
+ZA_AUTO1 cb_tmax, cb_bmin       ; ...and its row extents
+ZA_AUTO1 l_x0, l_x1, l_y0       ; the line
+ZA_AUTO2 l_g
+ZA_AUTO1 l_ce, l_co
+
+\ ---- rows ----
+
+\\ y + or - |g| * dx: the add saturates at &FFFF, the subtract stops at 0.
+\\ in: y, g, A = dx. out: y.
+.row_step
+{
+    ZA_AUTO2 y, g               ; in (y also out)
+    ZA_AUTO2 m, d               ; local: |g|, |g| * dx
+    TAY : BEQ done              ; at the anchor: nothing to add
+    SETMUL
+    LDA g : STA m
+    LDA g + 1 : AND #&7F : STA m + 1
+    ORA m : BEQ done            ; flat
+    MULG_U16 m, d
+    BIT g + 1 : BMI up
+    LDA y : CLC : ADC d : STA y
+    LDA y + 1 : ADC d + 1 : STA y + 1
+    BCC done
+    LDA #&FF : STA y : STA y + 1
+    RTS
+.up
+    LDA y : SEC : SBC d : STA y
+    LDA y + 1 : SBC d + 1 : STA y + 1
+    BCS done
+    LDA #0 : STA y : STA y + 1
+.done
+    RTS
+}
+
+\\ Piece X's row at column A (at or past its x0), in row_step.y.
+.piece_y
+{
+    SEC : SBC p_x0,X
+    LDY #128 : STY row_step.y
+    LDY p_y0,X : STY row_step.y + 1
+    LDY p_glo,X : STY row_step.g
+    LDY p_ghi,X : STY row_step.g + 1
+    JMP row_step
+}
+
+\\ The line's row at column A (at or past l_x0), in row_step.y.
+.line_y
+{
+    SEC : SBC l_x0
+    LDY #128 : STY row_step.y
+    LDY l_y0 : STY row_step.y + 1
+    LDY l_g : STY row_step.g
+    LDY l_g + 1 : STY row_step.g + 1
+    JMP row_step
+}
+
+\ The nearest row to row_step.y, clamped to the screen's height: A.
+MACRO ROW_OF
+{
+    LDA row_step.y + 1 : CMP #65 : BCC done
+    LDA #64
+.done
+}
+ENDMACRO
+
+\ ---- the pool ----
+
+\\ A new piece from pool_alloc's fields, its next 0. out: X = its index.
+.pool_alloc
+{
+    ZA_AUTO1 x0, x1, y0, ce, co ; in
+    ZA_AUTO2 g                  ; in
+    LDX pool_last : INX : BNE room
+    TRAP 2                      ; the pool's full
+.room
+    STX pool_last
+    LDA x0 : STA p_x0,X
+    LDA x1 : STA p_x1,X
+    LDA y0 : STA p_y0,X
+    LDA g : STA p_glo,X
+    LDA g + 1 : STA p_ghi,X
+    LDA ce : STA p_ce,X
+    LDA co : STA p_co,X
+    LDA #0 : STA p_next,X
+    RTS
+}
+
+\\ Split piece X at column A: it keeps [x0, c), a new piece takes [c, x1),
+\\ its row re-anchored (rounded) at c. out: X = the piece, Y = the new one.
+.pool_split
+{
+    ZA_AUTO1 p, c               ; local
+    STX p : STA c
+    JSR piece_y
+    ROW_OF : STA pool_alloc.y0
+    LDX p
+    LDA c : STA pool_alloc.x0
+    LDA p_x1,X : STA pool_alloc.x1
+    LDA p_glo,X : STA pool_alloc.g
+    LDA p_ghi,X : STA pool_alloc.g + 1
+    LDA p_ce,X : STA pool_alloc.ce
+    LDA p_co,X : STA pool_alloc.co
+    JSR pool_alloc
+    TXA : TAY                   ; the new piece
+    LDX p
+    LDA p_next,X : STA p_next,Y
+    TYA : STA p_next,X
+    LDA c : STA p_x1,X
+    RTS
+}
+
+\\ The piece of chain X holding column A. out: X.
+.piece_at
+{
+.loop
+    CMP p_x1,X : BCC donex      ; c < x1: this one (x0 <= c on a chain walked in order)
+    LDY p_next,X
+    CMP p_x1,Y : BCC doney
+    LDX p_next,Y
+    JMP loop
+.doney
+    TYA : TAX
+.donex
+    RTS
+}
+
+\ ---- building a chain ----
+
+\\ Widen cb's row extents by piece X over columns [A, c1).
+.chain_extents
+{
+    ZA_AUTO1 q, c1              ; in: c1; local: q
+    ZA_AUTO2 ya                 ; local: the row at the first column
+    STX q
+    JSR piece_y
+    LDA row_step.y : STA ya
+    LDA row_step.y + 1 : STA ya + 1
+    LDX q
+    LDA c1 : SEC : SBC #1
+    JSR piece_y                 ; the row at the last column, in row_step.y
+    LDA ya : CMP row_step.y     ; ya against yb
+    LDA ya + 1 : SBC row_step.y + 1
+    BCC ylow                    ; ya < yb: ya is the low end
+    LDA row_step.y : LDX row_step.y + 1         ; yb low, ya high
+    LDY ya : STY row_step.y
+    LDY ya + 1 : STY row_step.y + 1
+    STA ya : STX ya + 1
+.ylow                           ; now ya = the low end, row_step.y the high
+    LDA row_step.y : CLC : ADC #127     ; the ceiling row of the high end...
+    LDA row_step.y + 1 : ADC #0
+    BCC @+
+    LDA #&FF                    ; (saturating)
+.@  CMP #65 : BCC @+
+    LDA #64
+.@  CMP cb_tmax : BCC @+
+    BEQ @+
+    STA cb_tmax
+.@  LDA ya : SEC : SBC #128     ; ...and the floor row of the low end
+    LDA ya + 1 : SBC #0
+    BCS @+
+    LDA #0                      ; (stopping at 0)
+.@  CMP #65 : BCC @+
+    LDA #64
+.@  CMP cb_bmin : BCS @+
+    STA cb_bmin
+.@  RTS
+}
+
+\\ Make piece X cb's new tail; its columns from A on count toward the
+\\ extents (a piece carried over from an earlier visit starts left of them).
+.chain_append
+{
+    ZA_AUTO1 c0                 ; local
+    STA c0
+    LDA #0 : STA p_next,X
+    LDY cb_tail : BEQ first
+    TXA : STA p_next,Y
+    JMP linked
+.first
+    STX cb_head
+.linked
+    STX cb_tail
+    LDA p_x1,X : STA chain_extents.c1
+    LDA c0
+    JMP chain_extents
+}
+
+\\ Add [A, Y) to the closed list, merging it into the last range if it
+\\ touches or overlaps it.
+.closed_add
+{
+    ZA_AUTO1 l, r               ; local
+    STA l : STY r
+    LDX cl_num : BEQ new
+    LDA cl_l - 1,X : CMP l : BEQ @+ : BCS new   ; last l <= l...
+.@  LDA cl_r - 1,X : CMP l : BCC new            ; ...and last r >= l: merge
+    LDA r : CMP cl_r - 1,X : BCC done : BEQ done
+    STA cl_r - 1,X
+.done
+    RTS
+.new
+    CPX #8 : BCC room
+    TRAP 3                      ; the closed list is full
+.room
+    LDA l : STA cl_l,X
+    LDA r : STA cl_r,X
+    INC cl_num
+    RTS
+}
+
+\ ---- clipping a line against the bounds (spec 7.9) ----
+
+\\ |ga - gb| for two sign-and-magnitude gradients: the same signs subtract,
+\\ opposite ones add (both under &8000, so no carry).
+\\ in: ga, gb. out: d.
+.grad_diff
+{
+    ZA_AUTO2 ga, gb             ; in
+    ZA_AUTO2 d                  ; out
+    LDA gb + 1 : AND #&7F : STA d + 1   ; |gb|, for now
+    LDA ga + 1 : EOR gb + 1 : BMI add
+    LDA ga + 1 : AND #&7F : TAX ; |ga| high
+    LDA ga : SEC : SBC gb : STA d       ; |ga| - |gb|...
+    TXA : SBC d + 1 : STA d + 1
+    BCS done
+    LDA #0 : SEC : SBC d : STA d        ; ...or |gb| - |ga|
+    LDA #0 : SBC d + 1 : STA d + 1
+    RTS
+.add
+    LDA ga : CLC : ADC gb : STA d
+    LDA ga + 1 : AND #&7F : ADC d + 1 : STA d + 1
+.done
+    RTS
+}
+
+\\ The first column at or after which a linear difference has changed sign:
+\\ floor(d0 / dg) + 1, inside (c, e).
+\\ in: c, e, d0, dg (dg > 0). out: A.
+.crossing
+{
+    ZA_AUTO1 c, e               ; in
+    ZA_AUTO2 d0, dg             ; in
+    LDA d0 : STA div_cols.num
+    LDA d0 + 1 : STA div_cols.num + 1
+    LDA dg : STA div_cols.den
+    LDA dg + 1 : STA div_cols.den + 1
+    JSR div_cols                ; q
+    TAX
+    LDA e : CLC : SBC c         ; span = e - 1 - c (C clear: one more off)
+    STX e                       ; (e's done with: q)
+    CMP e : BCC span            ; span <= q: span...
+    BEQ span
+    LDA e : CLC : ADC #1        ; ...else q + 1
+.span                           ; (never 0: a one-column block can't change sign, so
+    CLC : ADC c                 ; the C's "at least 1" is dead, and not here)
+    RTS
+}
+
+\\ Emit [r0, r1) of the line with status st. VISIBLE allocates a piece (or
+\\ grows the line's last); ABOVE and BELOW merge the line's colour into the
+\\ bound piece over exactly [r0, r1), the cursor left on that chain's
+\\ continuation.
+\\ in: r0, r1, st.
+.emit
+{
+    ZA_AUTO1 r0, r1, st         ; in
+    ZA_AUTO1 p, cont            ; local: the bound piece, its old next
+    LDA st : CMP #ST_VISIBLE : BEQ visible
+    JMP bound
+
+.visible                        ; the line's last piece, ending here, the same line: grow it
+    LDX cx_act : LDY vis_act,X : BEQ fresh
+    LDA p_x1,Y : CMP r0 : BNE fresh
+    LDA p_glo,Y : CMP l_g : BNE fresh
+    LDA p_ghi,Y : CMP l_g + 1 : BNE fresh
+    LDA p_ce,Y : CMP l_ce : BNE fresh
+    LDA p_co,Y : CMP l_co : BNE fresh
+    LDA cx_build : BEQ grow
+    CPY cb_tail : BEQ grow
+    LDA cb_tail : BNE fresh     ; another piece is the tail: a fresh one
+.grow
+    LDA r1 : STA p_x1,Y
+    TYA : TAX
+    LDA cx_build : BEQ done
+    CPX cb_tail : BNE append
+    LDA r1 : STA chain_extents.c1
+    LDA r0
+    JMP chain_extents
+.fresh
+    LDA r0 : JSR line_y
+    ROW_OF : STA pool_alloc.y0
+    LDA r0 : STA pool_alloc.x0
+    LDA r1 : STA pool_alloc.x1
+    LDA l_g : STA pool_alloc.g
+    LDA l_g + 1 : STA pool_alloc.g + 1
+    LDA l_ce : STA pool_alloc.ce
+    LDA l_co : STA pool_alloc.co
+    JSR pool_alloc
+    TXA : LDY cx_act : STA vis_act,Y
+    LDA cx_build : BEQ done
+.append
+    LDA r0
+    JMP chain_append
+.done
+    RTS
+
+.bound                          ; isolate exactly [r0, r1) in the bound piece
+    LDX cx_tp
+    LDA st : BEQ @+             ; ST_ABOVE: the top chain's cursor
+    LDX cx_bp
+.@  LDA p_x0,X : CMP r0 : BCS @+
+    LDA r0 : JSR pool_split     ; starts before r0: split there...
+    TYA : TAX                   ; ...and take the second half
+.@  LDA r1 : CMP p_x1,X : BCS @+
+    JSR pool_split              ; ends past r1: split there
+.@  STX p
+    LDA p_next,X : STA cont     ; (a relink may sever it)
+    LDA p_ce,X : EOR l_ce : STA p_ce,X  ; clamping is recolouring
+    LDA p_co,X : EOR l_co : STA p_co,X
+    LDA st : CLC : ADC #1 : CMP cx_role : BNE open   ; BOTTOM with ABOVE, TOP with BELOW: closed
+    LDA p_ce,X : EOR cx_cbfbe : STA p_ce,X  ; the piece stands in for the child's hidden stack
+    LDA p_co,X : EOR cx_cbfbo : STA p_co,X
+    LDA r0 : LDY r1
+    JSR closed_add
+    JMP keep                    ; stays in its chain: the walk steps past it by x1
+.open
+    LDA cx_build : BEQ keep
+    LDA r0 : JSR chain_append
+    LDA cont : BNE set          ; the cursor carries on along the old chain
+.keep
+    LDA p
+.set
+    LDX st : BNE @+
+    STA cx_tp
+    RTS
+.@  STA cx_bp
+    RTS
+}
+
+\\ Resolve block [c, e), over which the line and both bound pieces are
+\\ single lines, against the top and then the bottom, and emit the ranges.
+\\ in: c, e.
+.resolve_block
+{
+    ZA_AUTO1 c, e               ; in
+    ZA_AUTO2 tg, bg             ; local: the bound pieces' gradients
+    ZA_AUTO2 yl0, yl1, yt0      ; local: the line's rows at c and e - 1, the top's at c
+    ZA_AUTO1 n, i               ; local: the ranges and the one being emitted
+    ZA_AUTO 2, rr0              ; local: up to two ranges: start...
+    ZA_AUTO 2, rr1              ; ...end...
+    ZA_AUTO 2, rst              ; ...and status
+    ZA_AUTO1 r0, r1             ; local: an open range
+    ZA_AUTO2 l0, l1, b0         ; local: its rows
+    ZA_AUTO1 c2, st2            ; local: its crossing, and the second range's status
+    LDX cx_tp
+    LDA p_glo,X : STA tg
+    LDA p_ghi,X : STA tg + 1
+    LDX cx_bp
+    LDA p_glo,X : STA bg
+    LDA p_ghi,X : STA bg + 1
+    LDA c : JSR line_y
+    LDA row_step.y : STA yl0
+    LDA row_step.y + 1 : STA yl0 + 1
+    LDA e : SEC : SBC #1 : JSR line_y
+    LDA row_step.y : STA yl1
+    LDA row_step.y + 1 : STA yl1 + 1
+    LDX cx_tp : LDA c : JSR piece_y
+    LDA row_step.y : STA yt0
+    LDA row_step.y + 1 : STA yt0 + 1
+    LDX cx_tp : LDA e : SEC : SBC #1 : JSR piece_y      ; yt1, in row_step.y
+    ZA_DISCARD rr0
+    ZA_DISCARD rr1
+    ZA_DISCARD rst
+    LDA c : STA rr0
+    LDA e : STA rr1
+    LDA #1 : STA n
+    \ against the top: the difference changes sign at most once
+    LDA yt0 : CMP yl0 : LDA yt0 + 1 : SBC yl0 + 1 : BCC below0   ; yl0 > yt0
+    LDA row_step.y : CMP yl1 : LDA row_step.y + 1 : SBC yl1 + 1 : BCC cross0  ; yl1 > yt1
+    LDA #ST_ABOVE : STA rst     ; both above
+    JMP ranges
+.below0
+    LDA row_step.y : CMP yl1 : LDA row_step.y + 1 : SBC yl1 + 1 : BCS cross1  ; yl1 <= yt1
+    LDA #ST_OPEN : STA rst      ; both below the top
+    JMP ranges
+.cross0                         ; above at c, below at e - 1
+    LDA yt0 : SEC : SBC yl0 : STA crossing.d0
+    LDA yt0 + 1 : SBC yl0 + 1 : STA crossing.d0 + 1
+    JSR topcross
+    LDA #ST_ABOVE : STA rst
+    LDA #ST_OPEN : STA rst + 1
+    JMP ranges
+.cross1                         ; below at c, above at e - 1
+    LDA yl0 : SEC : SBC yt0 : STA crossing.d0
+    LDA yl0 + 1 : SBC yt0 + 1 : STA crossing.d0 + 1
+    JSR topcross
+    LDA #ST_OPEN : STA rst
+    LDA #ST_ABOVE : STA rst + 1
+
+.ranges                         ; each OPEN range against the bottom the same way
+    LDA #0 : STA i
+.range
+    LDX i
+    LDA rr0,X : ZA_INDEXEDBY 0..1
+    STA r0
+    LDA rr1,X : ZA_INDEXEDBY 0..1
+    STA r1
+    LDA rst,X : ZA_INDEXEDBY 0..1
+    CMP #ST_OPEN : BEQ open
+    STA emit.st
+    LDA r0 : STA emit.r0
+    LDA r1 : STA emit.r1
+    JSR emit
+    JMP nextr
+.open
+    LDA r0 : CMP c : BNE @+     ; sharing an end with the block: its line row
+    LDA yl0 : STA l0
+    LDA yl0 + 1 : STA l0 + 1
+    JMP l0done
+.@  JSR line_y
+    LDA row_step.y : STA l0
+    LDA row_step.y + 1 : STA l0 + 1
+.l0done
+    LDA r1 : CMP e : BNE @+
+    LDA yl1 : STA l1
+    LDA yl1 + 1 : STA l1 + 1
+    JMP l1done
+.@  SEC : SBC #1 : JSR line_y
+    LDA row_step.y : STA l1
+    LDA row_step.y + 1 : STA l1 + 1
+.l1done
+    LDX cx_bp : LDA r0 : JSR piece_y
+    LDA row_step.y : STA b0
+    LDA row_step.y + 1 : STA b0 + 1
+    LDX cx_bp : LDA r1 : SEC : SBC #1 : JSR piece_y     ; b1, in row_step.y
+    LDA r0 : STA emit.r0
+    LDA r1 : STA emit.r1
+    LDA l0 : CMP b0 : LDA l0 + 1 : SBC b0 + 1 : BCC vis0        ; l0 < b0
+    LDA l1 : CMP row_step.y : LDA l1 + 1 : SBC row_step.y + 1 : BCC bcross0
+    LDA #ST_BELOW : STA emit.st ; both below the bottom
+    JSR emit
+    JMP nextr
+.vis0
+    LDA l1 : CMP row_step.y : LDA l1 + 1 : SBC row_step.y + 1 : BCS bcross1
+    LDA #ST_VISIBLE : STA emit.st   ; between them throughout
+    JSR emit
+    JMP nextr
+.bcross0                        ; below at r0, visible at r1 - 1
+    LDA l0 : SEC : SBC b0 : STA crossing.d0
+    LDA l0 + 1 : SBC b0 + 1 : STA crossing.d0 + 1
+    JSR botcross
+    LDA #ST_BELOW : LDX #ST_VISIBLE
+    JMP split
+.bcross1                        ; visible at r0, below at r1 - 1
+    LDA b0 : SEC : SBC l0 : STA crossing.d0
+    LDA b0 + 1 : SBC l0 + 1 : STA crossing.d0 + 1
+    JSR botcross
+    LDA #ST_VISIBLE : LDX #ST_BELOW
+.split                          ; [r0, c2) in A's status, [c2, r1) in X's
+    STA emit.st
+    STX st2
+    LDA r0 : STA emit.r0
+    LDA c2 : STA emit.r1
+    JSR emit
+    LDA st2 : STA emit.st
+    LDA c2 : STA emit.r0
+    LDA r1 : STA emit.r1
+    JSR emit
+.nextr
+    INC i
+    LDA i : CMP n : BEQ @+
+    JMP range
+.@  RTS
+
+\ The top's crossing in [c, e), from crossing.d0: the ranges split there.
+.topcross
+    LDA tg : STA grad_diff.gb
+    LDA tg + 1 : STA grad_diff.gb + 1
+    LDA l_g : STA grad_diff.ga
+    LDA l_g + 1 : STA grad_diff.ga + 1
+    JSR grad_diff
+    LDA grad_diff.d : STA crossing.dg
+    LDA grad_diff.d + 1 : STA crossing.dg + 1
+    LDA c : STA crossing.c
+    LDA e : STA crossing.e
+    JSR crossing
+    STA rr1
+    STA rr0 + 1
+    LDA e : STA rr1 + 1
+    LDA #2 : STA n
+    RTS
+
+\ The bottom's crossing in [r0, r1), from crossing.d0: c2.
+.botcross
+    LDA bg : STA grad_diff.gb
+    LDA bg + 1 : STA grad_diff.gb + 1
+    LDA l_g : STA grad_diff.ga
+    LDA l_g + 1 : STA grad_diff.ga + 1
+    JSR grad_diff
+    LDA grad_diff.d : STA crossing.dg
+    LDA grad_diff.d + 1 : STA crossing.dg + 1
+    LDA r0 : STA crossing.c
+    LDA r1 : STA crossing.e
+    JSR crossing
+    STA c2
+    RTS
+}
+
+\\ Clip the line against the top and bottom chains over its whole span. st
+\\ ST_ABOVE or ST_BELOW: the span is known to lie outside on that side, and
+\\ the bound pieces over it are only recoloured.
+\\ in: st.
+.clip_line
+{
+    ZA_AUTO1 st                 ; in
+    ZA_AUTO1 c, e, s            ; local: the block, its status
+    ZA_AUTO2 rlo                ; local: the line's lower row, for the fast path
+    LDA st : CMP #ST_OPEN : BNE place
+    \ the fast path: wholly inside the chains' row extents
+    LDA l_x1 : SEC : SBC #1 : JSR line_y    ; yb
+    LDA #128 : STA rlo          ; ya = the anchor, l_y0 and 128
+    LDA l_y0 : STA rlo + 1
+    LDA row_step.y : CMP rlo : LDA row_step.y + 1 : SBC rlo + 1 : BCS ordered  ; yb >= ya
+    LDA rlo : LDX rlo + 1       ; swap: lo = yb, hi = ya
+    LDY row_step.y : STY rlo
+    LDY row_step.y + 1 : STY rlo + 1
+    STA row_step.y : STX row_step.y + 1
+.ordered                        ; rlo the low row, row_step.y the high
+    LDA rlo : SEC : SBC #128 : LDA rlo + 1 : SBC #0 : BCC place  ; lo < 128
+    CMP cx_tmax : BCC place     ; floor(lo) < tmax
+    LDA row_step.y : CLC : ADC #127
+    LDA row_step.y + 1 : ADC #0 : BCS place     ; hc wrapped
+    CMP cx_bmin : BEQ @+ : BCS place            ; ceil(hi) > bmin
+.@  LDA l_x0 : STA emit.r0
+    LDA l_x1 : STA emit.r1
+    LDA #ST_VISIBLE : STA emit.st
+    JMP emit
+
+.place
+    LDA l_x0 : STA c
+    LDX cx_tp : BNE @+
+    LDX cx_thead
+.@  JSR piece_at
+    STX cx_tp
+    LDA cx_bpset : BNE @+
+    LDA cx_bhead : STA cx_bp
+    LDA #1 : STA cx_bpset
+.@  JSR bwalk
+
+.block                          ; a block ends at the next boundary of each chain it involves
+    LDA l_x1 : STA e
+    LDA st : STA s
+    LDX cx_bp : BEQ gap
+    LDA c : CMP p_x0,X : BCS bin
+.gap                            ; a gap in the bottom chain (a closed range): above the top throughout
+    LDA #ST_ABOVE : STA s
+    LDX cx_bp : BEQ top
+    LDA p_x0,X : CMP e : BCS top
+    STA e
+    JMP top
+.bin
+    LDA s : CMP #ST_ABOVE : BEQ top
+    LDA p_x1,X : CMP e : BCS top
+    STA e
+.top
+    LDA s : CMP #ST_BELOW : BEQ go
+    LDX cx_tp
+    LDA p_x1,X : CMP e : BCS go
+    STA e
+.go
+    LDA s : CMP #ST_OPEN : BNE plain
+    LDA c : STA resolve_block.c
+    LDA e : STA resolve_block.e
+    JSR resolve_block
+    JMP on
+.plain
+    STA emit.st
+    LDA c : STA emit.r0
+    LDA e : STA emit.r1
+    JSR emit
+.on
+    LDA e : STA c
+    CMP l_x1 : BCS done
+    LDX cx_tp                   ; the cursors on to c
+.tstep
+    LDA p_x1,X : CMP c : BEQ @+ : BCS tdone
+.@  LDA p_next,X : TAX
+    JMP tstep
+.tdone
+    STX cx_tp
+    JSR bwalk
+    JMP block
+.done
+    RTS
+
+\ The bottom cursor past every piece ending at or before c.
+.bwalk
+    LDX cx_bp : BEQ bdone
+    LDA p_x1,X : CMP c : BEQ @+ : BCS bdone
+.@  LDA p_next,X : STA cx_bp
+    JMP bwalk
+.bdone
+    RTS
+}
+
+\\ Clip an edge's line over a visit's columns [xa, xb). Columns outside the
+\\ line's own span are those its screen pre-clip cut off: outside the portal
+\\ on the side it left the screen by (h's), so they only recolour that
+\\ side's bound. Left to right, as the cursors require.
+\\ in: the line, below, xa, xb. Leaves l_x0 and l_x1 changed.
+.clip_edge_line
+{
+    ZA_AUTO1 below, xa, xb      ; in
+    ZA_AUTO1 l0, l1, x0, y0     ; local: the line's part of the span; its own start and anchor
+    LDA l_x0 : STA x0
+    LDA l_y0 : STA y0
+    LDA l_x0 : CMP xa : BCS @+
+    LDA xa
+.@  STA l0
+    LDA l_x1 : CMP xb : BCC @+
+    LDA xb
+.@  STA l1
+    CMP l0 : BEQ none : BCS some
+.none
+    LDA xb : STA l0 : STA l1    ; cut off over the whole visit
+.some
+    LDA x0 : CMP l0 : BCS anchored
+    LDA l0 : JSR line_y         ; re-anchored at the visit's first column
+    ROW_OF : STA y0
+.anchored
+    LDA xa : CMP l0 : BCS mid
+    STA l_x0                    ; [xa, l0): cut off
+    LDA l0 : STA l_x1
+    JSR out
+.mid
+    LDA l0 : CMP l1 : BCS last
+    STA l_x0                    ; [l0, l1): the line itself
+    LDA l1 : STA l_x1
+    LDA y0 : STA l_y0
+    LDA #ST_OPEN : STA clip_line.st
+    JSR clip_line
+.last
+    LDA l1 : CMP xb : BCS done
+    STA l_x0                    ; [l1, xb): cut off
+    LDA xb : STA l_x1
+.out
+    LDA below : STA clip_line.st    ; ST_BELOW is 1, ST_ABOVE 0
+    JMP clip_line
+.done
+    RTS
+}
+
+\ ---- chains: taking ownership of a span (spec 7.9.2) ----
+
+\\ Cut [xa, xb) out of the chain at the cursor: split at both ends, the
+\\ cursor left on the piece after. in: cursor, xa, xb. out: A = the
+\\ first piece, cursor.
+.cut
+{
+    ZA_AUTO1 cursor, xa, xb     ; in (cursor also out)
+    ZA_AUTO1 head               ; local
+    LDX cursor
+.skip
+    LDA p_x1,X : CMP xa : BEQ @+ : BCS found
+.@  LDA p_next,X : TAX
+    JMP skip
+.found
+    LDA p_x0,X : CMP xa : BCS @+
+    LDA xa : JSR pool_split     ; starts before xa: split there
+    TYA : TAX
+.@  STX head
+.span
+    LDA p_x1,X : CMP xb : BCS ends
+    LDA p_next,X : TAX
+    JMP span
+.ends
+    BEQ @+
+    LDA xb : JSR pool_split     ; ends past xb: split there
+.@  LDA p_next,X : STA cursor
+    LDA head
+    RTS
+}

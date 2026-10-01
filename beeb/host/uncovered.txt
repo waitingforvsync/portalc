@@ -21,7 +21,7 @@ arith.c:415       pt_project_col_q8   rare: needs the near-clip point exactly on
 arith.c:455       pt_project_rowd     dead: exhaustive over x at the largest h8 the on-screen assert allows never gives q > H/2; the Beeb's has no clamp
 render.c:259      crossing            dead: n = 0 needs span = 0, which the assert after it forbids
 render.c:531      make_line           rare: the clip column rounding left of a near endpoint's; S5 synthetic make_line records
-render.c:547      make_line           rare: the anchor row overflowing u8.8; S5 synthetic make_line records
+render.c:547      make_line           dead: base + off is at most 16,512 + 32,639 (gm < &8000, fr < 256), so it never carries; the Beeb's has no clamp
 render.c:752-754  cut                 dead: in a healthy ring the cursor never lags xa (process_edge's own comment)
 render.c:988-990  child_portal        dead: the degenerate-ring guard, broken maps only (RC_ASSERT(0))
 render.c:1042-1044 close_columns      rare: a split at l needs a pinch whose open range starts inside a child bottom piece (a ceiling-line closure); descend's cap always lands on piece bounds

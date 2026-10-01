@@ -860,3 +860,136 @@ will say. The numbers go to Rich before Phase 5.
 ### Phase 4: done
 
 Next: vertices, lines and the clip.
+
+## 2026-10-01 — Phase 5: vertices, lines and the clip
+
+### What's there
+
+`src/clip.6502` (1,887 bytes) has everything that cuts and clips:
+
+- rows: `row_step`, `piece_y`, `line_y`;
+- the pool: `pool_alloc`, `pool_split`, `piece_at`, `cut`;
+- chain building, and the closed list;
+- the clip group: `emit`, `resolve_block`, `clip_line`, `clip_edge_line`.
+
+`src/lines.6502` (1,450) has `transform`, the column tests, the side
+clips, `make_line` and `edge_line`.
+
+The shapes:
+
+- **One clip context, in zero page.** Only one clip runs at a time, so
+  render.c's `pt_clip` is globals: `cx_*`, the chain being built `cb_*`
+  and the line `l_*`. There's one builder block. Phase 6's `process_edge`
+  will save the floor builder's four bytes before the ceiling clip reuses
+  it.
+- **No visit pointer.** `cx_act` replaces the C's visit and slot: an index
+  into `vis_act`, a slot's 24 visits at a time.
+- **Pairs, indexed by X.** An edge's two vertices (`ev_*`) and two
+  endpoints (`ep_*`) are two-entry arrays, so the near and far endpoint,
+  or v0 and v1, are one index apart.
+- **`piece_at` keeps the column in A** by walking with X and Y in turn:
+
+```
+.loop
+    CMP p_x1,X : BCC donex      ; c < x1: this one
+    LDY p_next,X
+    CMP p_x1,Y : BCC doney
+    LDX p_next,Y
+    JMP loop
+```
+
+### Unit replay
+
+`host/replay.py` decodes a record and pokes the pool and the visits'
+active pieces straight into BSS. Everything zero page goes through a
+staging block, which the shim (`test/s5.6502`) unpacks before the call
+and packs back after. The host pokes nothing in zero page itself, so
+Baron sees every write. Then the after half is re-encoded the C's way and
+compared byte for byte.
+
+The recorder gained five targets: `make_line`, `edge_line`, `transform`,
+`col_gt` and `col_ge`. That's 4,824 records in all, every one
+reproducing itself on the host. REPLAY.md had CAM at 8 bytes; it's 9.
+
+On the Beeb, all 3,617 of Phase 5's records come out identical. So does
+every map vertex at all 20,409 golden poses (S5), and 50,000 synthetic
+`make_line` calls.
+
+The synthetic ones exist because the goldens hardly ever clip a line at
+the near depth with the clip column rounding left of the near endpoint:
+the random endpoints reach it 61 times in 50,000. They also showed the
+other near-clip line host/uncovered.txt called rare is dead. The start
+row is at most 16,512 + 32,639, so its "carry out: clamp" never
+carries. Dead code isn't ported (D10), so it's gone from the Beeb, and
+from the list's "rare".
+
+The shim times each call alone, so the replay gives capture's first real
+costs:
+
+| | median | mean |
+|---|---|---|
+| `transform` | 768 | 829 |
+| `resolve_block` | 1,060 | 1,235 |
+| `clip_line` | 536 | 709 |
+| `clip_edge_line` | 652 | 973 |
+| `edge_line` | 804 | 820 |
+| `make_line` | 570 | 605 |
+| `emit` | 230 | 273 |
+| `cut` | 340 | 209 |
+
+They're per call, not per frame, and the records are picked for novelty,
+not frequency. But `transform`, for one, is about 830 where the cost
+model has about 650 (its guess of 90 on top of the measured rotation).
+
+### Breaking it on purpose
+
+Eight breaks:
+
+| broken | caught by |
+|---|---|
+| `emit`'s closed-range test, off by one | `emit`, `resolve_block`, `clip_line`, `clip_edge_line` |
+| `piece_y`'s rounding bias, a unit low | the same four |
+| `chain_extents` rounding up a unit high | the same four |
+| `transform`'s column outside the frustum, 63 | `transform` |
+| `clip_left`'s column, 1 | `edge_line` |
+| `col_ge` one column short | `col_ge` |
+| `crossing`'s "at least 1" made 2 | nothing: it's dead |
+| `make_line`'s clip-column fraction, a unit off | the synthetic set, 137 of 50,000 |
+
+The `crossing` one was in host/uncovered.txt as dead already. I'd ported
+it anyway, so it's gone. The fraction one gets past all 787 recorded
+lines, and that's what the synthetic set is for.
+
+### The save stack
+
+Rich's: the walk should save on the hardware stack, `LDA : PHA` before
+the recursive `JSR` and `PLA : STA` after, not into arrays in page 1. The
+spike's case for the arrays was the hardware stack's depth. But page 1
+holds both either way, about 195 bytes at depth 16, whichever it is.
+Pushes are about 20 cycles a descent cheaper, and simpler. Baron takes
+them: the `STA` after the call kills the old value, so nothing in zero
+page is live across it. So Phase 6's walk pushes (D15).
+
+### Budget checkpoint
+
+Called from the release, everything so far would be about 10.5K of code
+and data: Phase 0's 1.5K, the fills, arith, plot, clip and lines. Phase 5
+came to about 5.9 bytes a line of C. At that rate the rest comes to:
+
+| phase | estimate |
+|---|---|
+| 6, walk and capture | 2.0K |
+| 7, sprites | 2.0K |
+| 8, camera | 1.6K |
+| 9, the main loop and keys | 0.5K |
+
+That's about 16.6K, against 16,128 with `BSS_BASE` at &4E00: about 500
+over. With D13's placement it's about 16,900, which leaves about 300 to
+spare. Either way it's right on the line. If it comes to it, §2.4's
+fallbacks come cheapest first. Sizing the instance array to the map saves
+about 360. One fill body with patched operands saves about 400 (a body
+is 775, less the patching). Or there's the 16K of sideways RAM.
+
+### Phase 5: done
+
+Next: the walk, with its saves on the hardware stack.

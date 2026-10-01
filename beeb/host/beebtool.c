@@ -1285,6 +1285,110 @@ static void s4_random(uint32_t seed, uint32_t count, uint32_t pieces, const char
     fclose(f);
 }
 
+// ---- check S5: every vertex's transform at every pose (PLAN.md 5.7) ----
+//
+// Per pose, its camera (x, y, angle) and a CRC-16 over every map vertex's
+// view vertex, 8 bytes each as REPLAY.md's VV: what test/s5.6502 computes.
+static void s5t(int which, const char *poses, const char *out)
+{
+    crc16_init();
+    load_map(which);
+    pt_render_init(&render_, &map_);
+    size_t n;
+    uint8_t *p = read_file(poses, &n);
+    FILE *f = open_out(NULL, out);
+    for (size_t i = 0; i + 6 <= n; i += 6) {
+        render_.cam_x = (uint16_t)(p[i] | p[i + 1] << 8);
+        render_.cam_y = (uint16_t)(p[i + 2] | p[i + 3] << 8);
+        render_.angle = p[i + 4];
+        uint8_t vv[8 * PT_MAX_VERTS];
+        for (uint32_t k = 0; k < map_.num_verts; k++) {
+            pt_vv v = transform(&render_, map_.verts[k]);
+            uint8_t *q = &vv[8 * k];
+            q[0] = (uint8_t)v.x;
+            q[1] = (uint8_t)((uint16_t)v.x >> 8);
+            q[2] = (uint8_t)v.y;
+            q[3] = (uint8_t)((uint16_t)v.y >> 8);
+            q[4] = v.sx;
+            q[5] = v.flags;
+            q[6] = v.rx.f;
+            q[7] = v.rx.e;
+        }
+        uint16_t crc = crc16(vv, 8u * map_.num_verts);
+        uint8_t rec[7] = {p[i], p[i + 1], p[i + 2], p[i + 3], p[i + 4], (uint8_t)crc, (uint8_t)(crc >> 8)};
+        fwrite(rec, 1, sizeof rec, f);
+    }
+    fclose(f);
+    free(p);
+}
+
+// ---- check S5: make_line on synthetic endpoints (PLAN.md 5.7) ----
+//
+// The golden poses rarely clip a line at the near depth with the clip
+// column rounding left of the near endpoint's, or the start row
+// overflowing u8.8 (host/uncovered.txt): random endpoint pairs, often one
+// near and one far, cover them. A record is make_line's arguments as
+// REPLAY.md's ARGS (18 bytes), then its LINE (7).
+
+// An endpoint: a depth (half the time within twice the clip depth d) and a
+// lateral position inside the frustum, its column projected as transform's.
+static pt_ep s5_ep(rc_random *rng, uint16_t d)
+{
+    uint32_t r = rc_random_next(rng);
+    uint16_t x = d && (r & 1) ? (uint16_t)(1 + (r >> 1) % (2u * d + 1)) : (uint16_t)(1 + (r >> 1) % 4096);
+    uint32_t s = rc_random_next(rng);
+    int16_t y = (int16_t)((int32_t)(s % (2u * x + 1)) - (int32_t)x);
+    pt_recip rx = pt_recip16(x);
+    return (pt_ep) {.x = x, .y = y, .sx = pt_project_col(y, x, rx), .rx = rx};
+}
+
+static void put_ep(uint8_t *q, const pt_ep *e)
+{
+    q[0] = (uint8_t)e->x;
+    q[1] = (uint8_t)(e->x >> 8);
+    q[2] = (uint8_t)e->y;
+    q[3] = (uint8_t)((uint16_t)e->y >> 8);
+    q[4] = e->sx;
+    q[5] = e->rx.f;
+    q[6] = e->rx.e;
+}
+
+static void s5make(uint32_t seed, uint32_t count, const char *out)
+{
+    pt_arith_init();
+    rc_random rng = rc_random_make(seed);
+    FILE *f = open_out(NULL, out);
+    for (uint32_t k = 0; k < count;) {
+        uint32_t r = rc_random_next(&rng);
+        pt_relh h = {.m = (uint8_t)(r % 81), .below = (uint8_t)((r >> 8) & 1)};
+        pt_ep a = s5_ep(&rng, (uint16_t)(h.m * 16));
+        pt_ep b = s5_ep(&rng, (uint16_t)(h.m * 16));
+        if (a.sx == b.sx)
+            continue;
+        pt_ep e0 = a.sx < b.sx ? a : b;
+        pt_ep e1 = a.sx < b.sx ? b : a;
+        pt_pattern col = {.e = (uint8_t)(r >> 16), .o = (uint8_t)(r >> 24)};
+        pt_line L = make_line(e0, e1, h, col);
+        uint8_t rec[25];
+        put_ep(rec, &e0);
+        put_ep(rec + 7, &e1);
+        rec[14] = h.m;
+        rec[15] = h.below;
+        rec[16] = col.e;
+        rec[17] = col.o;
+        rec[18] = L.x0;
+        rec[19] = L.x1;
+        rec[20] = L.y0;
+        rec[21] = (uint8_t)L.g;
+        rec[22] = (uint8_t)(L.g >> 8);
+        rec[23] = L.ce;
+        rec[24] = L.co;
+        fwrite(rec, 1, sizeof rec, f);
+        k++;
+    }
+    fclose(f);
+}
+
 // Pools given as records without their CRCs (the host's, splitting a
 // pool that failed into single pieces), with them added.
 static void s4_crc(const char *in, const char *out)
@@ -1360,6 +1464,14 @@ int main(int argc, char **argv)
     }
     if (argc >= 5 && !strcmp(argv[1], "s4")) {
         s4(atoi(argv[2]), argv[3], argv[4]);
+        return 0;
+    }
+    if (argc >= 5 && !strcmp(argv[1], "s5make")) {
+        s5make((uint32_t)strtoul(argv[2], NULL, 0), (uint32_t)strtoul(argv[3], NULL, 0), argv[4]);
+        return 0;
+    }
+    if (argc >= 5 && !strcmp(argv[1], "s5t")) {
+        s5t(atoi(argv[2]), argv[3], argv[4]);
         return 0;
     }
     if (argc >= 4 && !strcmp(argv[1], "s4crc")) {

@@ -1,0 +1,503 @@
+\ **************************************************************************
+\ *
+\ *     s5.6502 - checks S5 and S5u: the clip group, replayed (PLAN.md 5.6)
+\ *
+\ **************************************************************************
+\
+\ CMD_REPLAY replays one recorded call (REPLAY.md). The host pokes the
+\ frame state (the pool and vis_act) where the code keeps it, and
+\ pool_last and the record's pt_clip, line and arguments into rp_*, as
+\ REPLAY.md lays them out; the shim unpacks them into the zero-page context, makes the
+\ call, and packs the context back for the host to peek and compare.
+\
+\   arg0: the function (REPLAY.md's id)
+\     0 emit             rp_args: r0 r1 st
+\     1 resolve_block    rp_args: c e
+\     2 clip_line        rp_args: st
+\     3 clip_edge_line   rp_args: h.m h.below xa xb
+\     4 cut              rp_args: cursor xa xb; rp_out: ret cursor
+\
+\ and, with the arguments in rp_buf and the results in rp_res, as the
+\ record has them:
+\
+\    12 make_line        EP EP h.m h.below col.e col.o; LINE
+\    13 edge_line        EL slot h.m h.below col.e col.o; EL LINE
+\    14 transform        (the camera in rp_cam) w.x w.y; VV
+\    15 col_gt           VV c; ret
+\    16 col_ge           VV c; ret
+
+CMD_REPLAY = 6
+
+RP_THEAD = 0                    ; offsets in rp_cx (REPLAY.md's CX)
+RP_BHEAD = 1
+RP_TMAX = 2
+RP_BMIN = 3
+RP_ROLE = 4
+RP_HASBUILD = 5
+RP_BHEAD_ = 6
+RP_BTAIL = 7
+RP_BTMAX = 8
+RP_BBMIN = 9
+RP_CBFBE = 10
+RP_CBFBO = 11
+RP_HASCLOSED = 12
+RP_CLOSED = 13                  ; l[8], r[8], num
+RP_VIS = 30
+RP_SLOT = 31
+RP_TP = 32
+RP_BPSET = 33
+RP_BP = 34
+
+\ The record's line and context into the zero-page globals.
+.rp_unpack
+{
+    ZA_AUTO1 t                  ; local
+    LDA rp_pool : STA pool_last
+    LDA rp_cx + RP_THEAD : STA cx_thead
+    LDA rp_cx + RP_BHEAD : STA cx_bhead
+    LDA rp_cx + RP_TMAX : STA cx_tmax
+    LDA rp_cx + RP_BMIN : STA cx_bmin
+    LDA rp_cx + RP_ROLE : STA cx_role
+    LDA rp_cx + RP_HASBUILD : STA cx_build
+    LDA rp_cx + RP_BHEAD_ : STA cb_head
+    LDA rp_cx + RP_BTAIL : STA cb_tail
+    LDA rp_cx + RP_BTMAX : STA cb_tmax
+    LDA rp_cx + RP_BBMIN : STA cb_bmin
+    LDA rp_cx + RP_CBFBE : STA cx_cbfbe
+    LDA rp_cx + RP_CBFBO : STA cx_cbfbo
+    LDX #16
+.cl
+    LDA rp_cx + RP_CLOSED,X : STA cl_l,X     ; (cl_r follows cl_l, then cl_num)
+    DEX : BPL cl
+    LDA rp_cx + RP_SLOT         ; slot * 24 + vis
+    ASL A : ASL A : ASL A : STA t
+    ASL A : CLC : ADC t
+    CLC : ADC rp_cx + RP_VIS : STA cx_act
+    LDA rp_cx + RP_TP : STA cx_tp
+    LDA rp_cx + RP_BPSET : STA cx_bpset
+    LDA rp_cx + RP_BP : STA cx_bp
+    LDA rp_line : STA l_x0
+    LDA rp_line + 1 : STA l_x1
+    LDA rp_line + 2 : STA l_y0
+    LDA rp_line + 3 : STA l_g
+    LDA rp_line + 4 : STA l_g + 1
+    LDA rp_line + 5 : STA l_ce
+    LDA rp_line + 6 : STA l_co
+    RTS
+}
+
+\ And the context back.
+.rp_pack
+{
+    LDA pool_last : STA rp_pool
+    LDA cx_thead : STA rp_cx + RP_THEAD
+    LDA cx_bhead : STA rp_cx + RP_BHEAD
+    LDA cx_tmax : STA rp_cx + RP_TMAX
+    LDA cx_bmin : STA rp_cx + RP_BMIN
+    LDA cx_role : STA rp_cx + RP_ROLE
+    LDA cb_head : STA rp_cx + RP_BHEAD_
+    LDA cb_tail : STA rp_cx + RP_BTAIL
+    LDA cb_tmax : STA rp_cx + RP_BTMAX
+    LDA cb_bmin : STA rp_cx + RP_BBMIN
+    LDA cx_cbfbe : STA rp_cx + RP_CBFBE
+    LDA cx_cbfbo : STA rp_cx + RP_CBFBO
+    LDX #16
+.cl
+    LDA cl_l,X : STA rp_cx + RP_CLOSED,X
+    DEX : BPL cl
+    LDA cx_tp : STA rp_cx + RP_TP
+    LDA cx_bpset : STA rp_cx + RP_BPSET
+    LDA cx_bp : STA rp_cx + RP_BP
+    RTS
+}
+
+\\ CMD_REPLAY.
+.cmd_replay
+{
+    JSR rp_unpack
+    LDA MB_ARG : BNE notemit
+    LDA rp_args : STA emit.r0
+    LDA rp_args + 1 : STA emit.r1
+    LDA rp_args + 2 : STA emit.st
+    JSR rp_start : JSR emit : JSR rp_stop
+    JMP rp_pack
+.notemit
+    CMP #1 : BNE notblock
+    LDA rp_args : STA resolve_block.c
+    LDA rp_args + 1 : STA resolve_block.e
+    JSR rp_start : JSR resolve_block : JSR rp_stop
+    JMP rp_pack
+.notblock
+    CMP #2 : BNE notline
+    LDA rp_args : STA clip_line.st
+    JSR rp_start : JSR clip_line : JSR rp_stop
+    JMP rp_pack
+.notline
+    CMP #3 : BNE notedge
+    LDA rp_args + 1 : STA clip_edge_line.below
+    LDA rp_args + 2 : STA clip_edge_line.xa
+    LDA rp_args + 3 : STA clip_edge_line.xb
+    JSR rp_start : JSR clip_edge_line : JSR rp_stop
+    JMP rp_pack
+.notedge
+    CMP #4 : BNE notcut
+    LDA rp_args : STA cut.cursor
+    LDA rp_args + 1 : STA cut.xa
+    LDA rp_args + 2 : STA cut.xb
+    JSR rp_start : JSR cut : JSR rp_stop
+    STA rp_out
+    LDA cut.cursor : STA rp_out + 1
+    LDA pool_last : STA rp_pool
+    RTS
+.notcut
+    CMP #12 : BNE notmake
+    LDY #0 : JSR rp_ep_in
+    LDY #7 : JSR rp_ep_in
+    LDA rp_buf + 14 : STA h_m
+    LDA rp_buf + 15 : STA h_below
+    LDA rp_buf + 16 : STA l_ce
+    LDA rp_buf + 17 : STA l_co
+    JSR rp_start : JSR make_line : JSR rp_stop
+    LDY #0 : JMP rp_line_out
+.notmake
+    CMP #13 : BNE notel
+    JMP rp_edge_line
+.notel
+    CMP #14 : BNE nottf
+    LDA rp_cam + 1 : STA fr_camx
+    LDA rp_cam + 2 : STA fr_camx + 1
+    LDA rp_cam + 3 : STA fr_camy
+    LDA rp_cam + 4 : STA fr_camy + 1
+    LDA rp_cam + 5 : STA fr_eyez
+    LDA rp_cam + 6 : STA fr_angle
+    LDA rp_buf : STA transform.wx
+    LDA rp_buf + 1 : STA transform.wx + 1
+    LDA rp_buf + 2 : STA transform.wy
+    LDA rp_buf + 3 : STA transform.wy + 1
+    JSR rp_start : JSR transform : JSR rp_stop
+    LDA tf_x : STA rp_res
+    LDA tf_x + 1 : STA rp_res + 1
+    LDA tf_y : STA rp_res + 2
+    LDA tf_y + 1 : STA rp_res + 3
+    LDA tf_sx : STA rp_res + 4
+    LDA tf_flags : STA rp_res + 5
+    LDA tf_f : STA rp_res + 6
+    LDA tf_e : STA rp_res + 7
+    RTS
+.nottf
+    CMP #15 : BNE notgt
+    JSR rp_cv_in
+    JSR rp_start : JSR col_gt : JSR rp_stop
+    JMP rp_bool_out
+.notgt
+    CMP #16 : BNE unknown
+    JSR rp_cv_in
+    JSR rp_start : JSR col_ge : JSR rp_stop
+    JMP rp_bool_out
+.unknown
+    CMP #255 : BNE bad
+    JSR rp_start : JSR rp_stop  ; the timing's baseline
+    RTS
+.bad
+    TRAP 4
+}
+
+\ The clock before a replayed call...
+.rp_start
+{
+    PHP : PHA                   ; (some routines take an input in A)
+    JSR now
+    ZA_DISCARD rp_t0            ; rebuilt whole by the loop
+    LDX #3
+.keep
+    LDA now.t,X : ZA_INDEXEDBY 0..3
+    STA rp_t0,X : ZA_INDEXEDBY 0..3
+    DEX : BPL keep
+    PLA : PLP
+    RTS
+}
+
+\ ...and after it: the microseconds to MB_USECS. Keeps A and the flags
+\ (col_gt's answer is in C).
+.rp_stop
+{
+    PHP : PHA
+    JSR now
+    SEC
+    FOR i = 0 ..< 4             ; (unrolled: a CPX would break the borrow)
+        LDA now.t + i : SBC rp_t0 + i : STA MB_USECS + i
+    NEXT
+    PLA : PLP
+    RTS
+}
+ZA_AUTO 4, rp_t0                ; the replay's clock at the call
+
+\ The record's VV and c for col_gt and col_ge: A = c.
+.rp_cv_in
+{
+    LDA rp_buf : STA cv_x
+    LDA rp_buf + 1 : STA cv_x + 1
+    LDA rp_buf + 2 : STA cv_y
+    LDA rp_buf + 3 : STA cv_y + 1
+    LDA rp_buf + 4 : STA cv_sx
+    LDA rp_buf + 5 : STA cv_flags
+    LDA rp_buf + 8
+    RTS
+}
+
+\ C into rp_res, as a byte.
+.rp_bool_out
+{
+    LDA #0 : ROL A : STA rp_res
+    RTS
+}
+
+\ The EP at rp_buf + Y into endpoint Y / 7 (0 or 1).
+.rp_ep_in
+{
+    LDX #0
+    CPY #0 : BEQ @+
+    INX
+.@  LDA rp_buf,Y : STA ep_xl,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 1,Y : STA ep_xh,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 2,Y : STA ep_yl,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 3,Y : STA ep_yh,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 4,Y : STA ep_sx,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 5,Y : STA ep_f,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 6,Y : STA ep_e,X : ZA_INDEXEDBY 0..1
+    RTS
+}
+
+\ The line into rp_res + Y.
+.rp_line_out
+{
+    LDA l_x0 : STA rp_res,Y
+    LDA l_x1 : STA rp_res + 1,Y
+    LDA l_y0 : STA rp_res + 2,Y
+    LDA l_g : STA rp_res + 3,Y
+    LDA l_g + 1 : STA rp_res + 4,Y
+    LDA l_ce : STA rp_res + 5,Y
+    LDA l_co : STA rp_res + 6,Y
+    RTS
+}
+
+\ edge_line: EL (v0 v1 sx0 sx1 have_ep e0 e1 vis), slot, h, col; out EL, LINE.
+.rp_edge_line
+{
+    LDX #0                      ; the two VVs: x y sx flags f e
+.vv
+    TXA : ASL A : ASL A : ASL A : TAY   ; X * 8
+    LDA rp_buf,Y : STA ev_xl,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 1,Y : STA ev_xh,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 2,Y : STA ev_yl,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 3,Y : STA ev_yh,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 4,Y : STA ev_sx,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 5,Y : STA ev_flags,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 6,Y : STA ev_f,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 7,Y : STA ev_e,X : ZA_INDEXEDBY 0..1
+    INX : CPX #2 : BNE vv
+    LDA rp_buf + 16 : STA el_sx0
+    LDA rp_buf + 17 : STA el_sx1
+    LDA rp_buf + 18 : STA el_have
+    LDY #19 : JSR rp_ep_in_at
+    LDY #26 : JSR rp_ep_in_at
+    LDA rp_buf + 33 : STA el_vis
+    LDA rp_buf + 35 : STA h_m
+    LDA rp_buf + 36 : STA h_below
+    LDA rp_buf + 37 : STA l_ce
+    LDA rp_buf + 38 : STA l_co
+    LDA rp_pool : STA pool_last
+    LDA rp_buf + 34             ; the slot
+    JSR rp_start : JSR edge_line : JSR rp_stop
+    LDY #34 : JSR rp_line_out
+    LDX #0                      ; the EL back
+.vvout
+    TXA : ASL A : ASL A : ASL A : TAY
+    LDA ev_xl,X : ZA_INDEXEDBY 0..1
+    STA rp_res,Y
+    LDA ev_xh,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 1,Y
+    LDA ev_yl,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 2,Y
+    LDA ev_yh,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 3,Y
+    LDA ev_sx,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 4,Y
+    LDA ev_flags,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 5,Y
+    LDA ev_f,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 6,Y
+    LDA ev_e,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 7,Y
+    INX : CPX #2 : BNE vvout
+    LDA el_sx0 : STA rp_res + 16
+    LDA el_sx1 : STA rp_res + 17
+    LDA el_have : STA rp_res + 18
+    LDY #19 : JSR rp_ep_out_at
+    LDY #26 : JSR rp_ep_out_at
+    LDA el_vis : STA rp_res + 33
+    LDA pool_last : STA rp_pool
+    RTS
+}
+
+\ The EP at rp_buf + Y into endpoint (Y - 19) / 7.
+.rp_ep_in_at
+{
+    LDX #0
+    CPY #19 : BEQ @+
+    INX
+.@  LDA rp_buf,Y : STA ep_xl,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 1,Y : STA ep_xh,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 2,Y : STA ep_yl,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 3,Y : STA ep_yh,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 4,Y : STA ep_sx,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 5,Y : STA ep_f,X : ZA_INDEXEDBY 0..1
+    LDA rp_buf + 6,Y : STA ep_e,X : ZA_INDEXEDBY 0..1
+    RTS
+}
+
+\ Endpoint (Y - 19) / 7 into rp_res + Y.
+.rp_ep_out_at
+{
+    LDX #0
+    CPY #19 : BEQ @+
+    INX
+.@  LDA ep_xl,X : ZA_INDEXEDBY 0..1
+    STA rp_res,Y
+    LDA ep_xh,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 1,Y
+    LDA ep_yl,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 2,Y
+    LDA ep_yh,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 3,Y
+    LDA ep_sx,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 4,Y
+    LDA ep_f,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 5,Y
+    LDA ep_e,X : ZA_INDEXEDBY 0..1
+    STA rp_res + 6,Y
+    RTS
+}
+
+\ ---- S5: every vertex's transform at every pose ----
+
+CMD_S5T = 7
+S5T_MAX = 128
+
+\ Fold byte var into crc (CRC-16/XMODEM, crc_lo and crc_hi).
+MACRO CRCVAR var, crc
+    LDA var : EOR crc + 1 : TAX
+    LDA crc : EOR crc_hi,X : STA crc + 1
+    LDA crc_lo,X : STA crc
+ENDMACRO
+
+\\ CMD_S5T: arg0 poses (up to S5T_MAX) in io_area, 5 bytes each (the
+\\ camera's x and y, its angle). For each, every map vertex transformed,
+\\ and a CRC-16 of their view vertices (REPLAY.md's VV, 8 bytes each) in
+\\ s5t_out.
+.cmd_s5t
+{
+    ZA_AUTO2 rec                ; local: the next pose
+    ZA_AUTO1 left, v, k         ; local: poses to go, the vertex, s5t_out's index
+    ZA_AUTO2 crc                ; local
+    LDA #LO(io_area) : STA rec
+    LDA #HI(io_area) : STA rec + 1
+    LDA #0 : STA k
+    LDA MB_ARG : STA left : BNE pose
+    RTS
+.pose
+    LDY #0 : LDA (rec),Y : STA fr_camx
+    INY : LDA (rec),Y : STA fr_camx + 1
+    INY : LDA (rec),Y : STA fr_camy
+    INY : LDA (rec),Y : STA fr_camy + 1
+    INY : LDA (rec),Y : STA fr_angle
+    LDA rec : CLC : ADC #5 : STA rec
+    BCC @+
+    INC rec + 1
+.@  LDA #0 : STA crc : STA crc + 1 : STA v
+.vertex
+    LDX v
+    LDA vx_lo,X : STA transform.wx
+    LDA vx_hi,X : STA transform.wx + 1
+    LDA vy_lo,X : STA transform.wy
+    LDA vy_hi,X : STA transform.wy + 1
+    JSR transform
+    CRCVAR tf_x, crc
+    CRCVAR tf_x + 1, crc
+    CRCVAR tf_y, crc
+    CRCVAR tf_y + 1, crc
+    CRCVAR tf_sx, crc
+    CRCVAR tf_flags, crc
+    CRCVAR tf_f, crc
+    CRCVAR tf_e, crc
+    INC v
+    LDA v : CMP #MAP_NUM_VERTS : BEQ posed
+    JMP vertex                  ; (out of branch range)
+.posed
+    LDX k
+    LDA crc : STA s5t_out,X
+    LDA crc + 1 : STA s5t_out + 1,X
+    INX : INX : STX k
+    DEC left : BEQ done
+    JMP pose
+.done
+    RTS
+}
+
+\ ---- S5: make_line on synthetic endpoints ----
+
+CMD_S5M = 8
+S5M_REC = 25                    ; make_line's ARGS (18), then its LINE (7)
+
+\\ CMD_S5M: arg0 records in io_area: for each, make_line, its line written
+\\ into the record's last 7 bytes.
+.cmd_s5m
+{
+    ZA_AUTO2 rec                ; local: the record
+    ZA_AUTO1 left               ; local: records to go
+    LDA #LO(io_area) : STA rec
+    LDA #HI(io_area) : STA rec + 1
+    LDA MB_ARG : STA left : BNE one
+    RTS
+.one
+    LDX #0 : LDY #0 : JSR ep
+    LDX #1 : JSR ep
+    LDA (rec),Y : STA h_m : INY
+    LDA (rec),Y : STA h_below : INY
+    LDA (rec),Y : STA l_ce : INY
+    LDA (rec),Y : STA l_co
+    JSR make_line
+    LDY #18
+    LDA l_x0 : STA (rec),Y : INY
+    LDA l_x1 : STA (rec),Y : INY
+    LDA l_y0 : STA (rec),Y : INY
+    LDA l_g : STA (rec),Y : INY
+    LDA l_g + 1 : STA (rec),Y : INY
+    LDA l_ce : STA (rec),Y : INY
+    LDA l_co : STA (rec),Y
+    LDA rec : CLC : ADC #S5M_REC : STA rec
+    BCC @+
+    INC rec + 1
+.@  DEC left : BEQ done
+    JMP one
+.done
+    RTS
+
+\ Endpoint X from the record at Y (7 bytes), Y moved past it.
+.ep
+    LDA (rec),Y : STA ep_xl,X : ZA_INDEXEDBY 0..1
+    INY
+    LDA (rec),Y : STA ep_xh,X : ZA_INDEXEDBY 0..1
+    INY
+    LDA (rec),Y : STA ep_yl,X : ZA_INDEXEDBY 0..1
+    INY
+    LDA (rec),Y : STA ep_yh,X : ZA_INDEXEDBY 0..1
+    INY
+    LDA (rec),Y : STA ep_sx,X : ZA_INDEXEDBY 0..1
+    INY
+    LDA (rec),Y : STA ep_f,X : ZA_INDEXEDBY 0..1
+    INY
+    LDA (rec),Y : STA ep_e,X : ZA_INDEXEDBY 0..1
+    INY
+    RTS
+}

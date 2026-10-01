@@ -62,6 +62,11 @@ the end:
 | 9 | `next_open` | no |
 | 10 | `close_columns` | yes |
 | 11 | `process_edge` | yes |
+| 12 | `make_line` | no |
+| 13 | `edge_line` | yes |
+| 14 | `transform` | no |
+| 15 | `col_gt` | no |
+| 16 | `col_ge` | no |
 
 A record is a u16 length, then two halves:
 
@@ -75,12 +80,17 @@ encode FS and RESULTS the same way and compare with the after half.
 
 ## The pieces
 
-**CAM** (8): the map (0, 7 or 9), `cam_x` u16, `cam_y` u16, `eye_z`,
+**CAM** (9): the map (0, 7 or 9), `cam_x` u16, `cam_y` u16, `eye_z`,
 `angle`, `cam_cell`, the sprites flag.
 
 **VV**, a `pt_vv` (8): `x` s16, `y` s16, `sx`, `flags`, `rx.f`, `rx.e`.
 
 **LINE**, a `pt_line` (7): `x0`, `x1`, `y0`, `g` u16, `ce`, `co`.
+
+**EP**, a `pt_ep` (7): `x` u16, `y` s16, `sx`, `rx.f`, `rx.e`.
+
+**EL**, a `pt_edgelines` (34): `v0` VV, `v1` VV, `sx0`, `sx1`, `have_ep`,
+`e0` EP, `e1` EP, and the visit's index.
 
 **PORTAL**, a `pt_portal` (7): `cell`, `x`, `xr`, `tcur`, `bcur`, `tmax`,
 `bmin`.
@@ -133,6 +143,11 @@ in the walk touches them.
 | `next_open` | CLOSED c xb | ret c ol orr |
 | `close_columns` | head l rr cbfb.e cbfb.o | |
 | `process_edge` | PORTAL | ret PORTAL(p after) PORTAL(child) |
+| `make_line` | EP EP h.m h.below col.e col.o | LINE |
+| `edge_line` | EL slot h.m h.below col.e col.o | EL LINE |
+| `transform` | w.x w.y (the camera from CAM) | VV |
+| `col_gt` | VV c | ret |
+| `col_ge` | VV c | ret |
 
 Where the C leaves an output undefined, the record has zeros and the
 comparison skips it. That's `child_portal`'s portal and `process_edge`'s
@@ -140,9 +155,18 @@ child when `ret` is false, and `next_open`'s `ol` and `orr` likewise.
 
 ## On the Beeb (Phases 5-7)
 
-The Beeb keeps the same state in its own shapes: the pool as eight
-parallel pages, a 24-bit `left` and `top`, `pt_clip` in zero page. So the
-host does the translating. `check.py` decodes a record, pokes FS into BSS
-by symbol, the arguments into the routine's inputs, runs it through the
-mailbox, peeks everything back, re-encodes it as above and compares the
-after half byte for byte. A 24-bit `left` or `top` is sign-extended first.
+The Beeb keeps the same state in its own shapes, so the host does the
+translating (`host/replay.py`, run by `b2.py phase5`):
+
+- the pool as eight parallel pages, poked straight into BSS;
+- the visits' active pieces as `vis_act`, slot × 24 + visit;
+- `pool_last` (the C's `pool_num` − 1), the CX, the line and the
+  arguments into a staging block (`rp_*`), which `test/s5.6502`'s shim
+  unpacks into zero page (`cx_*`, `cb_*`, `l_*`, `ev_*`, `ep_*`, `fr_*`)
+  before the call and packs back after. Staging rather than poking zero
+  page keeps every write in code Baron can see.
+
+The shim times the call alone (`now` round the `JSR`), so each record's
+replay also gives its cycles. The host peeks everything back, re-encodes
+it as above and compares the after half byte for byte. A 24-bit `left` or
+`top` is sign-extended first (Phase 7).

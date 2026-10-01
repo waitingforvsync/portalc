@@ -8,6 +8,7 @@
 #   make phase2     check S2: every arithmetic routine against the C, on b2
 #   make phase3     check S3: fill, clear and the cursor against the C, on b2
 #   make phase4     check S4: the plotters on every golden pose, on b2
+#   make phase5     check S5u and S5: the clip group and the lines, replayed on b2
 #   make goldens    the pose and input streams
 #   make search     the pose search (a few minutes): poses the goldens miss
 #   make coverage   the coverage gate over every stream
@@ -105,6 +106,12 @@ spike: $(BUILD)/harness0.ssd
 	host/b2up.sh
 	$(PY) host/b2.py spike
 
+phase5: $(BUILD)/harness0.ssd $(BUILD)/harness0_map7.ssd $(BUILD)/harness0_map9.ssd record
+	host/b2up.sh
+	$(PY) host/b2.py phase5
+	$(PY) host/b2.py phase5 transform-all
+	$(PY) host/b2.py phase5 make-synthetic
+
 phase4: $(BUILD)/harness0.ssd $(BUILD)/harness1.ssd goldens
 	host/b2up.sh
 	$(PY) host/b2.py phase4
@@ -124,4 +131,4 @@ stop:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all tool goldens search coverage record cost run phase0 phase1 spike phase2 phase3 phase4 gonogo stop clean
+.PHONY: all tool goldens search coverage record cost run phase0 phase1 spike phase2 phase3 phase4 phase5 gonogo stop clean

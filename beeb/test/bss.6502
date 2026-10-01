@@ -20,3 +20,14 @@
 
 \ check S4 (s4.6502): each pool's image CRC and plot microseconds
 .s4_out SKIP 4 * S4_MAX
+
+\ checks S5 and S5u (s5.6502): a replayed call's context, line, arguments and results
+.rp_pool SKIP 1                     ; pool_last
+.rp_cx SKIP 35
+.rp_line SKIP 7
+.rp_args SKIP 4
+.rp_out SKIP 2
+.rp_cam SKIP 9                      ; the record's CAM (for transform)
+.rp_buf SKIP 40                     ; the arguments, as the record has them (make_line on)
+.rp_res SKIP 41                     ; the results, likewise
+.s5t_out SKIP 2 * S5T_MAX           ; check S5: each pose's CRC of its view vertices

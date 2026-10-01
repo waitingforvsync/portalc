@@ -18,6 +18,7 @@ Test builds talk through the mailbox at &2F0-&2FF (src/layout.6502).
     b2.py phase2 [FNS [SCALE]]  check S2: the arithmetic against the C
     b2.py phase3 [TRIALS]    check S3: fill, clear and the cursor, both buffers
     b2.py phase4             check S4: the plotters on every golden pose, both buffers
+    b2.py phase5 [FNS [N]]   check S5u: the clip group's recorded calls, replayed
 """
 
 import json
@@ -566,6 +567,117 @@ def phase4(builds=('harness0', 'harness1')):
     return ok
 
 
+S5U_FNS = ['cut', 'emit', 'resolve_block', 'clip_line', 'clip_edge_line', 'transform', 'col_gt',
+           'col_ge', 'make_line', 'edge_line']
+
+
+CMD_S5T = 7
+S5T_MAX = 128
+
+
+def s5_transform():
+    """Check S5: every map vertex transformed at every golden pose, CRCed."""
+    ok = True
+    for build, which, files in (('harness0', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
+                                ('harness0_map7', 7, ['map7_poses.bin']),
+                                ('harness0_map9', 9, ['stress_poses.bin'])):
+        boot(os.path.join(BUILD, build + '.ssd'))
+        syms = symbols(build)
+        mb = Mailbox()
+        for name in files:
+            out = os.path.join(BUILD, 's5', name.replace('_poses', ''))
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            subprocess.run([TOOL, 's5t', str(which), os.path.join(BUILD, 'golden', name), out], check=True)
+            with open(out, 'rb') as f:
+                data = f.read()
+            recs = [data[i:i + 7] for i in range(0, len(data), 7)]
+            bad = []
+            for i in range(0, len(recs), S5T_MAX):
+                batch = recs[i:i + S5T_MAX]
+                poke(syms['io_area'], b''.join(r[:5] for r in batch))
+                err, _ = mb.call(CMD_S5T, (len(batch),), timeout=300)
+                if err:
+                    raise B2Error('S5 transform: error %d' % err)
+                got = peek(syms['s5t_out'], 2 * len(batch))
+                bad += [i + k for k, r in enumerate(batch) if got[2 * k:2 * k + 2] != r[5:7]]
+            what = '%s %s, %d poses' % (build, name, len(recs))
+            if bad:
+                ok = False
+                r = recs[bad[0]]
+                print('FAIL   S5 transform %s: %d differ; first, pose %d (camera %d, %d, angle %d)'
+                      % (what, len(bad), bad[0], r[0] | r[1] << 8, r[2] | r[3] << 8, r[4]))
+            else:
+                print('ok     S5 transform %s' % what)
+    return ok
+
+
+CMD_S5M = 8
+S5M_REC = 25
+
+
+def s5_make(count=50000, seed=1):
+    """Check S5: make_line on the oracle's synthetic endpoints, often one near
+    and one far (the near clip's rare branches)."""
+    boot(os.path.join(BUILD, 'harness0.ssd'))
+    syms = symbols('harness0')
+    mb = Mailbox()
+    out = os.path.join(BUILD, 's5', 'make.bin')
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    subprocess.run([TOOL, 's5make', str(seed), str(count), out], check=True)
+    with open(out, 'rb') as f:
+        data = f.read()
+    recs = [data[i:i + S5M_REC] for i in range(0, len(data), S5M_REC)]
+    per = min(255, (syms['junk0'] - syms['io_area']) // S5M_REC)
+    bad = []
+    for i in range(0, len(recs), per):
+        batch = recs[i:i + per]
+        poke(syms['io_area'], b''.join(r[:18] + bytes(7) for r in batch))
+        err, _ = mb.call(CMD_S5M, (len(batch),), timeout=300)
+        if err:
+            raise B2Error('S5 make_line: error %d' % err)
+        got = peek(syms['io_area'], S5M_REC * len(batch))
+        bad += [i + k for k, r in enumerate(batch) if got[k * S5M_REC + 18:(k + 1) * S5M_REC] != r[18:]]
+    if bad:
+        r = recs[bad[0]]
+        print('FAIL   S5 make_line, %d synthetic: %d differ; first, case %d: C line %s, args %s'
+              % (len(recs), len(bad), bad[0], r[18:].hex(), r[:18].hex()))
+        return False
+    print('ok     S5 make_line, %d synthetic endpoint pairs' % len(recs))
+    return True
+
+
+def phase5(fns=None, limit=None):
+    """Check S5u: every recorded call of the clip group, replayed on the Beeb."""
+    import replay
+    if fns == ['make-synthetic']:
+        ok = s5_make()
+        print('phase 5:', 'all checks pass' if ok else 'FAILURES')
+        return ok
+    if fns == ['transform-all']:
+        ok = s5_transform()
+        print('phase 5:', 'all checks pass' if ok else 'FAILURES')
+        return ok
+    boot(os.path.join(BUILD, 'harness0.ssd'))
+    syms = symbols('harness0')
+    mb = Mailbox()
+    ok = True
+    base = replay.baseline(mb)
+    for name in (fns or S5U_FNS):
+        path = os.path.join(BUILD, 'golden', 'replay', name + '.bin')
+        times = []
+        n, bad = replay.check(sys.modules[__name__], mb, syms, path, limit, times)
+        if bad:
+            ok = False
+            print('FAIL   S5u %-15s %d of %d records differ; first, record %d: %s'
+                  % (name, len(bad), n, bad[0][0], bad[0][1]))
+        else:
+            cyc = sorted(2 * (us - base) for us in times)
+            print('ok     S5u %-15s %4d records, cycles a call: median %5d, mean %5.0f, max %6d'
+                  % (name, n, cyc[len(cyc) // 2], statistics.mean(cyc), cyc[-1]))
+    print('phase 5:', 'all checks pass' if ok else 'FAILURES')
+    return ok
+
+
 def spike(seeds=range(256)):
     """The recursion spike (test/spike.6502) against host/spike.py's model, seed by seed."""
     import spike as model
@@ -632,6 +744,10 @@ def main(argv):
         only = set(argv[2].split(',')) if len(argv) > 2 and argv[2] != 'all' else None
         scale = float(argv[3]) if len(argv) > 3 else 1.0
         return 0 if phase2(only, scale) else 1
+    if cmd == 'phase5':
+        fns = argv[2].split(',') if len(argv) > 2 and argv[2] != 'all' else None
+        limit = int(argv[3]) if len(argv) > 3 else None
+        return 0 if phase5(fns, limit) else 1
     if cmd == 'phase4':
         return 0 if (phase4(argv[2].split(',')) if len(argv) > 2 else phase4()) else 1
     if cmd == 'phase3':

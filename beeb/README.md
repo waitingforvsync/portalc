@@ -16,6 +16,7 @@ B2_VIDEO=offscreen make spike    # the recursion spike against its model
 B2_VIDEO=offscreen make phase2   # check S2: every arithmetic routine against the C, and its cycles
 B2_VIDEO=offscreen make phase3   # check S3: fill, clear and the cursor against the C, both buffers
 B2_VIDEO=offscreen make phase4   # check S4: the plotters on every golden pose, both buffers
+B2_VIDEO=offscreen make phase5   # check S5u (every recorded clip-group call replayed) and S5
 make stop                     # stop our b2
 ```
 
@@ -49,6 +50,8 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | `src/hw.6502` | the vsync IRQ with the buffer swap, the clock, palette |
 | `src/mode5.6502` | the buffers: the cursor macros, each buffer's clear and EOR fill |
 | `src/plot.6502` | the plotters: flat, shallow (the carry tree) and steep, over the pool |
+| `src/clip.6502` | pieces and chains, and the clip group: `emit`, `resolve_block`, `clip_line`, `clip_edge_line`, `cut` |
+| `src/lines.6502` | `transform`, the column tests, the side clips, `make_line` and `edge_line` |
 | `src/arith.6502` | the fixed-point arithmetic: quarter-square multiplies, reciprocal divisions, projections, rotation |
 | `src/main.6502` | `start` and the main loop |
 | `test/mailbox.6502` | the host's commands (test builds) |
@@ -56,12 +59,14 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | `test/s2.6502` | check S2: drives each arithmetic routine over a counter or xorshift32, CRCs the results |
 | `test/s3.6502` | check S3: fill, clear, and the cursor walked over every pixel pair of a buffer |
 | `test/s4.6502` | check S4: plots the host's pools and CRCs each image |
+| `test/s5.6502` | checks S5 and S5u: the replay shim, and every vertex transformed at every pose |
 | `test/bss.6502` | the harness's own state |
 | `host/b2up.sh`, `host/b2.py` | b2 start-up and automation |
 | `host/beebtool.c` | the C side: exports, goldens, renders, the search, the recorder, the cost model |
 | `host/trace.py`, `host/trace_hooks.c` | the traced copy of render.c and its hooks (`REPLAY.md`) |
 | `host/coverage.sh`, `host/uncovered.py`, `host/uncovered.txt` | the coverage gate |
 | `host/gonogo.py` | the frame-rate go/no-go: predicted frame times from measured costs |
+| `host/replay.py` | unit replay on the Beeb: records decoded, poked, called, compared (`REPLAY.md`) |
 | `REPLAY.md` | the unit-replay record format |
 
 ## Memory map

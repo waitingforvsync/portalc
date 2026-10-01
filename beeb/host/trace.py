@@ -25,7 +25,8 @@ import sys
 
 # the unit-replay targets (PLAN.md 5.6)
 WRAP = ['emit', 'resolve_block', 'clip_line', 'clip_edge_line', 'cut', 'inst_new', 'seg_record',
-        'inst_issue', 'child_portal', 'next_open', 'close_columns', 'process_edge']
+        'inst_issue', 'child_portal', 'next_open', 'close_columns', 'process_edge', 'make_line',
+        'edge_line', 'transform', 'col_gt', 'col_ge']
 
 # The cost model's counters (host/trace_hooks.c weights them), in report
 # order. Each probe is (file, function, anchor, times, where, amount):

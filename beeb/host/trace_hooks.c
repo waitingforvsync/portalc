@@ -155,6 +155,55 @@ static void enc_closed(tr_buf *b, const pt_closedl *cl)
     put8(b, cl->num);
 }
 
+// A side-clipped endpoint (7): x, y, sx, rx.f, rx.e.
+static void enc_ep(tr_buf *b, const pt_ep *e)
+{
+    put16(b, e->x);
+    put16(b, (uint16_t)e->y);
+    put8(b, e->sx);
+    put8(b, e->rx.f);
+    put8(b, e->rx.e);
+}
+
+static pt_ep dec_ep(const uint8_t **q)
+{
+    pt_ep e;
+    e.x = get16(q);
+    e.y = (int16_t)get16(q);
+    e.sx = get8(q);
+    e.rx.f = get8(q);
+    e.rx.e = get8(q);
+    return e;
+}
+
+// An edge's line state (34): the vertices, their columns, the endpoints
+// once made, and the visit by index.
+static void enc_el(tr_buf *b, const pt_edgelines *el)
+{
+    enc_vv(b, el->v0);
+    enc_vv(b, el->v1);
+    put8(b, el->sx0);
+    put8(b, el->sx1);
+    put8(b, el->have_ep);
+    enc_ep(b, &el->e0);
+    enc_ep(b, &el->e1);
+    put8(b, (uint32_t)(el->vs - el->r->visits));
+}
+
+static pt_edgelines dec_el(const uint8_t **q, const pt_render *r)
+{
+    pt_edgelines el = {.r = r};
+    el.v0 = dec_vv(q);
+    el.v1 = dec_vv(q);
+    el.sx0 = get8(q);
+    el.sx1 = get8(q);
+    el.have_ep = get8(q);
+    el.e0 = dec_ep(q);
+    el.e1 = dec_ep(q);
+    el.vs = &r->visits[get8(q)];
+    return el;
+}
+
 static pt_closedl dec_closed(const uint8_t **q)
 {
     pt_closedl cl;
@@ -346,18 +395,22 @@ static void dec_fs(const uint8_t **q, pt_render *r)
 
 enum {
     TR_emit, TR_resolve_block, TR_clip_line, TR_clip_edge_line, TR_cut, TR_inst_new, TR_seg_record,
-    TR_inst_issue, TR_child_portal, TR_next_open, TR_close_columns, TR_process_edge, TR_N,
+    TR_inst_issue, TR_child_portal, TR_next_open, TR_close_columns, TR_process_edge, TR_make_line,
+    TR_edge_line, TR_transform, TR_col_gt, TR_col_ge, TR_N,
 };
 
 static const char *const tr_names_[TR_N] = {
     "emit", "resolve_block", "clip_line", "clip_edge_line", "cut", "inst_new", "seg_record",
-    "inst_issue", "child_portal", "next_open", "close_columns", "process_edge",
+    "inst_issue", "child_portal", "next_open", "close_columns", "process_edge", "make_line",
+    "edge_line", "transform", "col_gt", "col_ge",
 };
 
-// next_open never touches the renderer: its records carry no frame state
+// The pure ones (next_open, the line maker, the transform and the column
+// tests) never touch the frame: their records carry no frame state
 static bool tr_has_fs(uint32_t fn)
 {
-    return fn != TR_next_open;
+    return fn != TR_next_open && fn != TR_make_line && fn != TR_transform && fn != TR_col_gt
+        && fn != TR_col_ge;
 }
 
 #define TR_FIRST 64
@@ -715,6 +768,91 @@ static void tr_after_process_edge(pt_render *r, pt_portal *p, pt_portal *child, 
     TR_DONE();
 }
 
+static void tr_before_make_line(pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col)
+{
+    TR_BEFORE(make_line, &render_);
+    enc_ep(b, &e0);
+    enc_ep(b, &e1);
+    put8(b, h.m);
+    put8(b, h.below);
+    put8(b, col.e);
+    put8(b, col.o);
+}
+
+static void tr_after_make_line(pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col, pt_line ret)
+{
+    (void) e0, (void) e1, (void) h, (void) col;
+    TR_AFTER(make_line, &render_);
+    enc_line(b, &ret);
+    TR_DONE();
+}
+
+static void tr_before_edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern col)
+{
+    TR_BEFORE(edge_line, el->r);
+    enc_el(b, el);
+    put8(b, slot);
+    put8(b, h.m);
+    put8(b, h.below);
+    put8(b, col.e);
+    put8(b, col.o);
+    enc_fs(b, el->r);
+}
+
+static void tr_after_edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern col, pt_line ret)
+{
+    (void) slot, (void) h, (void) col;
+    TR_AFTER(edge_line, el->r);
+    enc_el(b, el);
+    enc_line(b, &ret);
+    TR_DONE();
+}
+
+static void tr_before_transform(const pt_render *r, pt_vertex w)
+{
+    TR_BEFORE(transform, r);
+    put16(b, w.x);
+    put16(b, w.y);
+}
+
+static void tr_after_transform(const pt_render *r, pt_vertex w, pt_vv ret)
+{
+    (void) w;
+    TR_AFTER(transform, r);
+    enc_vv(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_col_gt(pt_vv v, uint8_t c)
+{
+    TR_BEFORE(col_gt, &render_);
+    enc_vv(b, v);
+    put8(b, c);
+}
+
+static void tr_after_col_gt(pt_vv v, uint8_t c, bool ret)
+{
+    (void) v, (void) c;
+    TR_AFTER(col_gt, &render_);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_col_ge(pt_vv v, uint8_t c)
+{
+    TR_BEFORE(col_ge, &render_);
+    enc_vv(b, v);
+    put8(b, c);
+}
+
+static void tr_after_col_ge(pt_vv v, uint8_t c, bool ret)
+{
+    (void) v, (void) c;
+    TR_AFTER(col_ge, &render_);
+    put8(b, ret);
+    TR_DONE();
+}
+
 // ---- running the streams ----
 
 // The golden streams the recorder and the cost model walk, in order.
@@ -921,6 +1059,53 @@ static bool replay_one(uint32_t fn, const uint8_t *rec, uint32_t len, tr_buf *go
         enc_portal(got, &p);
         pt_portal none = {0};
         enc_portal(got, ret ? &child : &none);
+        break;
+    }
+    case TR_make_line: {
+        pt_ep e0 = dec_ep(&q), e1 = dec_ep(&q);
+        pt_relh h;
+        h.m = get8(&q);
+        h.below = get8(&q);
+        pt_pattern col;
+        col.e = get8(&q);
+        col.o = get8(&q);
+        pt_line L = make_line__impl(e0, e1, h, col);
+        enc_line(got, &L);
+        break;
+    }
+    case TR_edge_line: {
+        pt_edgelines el = dec_el(&q, &r);
+        uint8_t slot = get8(&q);
+        pt_relh h;
+        h.m = get8(&q);
+        h.below = get8(&q);
+        pt_pattern col;
+        col.e = get8(&q);
+        col.o = get8(&q);
+        dec_fs(&q, &r);
+        pt_line L = edge_line__impl(&el, slot, h, col);
+        enc_fs(got, &r);
+        enc_el(got, &el);
+        enc_line(got, &L);
+        break;
+    }
+    case TR_transform: {
+        pt_vertex w;
+        w.x = get16(&q);
+        w.y = get16(&q);
+        enc_vv(got, transform__impl(&r, w));
+        break;
+    }
+    case TR_col_gt: {
+        pt_vv v = dec_vv(&q);
+        c = get8(&q);
+        put8(got, col_gt__impl(v, c));
+        break;
+    }
+    case TR_col_ge: {
+        pt_vv v = dec_vv(&q);
+        c = get8(&q);
+        put8(got, col_ge__impl(v, c));
         break;
     }
     default:

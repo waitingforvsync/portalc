@@ -1,0 +1,98 @@
+\ **************************************************************************
+\ *
+\ *     s4.6502 - check S4: the plotters against the C (PLAN.md 5.7)
+\ *
+\ **************************************************************************
+\
+\ CMD_S4 plots arg0 pools (up to S4_MAX) that the host has packed into
+\ io_area, each as a piece count n and then the pool's fields, n bytes
+\ each, in the order p_x0, p_x1, p_y0, p_glo, p_ghi, p_ce, p_co. For each,
+\ it zeroes the image (the buffer under test and its junk rows; B's junk
+\ row below is ROM, so not that), plots, and leaves the image's CRC-16 and
+\ the plot's microseconds in s4_out, 4 bytes a pool.
+
+CMD_S4 = 5
+S4_MAX = 64
+
+IF TESTBUF == 0
+    S4_BUF = BUF_A
+    S4_END = BUF_A + &1100      ; to the end of the junk row below
+ELSE
+    S4_BUF = BUF_B
+    S4_END = BUF_B + &1000      ; (the junk row below is the ROM)
+ENDIF
+S4_START = S4_BUF - &100        ; the junk row above
+
+\ Copy the next pool field from the record into dest + 1..n, and move on.
+MACRO FIELD dest
+    LDX pool_last : BEQ done
+    LDY #0
+.copy
+    LDA (rec),Y : STA dest + 1,Y
+    INY : DEX : BNE copy
+    TYA : CLC : ADC rec : STA rec
+    BCC done
+    INC rec + 1
+.done
+ENDMACRO
+
+\\ CMD_S4.
+.cmd_s4
+{
+    ZA_AUTO2 rec                ; local: the next record
+    ZA_AUTO1 k, left            ; local: s4_out's index, pools to go
+    ZA_AUTO 4, t0               ; local: the clock before the plot
+    ZA_AUTO2 p, crc             ; local: the CRC's pointer and value
+    LDA #LO(io_area) : STA rec
+    LDA #HI(io_area) : STA rec + 1
+    LDA #0 : STA k
+    LDA MB_ARG : STA left
+    BNE pool
+    RTS
+.pool
+    LDY #0 : LDA (rec),Y : STA pool_last
+    INC rec : BNE @+
+    INC rec + 1
+.@  FIELD p_x0
+    FIELD p_x1
+    FIELD p_y0
+    FIELD p_glo
+    FIELD p_ghi
+    FIELD p_ce
+    FIELD p_co
+    LDA #HI(S4_START) : LDX #HI(S4_END)
+    JSR zero_pages
+    LDA #HI(S4_BUF) : STA scrnbase
+    JSR now
+    ZA_DISCARD t0               ; rebuilt whole by the loop
+    LDX #3
+.keep
+    LDA now.t,X : ZA_INDEXEDBY 0..3
+    STA t0,X : ZA_INDEXEDBY 0..3
+    DEX : BPL keep
+    JSR plot
+    JSR now
+    LDX k
+    SEC
+    LDA now.t : SBC t0 : STA s4_out + 2,X       ; the microseconds, 16 bits
+    LDA now.t + 1 : SBC t0 + 1 : STA s4_out + 3,X
+    LDA #0 : STA crc : STA crc + 1 : STA p      ; CRC-16/XMODEM over the image
+    LDA #HI(S4_START) : STA p + 1
+    LDY #0
+.byte
+    LDA (p),Y
+    EOR crc + 1 : TAX
+    LDA crc : EOR crc_hi,X : STA crc + 1
+    LDA crc_lo,X : STA crc
+    INY : BNE byte
+    INC p + 1
+    LDA p + 1 : CMP #HI(S4_END) : BNE byte
+    LDX k
+    LDA crc : STA s4_out,X
+    LDA crc + 1 : STA s4_out + 1,X
+    TXA : CLC : ADC #4 : STA k
+    DEC left : BEQ done
+    JMP pool                    ; (out of branch range)
+.done
+    RTS
+}

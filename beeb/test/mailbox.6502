@@ -13,6 +13,8 @@
 \            the elapsed microseconds to MB_USECS
 \   2 SPIKE  the recursion spike (spike.6502), seeded by arg0
 \   3 S2     an arithmetic routine against the C (s2.6502)
+\   4 S3     a mode 5 buffer operation, to check against the C (s3.6502)
+\   5 S4     plot pools from the host, CRC each image (s4.6502)
 
 CMD_PING = 0
 CMD_TIME = 1
@@ -35,8 +37,14 @@ ENDMACRO
 .@  CMP #CMD_SPIKE : BNE @+
     JSR cmd_spike
     JMP done
-.@  CMP #CMD_S2 : BNE unknown
+.@  CMP #CMD_S2 : BNE @+
     JSR cmd_s2
+    JMP done
+.@  CMP #CMD_S3 : BNE @+
+    JSR cmd_s3
+    JMP done
+.@  CMP #CMD_S4 : BNE unknown
+    JSR cmd_s4
     JMP done
 .unknown
     LDA #1 : STA MB_ERR

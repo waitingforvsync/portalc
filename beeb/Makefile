@@ -6,11 +6,14 @@
 #   make phase1     the Phase 1 checks, on b2
 #   make spike      the recursion spike against its model, on b2
 #   make phase2     check S2: every arithmetic routine against the C, on b2
+#   make phase3     check S3: fill, clear and the cursor against the C, on b2
+#   make phase4     check S4: the plotters on every golden pose, on b2
 #   make goldens    the pose and input streams
 #   make search     the pose search (a few minutes): poses the goldens miss
 #   make coverage   the coverage gate over every stream
 #   make record     the unit-replay records, each then replayed on the host
 #   make cost       the frame-cost model over the golden poses
+#   make gonogo     predicted frame times from measured costs (after phase4)
 #   make stop       stop our b2 (it runs at full speed, so a core stays busy)
 #   make clean
 #
@@ -56,6 +59,10 @@ record: goldens
 cost: goldens
 	../build/beeb/host/portalc_beebtool_trace cost $(BUILD)/golden
 
+gonogo: goldens
+	../build/beeb/host/portalc_beebtool_trace cost $(BUILD)/golden $(BUILD)/counters.csv > /dev/null
+	$(PY) host/gonogo.py $(BUILD)/counters.csv
+
 $(BUILD):
 	mkdir -p $(BUILD)/portal $(BUILD)/harness0 $(BUILD)/harness1 $(BUILD)/golden
 
@@ -98,6 +105,14 @@ spike: $(BUILD)/harness0.ssd
 	host/b2up.sh
 	$(PY) host/b2.py spike
 
+phase4: $(BUILD)/harness0.ssd $(BUILD)/harness1.ssd goldens
+	host/b2up.sh
+	$(PY) host/b2.py phase4
+
+phase3: $(BUILD)/harness0.ssd $(BUILD)/harness1.ssd tool
+	host/b2up.sh
+	$(PY) host/b2.py phase3
+
 phase2: $(BUILD)/harness0.ssd tool
 	host/b2up.sh
 	$(PY) host/b2.py phase2
@@ -109,4 +124,4 @@ stop:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all tool goldens search coverage record cost run phase0 phase1 spike phase2 stop clean
+.PHONY: all tool goldens search coverage record cost run phase0 phase1 spike phase2 phase3 phase4 gonogo stop clean

@@ -8,7 +8,11 @@
 \ unlike zeros, so the S0 check proves the largest image loads and copies
 \ down intact. Later phases drop this as real code takes the space.
 
+\ Once S0 has checked it, the pad is the host's I/O area: io_area up to
+\ CODE_GUARD (S4's pools).
+
 .pad
+.io_area
 FOR i = P% ..< CODE_GUARD
     EQUB (i * 37 + (i DIV 256) * 11 + 5) AND 255
 NEXT

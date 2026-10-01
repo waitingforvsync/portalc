@@ -14,3 +14,9 @@
 .s2_calls SKIP 4                    ; the cases used
 .s2_out SKIP 2                      ; the CRC
 .s2_last SKIP 4                     ; the last case's outputs
+
+\ check S3 (s3.6502): the plots' patterns, two a plot
+.s3_pat SKIP 256
+
+\ check S4 (s4.6502): each pool's image CRC and plot microseconds
+.s4_out SKIP 4 * S4_MAX

@@ -4,7 +4,17 @@
 \ *
 \ **************************************************************************
 \
-\ Zeroed by start. From Phase 5: the piece pool as parallel pages, the
-\ visits, the sprite instances, the segment pool, the toggle list.
+\ Zeroed by start. The piece pool (Phase 4); from Phase 5 the visits, the
+\ sprite instances, the segment pool, the toggle list.
 
 .bss_start
+\ The pool: a page a field, indexed by piece (1..255; 0 is the C's null
+\ piece). Pages first, so every one is aligned.
+.p_x0   SKIP 256                ; first column
+.p_x1   SKIP 256                ; one past the last
+.p_y0   SKIP 256                ; the row at x0
+.p_glo  SKIP 256                ; the gradient: its fraction...
+.p_ghi  SKIP 256                ; ...and its sign (bit 7) and whole rows
+.p_ce   SKIP 256                ; the colour's even pattern...
+.p_co   SKIP 256                ; ...and odd; both 0: a bound, not plotted
+.p_next SKIP 256                ; the next piece in its chain, 0 = the end

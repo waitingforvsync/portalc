@@ -4,7 +4,7 @@
 
 1. The port lives in `portalc/beeb/` and targets a 32K Model B, written in Baron. The file loads at &1200, the loader stub copies it down to &300, it runs on b2 ("B/Acorn 1770"), and for every pose its frame must be byte-identical to `pt_render_frame`'s.
 2. The port takes the machine over completely. It owns IRQ1V and enables only vsync (CA1). It makes no OS calls after the copy and uses zero page &00-&FB. Page-2 scratch avoids &27E-&29B, which survives BREAK. Esc exits through a power-on reset.
-3. Runtime map: tables at &300-&EFF (`nrm[0]` doubles as an RTI at &D00), code at &F00-&4DFF, BSS at &4E00-&5CFF, and two 4K buffers at &5E00 and &6F00 that share a middle junk page. Headroom is about 3.2K at the size estimate and close to zero if code runs 25% over.
+3. Runtime map: tables at &300-&EFF (`nrm[0]` doubles as an RTI at &D00), code at &F00-&4DFF, BSS at &4E00-&56FF, and two 4K buffers at &5800 and &7000 (so R13 stays 0), with 1.5K of spare RAM between them and the ROM at &8000 as B's junk row below. Headroom is about 3.2K at the size estimate and close to zero if code runs 25% over.
 4. The screen set-up and IRQ are spritescale's, with the swap moved into the IRQ: it writes R12/R13 during blanking, so there is no tearing, and it counts vsyncs. Each frame, the camera's per-vsync movement and turn deltas are added N times (N = vsyncs since the last swap) and applied in **one** camera tick. The C gets the same entry point, so the camera stays exact.
 5. Each stage is checked through a page-2 mailbox over b2's HTTP API. Results are diffed field by field against a C oracle (a unity build of the engine), then whole frames are compared with `sweep.bin` and the new goldens.
 6. A coverage gate requires the goldens to execute every C line that is ported. The extra goldens are: searched poses, a deep-corridor stress map, the 7-sprite map's 4,688 frames, and camera input over all 64 key combinations. Any line still missed is listed with a reason.
@@ -34,7 +34,7 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | # | Needed before | Question | My default |
 |---|---|---|---|
 | D1 | Phase 1 | **C host tooling.** (a) The oracle is a unity build that `#include`s every engine `.c` file and links only richc, so it can reach the static helpers and tables without a second copy of them. (b) `add_test_sprites` (static in `test_sprite.c`) moves to a small shared helper. (c) Unit replay intercepts static render functions through a copy of `render.c` generated at build time, with only the chosen definitions renamed, so there is no engine edit. The alternative is a compiled-out `PT_TRACE` hook in `render.c`. (d) The scratch frame-cost model (`cost/costrun.c`) moves into `beeb/host` so it can be recalibrated. | Yes to (a), (b) and (d). Generated copy for (c). |
-| D2 | Phase 0 | The buffers share their middle junk page: &6E00 is the junk below A and the junk above B. This saves 256 bytes and relies on junk never being read, filled or displayed (spec §8.3). | Share it. |
+| D2 | Phase 0 | The buffers share their middle junk page. This saves 256 bytes and relies on junk never being read, filled or displayed (spec §8.3). *Rich, Phase 3:* B's junk row below is the paged ROM at &8000, where stores go nowhere. *Rich, Phase 4:* superseded by buffers at &5800 and &7000, multiples of &800, so the CRTC's start address has a low byte of 0 and R13 never changes. A's junk rows are &5700 and &6800, B's above is &6F00, and &6900-&6EFF between them is spare RAM. | Share it (superseded). |
 | D3 | — | *Resolved:* the sprite quirk was a bug (a sprite whose centre left the view cone vanished instead of sliding off the screen edge). The C now forms the depth's reciprocal in `inst_new`, so there is nothing to copy; `transform` still stores `rx` only inside the frustum, and nothing else reads it outside. | Fixed in C (22 sweep frames changed). |
 | D4 | Phase 8 | *Settled by Rich:* deltas added N times, one tick. Open detail: when turning while moving, is each of the N steps' facing step taken at the angle after that step's turn (the same path as N real ticks, minus collision per step), or all at the final angle? And does N keep main.c's clamp of 12? | Per step, turn then step, like N ticks would; clamp at 12. The C gets `pt_camera_step(c, m, input, n)`, identical to `pt_camera_tick` at n = 1, so the sweep and tests don't change. |
 | D5 | Phase 0 | How to run b2 without a visible window: a visible or minimised window (works today), `SDL_VIDEODRIVER=offscreen` (untested), or Xvfb (needs `sudo apt install xvfb`). | Visible window. I try offscreen once. |
@@ -44,6 +44,8 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | D9 | Phase 6 | What the release build does when a capacity limit overflows (pool, segments, toggles, pending, closed). The C panics at these points, so there is no reference. | Abort the frame: restore S, clear `cell_visit`, skip the swap so the previous frame stays on screen, and count the abort. Test builds TRAP instead. |
 | D10 | End of Phase 1 | Ported lines that no golden input reaches, even after the pose search and the stress map. Accept them as verified by code review only, or build more stress inputs? | *Settled by Rich:* dead code is not ported. The rest is listed with reasons in `host/uncovered.txt`. |
 | D11 | Phase 2 | Should the JOURNAL's Python 6502 interpreter be used alongside b2 to get exact cycle counts per routine? | No. Batch timing comes from T2 on b2; exact per-routine cycles, when wanted, from jsbeeb-mcp (§5.10). |
+| D13 | Phases 6-7 | *Rich's idea, Phases 3-4:* the junk rows (&5700, &6800 and &6F00, 768 bytes) double as scratch. Only the plotters write them, so they hold anything whose lifetime doesn't cross the plot: the visits (24 fields of 24 bytes, three rows' worth), `cell_visit`, pending and the clip scratch, about 730 bytes. Test builds zero them between capture and plot, so whole-frame checks still compare the overruns. The spare &6900-&6EFF (1.5K) is never written by anything but us, so it takes what does cross the plot: six of the pool's eight pages (each field page stands alone). BSS below the screens then needs about 1.35K (two pool pages, instances 480, segments 256, toggles 96), and `BSS_BASE` can rise from &4E00 to about &5100, about 768 bytes more for code. | Place it so when Phase 7 settles `BSS_BASE`. |
+| D14 | Phase 4 | *Settled by Rich:* `scrnbase` (`ZA_AUTO`, a page) is the buffer being drawn. Clear, plot and fill work on it (clear and fill by picking their unrolled body; plot through `AT`). The main loop sets `swapreq`; the IRQ writes R12 = `scrnbase` DIV 8, turns `scrnbase` to the other buffer and clears `swapreq`. | Done. Open for Phase 9: Rich's loop posts the swap and waits for it straight away; waiting just before the render instead lets camera and capture (which never touch a buffer) overlap the wait, about 13% more frames a second on the goldens (JOURNAL.md, Phase 4). |
 | D12 | Phase 2 | *Settled by Rich:* the arithmetic primitives (`mulu8` through `mul_recip16`, and the accumulator shifts) are macros, expanded inline on the caller's variables. The composites stay routines. This costs about 410 bytes over routines (2,241 against 1,831). | Macros, named after their C functions. |
 
 **Process.** Each phase ends with a JOURNAL.md entry. The spec is updated on the schedule in §7. Nothing is committed until you have reviewed it.
@@ -73,12 +75,14 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | &E00-&EFF | 256 | `sbyte` |
 | &F00-&4DFF | 16,128 | Code, map, art, shades, masks, IRQ, keyboard tables. `Code guard = BSS_BASE`. |
 | &4E00-&55FF | 2048 | Piece pool as 8 parallel pages: `p_x0`, `p_x1`, `p_y0`, `p_glo`, `p_ghi`, `p_ce`, `p_co`, `p_next`. |
-| &5600-&5CFF | 1792 | Visits (24 × 24), `cell_visit` (24), instances (8 × about 60), segment pool (256), toggles (96), pending (32), closed/chain/clip scratch (about 100). About 1,560 bytes in all. |
-| &5D00-&5DFF | 256 | Junk row above A |
-| &5E00-&6DFF | 4096 | **Buffer A.** R12 = &0B, R13 = &C0. |
-| &6E00-&6EFF | 256 | Junk row shared by A and B (D2) |
-| &6F00-&7EFF | 4096 | **Buffer B.** R12 = &0D, R13 = &E0. |
-| &7F00-&7FFF | 256 | Junk row below B. The displayed MA stays below &1000, so the hardware wrap latch plays no part. |
+| &5600-&56FF | 256 | The rest of BSS: instances (8 × about 60), segment pool (256), toggles (96), until D13 places them (with visits, `cell_visit`, pending and the clip scratch in the junk rows) |
+| &5700-&57FF | 256 | Junk row above A; scratch outside the plot (D13) |
+| &5800-&67FF | 4096 | **Buffer A.** R12 = &0B, R13 = &00. |
+| &6800-&68FF | 256 | Junk row below A; scratch outside the plot (D13) |
+| &6900-&6EFF | 1536 | Spare: never plotted, filled, cleared or shown (D13) |
+| &6F00-&6FFF | 256 | Junk row above B; scratch outside the plot (D13) |
+| &7000-&7FFF | 4096 | **Buffer B.** R12 = &0E, R13 = &00. The displayed MA stays below &1000, so the hardware wrap latch plays no part. |
+| &8000-&80FF | 256 | B's junk row below: the paged ROM, so stores go nowhere (D2) |
 
 `BSS_BASE = &4E00` is a single constant in `layout.6502` and moves by whole pages after Phase 7. Bss is a top-level section with no filename, so it never goes on disc.
 
@@ -88,8 +92,8 @@ The harness is not bound by the release headroom. The release BSS region is give
 
 | Build | Code guard | BSS | Buffer under test | I/O area |
 |---|---|---|---|---|
-| `harness -D TESTBUF=0` | &5D00 | &6F00-&7EFF (inside B) | A, plus junk &5D00 and &6E00 | From the end of Code to &5CFF, plus buffer A for stages that don't render |
-| `harness -D TESTBUF=1` | &5D00 | &5E00-&6DFF (inside A) | B, plus junk &6E00 and &7F00 | From the end of Code to &5CFF, plus buffer B likewise |
+| `harness -D TESTBUF=0` | &5700 | &7000-&7FFF (inside B) | A, plus junk &5700 and &6800 | From the end of Code to &56FF, plus buffer A for stages that don't render |
+| `harness -D TESTBUF=1` | &5700 | &5800-&67FF (inside A) | B, plus junk &6F00 (its junk below is ROM) | From the end of Code to &56FF, plus buffer B likewise |
 | `portal -D SCRIPTED` / `-D PROFILE` | `BSS_BASE` | release | both | Log ring in the headroom below `BSS_BASE`, with a minimum size ASSERTed |
 
 - Harness builds always contain **the whole release Code section implemented so far**. On top of that they add the mailbox, shims, TRAPs, a CRC-16 table and T2 timing, budgeted at about 2.5K and checked with an ASSERT.
@@ -97,7 +101,7 @@ The harness is not bound by the release headroom. The release BSS region is give
 
 ### 2.3 Load time
 
-- **Payload.** &1200 to &1200+N−1 holds the image assembled for &300. N is at most &4B00 in the release build and at most &5A00 in harness builds.
+- **Payload.** &1200 to &1200+N−1 holds the image assembled for &300. N is at most &4B00 in the release build and at most &5400 in harness builds.
 - **Stub.** The stub follows the payload and is also the exec address (`exec=&FFFF0000+entry`). `guard=&7C00` on Loader keeps the MODE 7 screen intact.
 - **The stub never writes screen memory before the copy.** A harness image can reach about &6C00, so the buffers are cleared by `start`, after the copy. The clear bodies are the main loop's own, so this costs no extra code.
 - **The copy is safe.** Destination is &F00 below source, so an ascending page copy never overwrites unread bytes. The whole-page overrun (up to 255 bytes past the payload) lands in BSS or junk, which `start` zeroes or ignores. The stub is never overwritten.
@@ -108,7 +112,7 @@ The harness is not bound by the release headroom. The release BSS region is give
 |---|---|---|---|
 | Fixed tables &300-&EFF | 3,072 | 3,072 | 3,072 |
 | Code and data &F00-&4DFF | 16,128 | about 12,950 | about 15,900 |
-| BSS &4E00-&5CFF | 3,840 | about 3,600 | same |
+| BSS &4E00-&56FF, the spare &6900-&6EFF, junk rows as scratch (D13) | 2,304 + 1,536 + 768 | about 3,600 | same |
 | Page 2 scratch | 204 | about 170 | same |
 | **Headroom** | | **about 3.2K** | **about 0.2K** |
 
@@ -155,8 +159,9 @@ beeb/
 ```
 INCLUDE "src/layout.6502"                 ; BSS_ORG, CODE_GUARD chosen by IF on HARNESS/TESTBUF
 ZA_POOL &00..&FB
-SECTION Screens, org=&5D00                ; labels only, never saved
-.junk0 SKIP &100 : .bufa SKIP &1000 : .junk1 SKIP &100 : .bufb SKIP &1000 : .junk2 SKIP &100
+SECTION Screens, org=&5700                ; labels only, never saved
+.junk0 SKIP &100 : .bufa SKIP &1000 : .junk1 SKIP &100 : .spare SKIP &600 : .junk2 SKIP &100
+.bufb SKIP &1000                          ; B's junk row below: the ROM
 ENDSECTION
 SECTION Bss, org=BSS_ORG, guard=BSS_ORG_END
   INCLUDE "src/bss.6502"
@@ -179,7 +184,7 @@ ENDSECTION
 2. `SEI`.
 3. Write &7F to &FE4E, &FE6E, &FE4D and &FE6D (both IERs and both IFRs).
 4. DDRA=&7F (&FE43), DDRB=&0F (&FE42), latch &03 to &FE40 (auto-scan off), PCR=&04 (&FE4C).
-5. All 16 palette entries black to &FE21, ULA control &C4 to &FE20, then CRTC R0-R13: 63, 32, 45, &24, 38, 0, 16, 26, 0, 7, 32, 8, then &0B, &C0. Whatever is in buffer A while the image is still there shows only as black.
+5. All 16 palette entries black to &FE21, ULA control &C4 to &FE20, then CRTC R0-R13: 63, 32, 45, &24, 38, 0, 16, 26, 0, 7, 32, 8, then &0B, &00. Whatever is in buffer A while the image is still there shows only as black.
 6. IRQ1V = `irq` and BRKV = `trap`.
 7. Copy and jump:
    ```
@@ -191,10 +196,10 @@ ENDSECTION
 
 **`start`:**
 1. Zero &2F0-&2FF (the mailbox and OSFILE block), both page-2 scratch blocks, the walk save stack and BSS.
-2. Clear both buffers and all three junk rows. In test builds, fill the stack canary.
+2. Clear both buffers, the junk rows and the spare. In test builds, fill the stack canary.
 3. Write the real palette (`physcols = {0,4,1,2}`, 16 bytes).
 4. User VIA T2: ACR bit 5 = 0, load &FFFF, IER bit 5 off.
-5. Initial state: front buffer A, back buffer B, `swapreq=0`, camera at the exported start pose in cell 2.
+5. Initial state: front buffer A, `scrnbase` = B's page, `swapreq=0`, camera at the exported start pose in cell 2.
 6. `LDA #&7F : STA &FE4D`, then `LDA #&82 : STA &FE4E`, then `CLI`.
 7. The release build goes to `mainloop`. The harness writes the magic last, then enters the mailbox loop. A `HALT_AT_START` build spins here.
 
@@ -285,17 +290,18 @@ This is spritescale's `irq` (ack CA1, count), with the swap moved in from its `s
       LDA #&02 : STA &FE4D            ; ack CA1
       INC vsyncs                      ; 50.08 Hz, 19,968 us per frame
       LDA swapreq : BEQ out
-      LDA #12 : STA &FE00 : LDA nextr12 : STA &FE01
-      LDA #13 : STA &FE00 : LDA nextr13 : STA &FE01
+      LDA #12 : STA &FE00
+      LDA scrnbase : LSR A : LSR A : LSR A : STA &FE01    ; show it (R13 is 0 for both)
+      LDA scrnbase : EOR #(&58 EOR &70) : STA scrnbase    ; draw into the other
       LDA vsyncs : STA swapstamp
       LDA #0 : STA swapreq            ; old front buffer is now free
 .out  LDA &FC : RTI
 ```
 
-- **Cost.** About 50 cycles, or 85 on a swap.
-- **Why it can't tear.** With R4=38, R6=16 and R7=26, the IRQ lands in blanking, about 6.6 ms before the 6845 latches R12/R13 at the next frame start. Both register writes therefore take effect together.
+- **Cost.** About 50 cycles, or 80 on a swap.
+- **Why it can't tear.** With R4=38, R6=16 and R7=26, the IRQ lands in blanking, about 6.6 ms before the 6845 latches R12/R13 at the next frame start. Both buffers start on a multiple of &800, so R13 is always 0 and only R12 changes (D14).
 - **All CRTC accesses happen in the IRQ.** The main loop never writes &FE00.
-- **Shared state.** Every value the IRQ shares with the main loop is a single byte. `nextr12`/`nextr13` are written before `swapreq`.
+- **Shared state.** Every value the IRQ shares with the main loop is a single byte. `scrnbase` names the buffer being drawn: the main loop reads it, and only the IRQ changes it, at a swap.
 
 ### 4.2 Main loop
 
@@ -307,11 +313,9 @@ This is spritescale's `irq` (ack CA1, count), with the swap moved in from its `s
   STA nticks                            ; nticks x (turn, add the facing step), then
   JSR camera_step                       ;   one collision/slide/crossing tick
   JSR capture                           ; BSS only: overlaps the pending swap
-.@ LDA swapreq : BNE @-
-  JSR clear_back : JSR plot : JSR sprite_pass : JSR fill_back
-  LDX backbuf : LDA r13_of,X : STA nextr13 : LDA r12_of,X : STA nextr12
-  LDA #1 : STA swapreq
-  TXA : EOR #1 : STA backbuf
+.@ LDA swapreq : BNE @-                ; the last swap shown: scrnbase is free
+  JSR clear : JSR plot : JSR sprite_pass : JSR fill
+  LDA #1 : STA swapreq                  ; the IRQ shows it and turns scrnbase
   JMP mainloop
 ```
 
@@ -408,7 +412,7 @@ These numbers are replaced at the fps go/no-go point at the end of Phase 4 (§5.
 - One `harness.6502`, built with `TESTBUF=0` and `TESTBUF=1` (§2.2), and with `MAP=0|7|S`.
 - It carries the full release Code implemented so far, with the mailbox as a second `ZA_ENTRY`. Zero-page allocation therefore matches the release build closely.
 - `check.py zpdiff` reports every zero-page address that differs between `harness*.json` and `portal.json`.
-- Every stage that writes a buffer runs on **both** buffers. Before each test, both of that buffer's junk rows are zeroed, and the junk rows (including &6E00) are part of the comparison.
+- Every stage that writes a buffer runs on **both** buffers. Before each test, both of that buffer's junk rows are zeroed, and the junk rows are part of the comparison. B's junk row below is the ROM at &8000: it can't be zeroed or compared, so checks only confirm it still reads the same.
 - **Batch sizes** are floor(I/O area / record size), taken from the symbols.
 - **Exhaustive and random arithmetic domains** are generated on the Beeb:
   - either by enumeration, or by a 16-bit xorshift that the oracle mirrors;

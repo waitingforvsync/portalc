@@ -43,7 +43,7 @@ ENDIF
 
     LDA #0
     STA vsyncs : STA swapreq : STA swapstamp
-    LDA #1 : STA backbuf            ; the stub shows A: draw into B
+    LDA #HI(BUF_B) : STA scrnbase   ; the stub shows A: draw into B
 
     LDA #&7F : STA &FE4D            ; nothing pending
     LDA #&82 : STA &FE4E            ; vsync (CA1) only
@@ -59,38 +59,25 @@ ELSE
 ENDIF
 }
 
-ZA_AUTO1 backbuf                    ; main loop state: the buffer being drawn, 0 = A, 1 = B
-
 IF NOT(HARNESS)
-\\ Phase 0's loop: each frame, draw one of two test patterns into the back
-\\ buffer, with a band that moves down a row each frame, and have the IRQ
-\\ swap it in. A tear, or drawing into the buffer on show, would show up as
-\\ a broken band.
+\\ Phase 0's loop: each frame, draw one of two test patterns into the
+\\ buffer scrnbase names (bars in A, a checkerboard in B), with a band that
+\\ moves down a row each frame, then post it and wait for the IRQ to show
+\\ it and turn scrnbase to the other. A tear, or drawing into the buffer on
+\\ show, would show up as a broken band.
 .mainloop
 {
     ZA_AUTO1 frame                  ; local: frames drawn, for the band's position
     LDA #0 : STA frame
 .loop
-.wait
-    LDA swapreq : BNE wait          ; the last swap not shown yet: B is busy
-
-    LDA backbuf : BNE drawb
-    JSR clear_a
-    LDA #HI(BUF_A) : STA draw.page
-    JMP drawn
-.drawb
-    JSR clear_b
-    LDA #HI(BUF_B) : STA draw.page
-.drawn
-    LDA backbuf : STA draw.kind
+    JSR clear
+    LDA scrnbase : STA draw.page
+    CMP #HI(BUF_B) : LDA #0 : ROL A : STA draw.kind     ; 1 in B
     LDA frame : STA draw.frame
     JSR draw
-
-    LDX backbuf
-    LDA r13_of,X : STA nextr13
-    LDA r12_of,X : STA nextr12
     LDA #1 : STA swapreq
-    TXA : EOR #1 : STA backbuf
+.wait
+    LDA swapreq : BNE wait          ; shown, and scrnbase turned
     INC frame
     JMP loop
 }

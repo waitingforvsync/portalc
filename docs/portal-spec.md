@@ -910,16 +910,32 @@ A steep line moves its whole rows per column one at a time, as a shallow one doe
 
 ### 8.2 Fill
 
-Two passes (even rows, odd rows), column-major, unrolled `EOR row,X : STA row,X`.
-About 9 cycles per byte, roughly 18 ms for 4K; the two passes do not change the total.
+Two passes (even rows, odd rows), column-major, unrolled `EOR row,X : STA row,X`,
+with X the byte column's block so no operand crosses a page. 9 cycles a byte:
+37.0k cycles (18.5 ms) for 4K, measured on the Beeb. The two passes do not change
+the total.
 
 ### 8.3 Buffers and clearing
 
-In-place for now: plot into the back buffer, fill in place, clear it for the next
-frame (about 10 ms for 4K). The buffer has a 256-byte junk character row above and
-below it for plot overruns (§8.1); they are never cleared, filled or displayed. A separate 4K line buffer, cleared by re-plotting the
-frame's pieces with EOR, would likely save 5 ms or more per frame and can be adopted
-later without changing the capture.
+In place: plot into the back buffer, fill it in place, and clear it before the next
+frame's plot. There are two buffers, A at &5800 and B at &7000. Both start on a
+multiple of &800, so the CRTC's start address (the address DIV 8) has a low byte of
+0: a swap only writes R12. Each buffer has a 256-byte junk character row above and
+below it for plot overruns (§8.1), which are never cleared, filled or displayed:
+A's are &5700 and &6800, B's above is &6F00, and B's below is the paged ROM at
+&8000, where stores go nowhere. Only the plotters write the RAM junk rows, so
+outside the plot they're 768 bytes of scratch; &6900-&6EFF between them is never
+written at all, 1.5K of ordinary RAM.
+
+Each buffer has its own clear and fill bodies, with its addresses as operands, so
+neither needs an index register or a pointer to say which buffer. The clear stores
+zero to the buffer's 16 pages, 256 times round: 21.8k cycles (11 ms). The fill is
+§8.2's. The four bodies take 1.7K.
+
+A separate 4K line buffer was considered: plot into it, fill from it into the back
+buffer, and clear it by re-plotting the frame's pieces with EOR, which would save
+much of the clear. It is ruled out on memory: it needs about 4.5K with its junk rows,
+and the Beeb's whole headroom is about 3.2K (beeb/PLAN.md §2.4).
 
 ## 9. Scaled sprites
 

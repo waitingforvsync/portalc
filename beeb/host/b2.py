@@ -15,10 +15,14 @@ Test builds talk through the mailbox at &2F0-&2FF (src/layout.6502).
     b2.py boot DISC.ssd      reset into the Model B config and boot a disc
     b2.py phase0             the Phase 0 checks (PLAN.md section 6)
     b2.py phase1             the Phase 1 checks: S1, the tables and the map
+    b2.py phase2 [FNS [SCALE]]  check S2: the arithmetic against the C
+    b2.py phase3 [TRIALS]    check S3: fill, clear and the cursor, both buffers
+    b2.py phase4             check S4: the plotters on every golden pose, both buffers
 """
 
 import json
 import os
+import random
 import statistics
 import subprocess
 import sys
@@ -381,6 +385,187 @@ def phase2(only=None, scale=1.0):
     return ok
 
 
+CMD_S3 = 4
+S3_OPS = ['fill', 'clear', 'plot', 'down', 'up', 'right']
+S3_NONE = 6
+S3_IMAGE = 0x1200                  # a buffer and its junk row either side
+ROM = 0x8000                       # B's junk row below: the paged ROM, stores go nowhere
+
+
+def s3_expect(op, img, pats):
+    """The C's image after the operation (beebtool s3)."""
+    d = os.path.join(BUILD, 's3')
+    os.makedirs(d, exist_ok=True)
+    paths = [os.path.join(d, n) for n in ('in.bin', 'pats.bin', 'out.bin')]
+    for path, data in zip(paths, (img, pats)):
+        with open(path, 'wb') as f:
+            f.write(data)
+    subprocess.run([TOOL, 's3', str(op)] + paths, check=True)
+    with open(paths[2], 'rb') as f:
+        return f.read()
+
+
+def s3_where(i):
+    """An image offset as the canvas sees it."""
+    page, b = divmod(i, 256)
+    scanline = (page - 1) * 8 + (b & 7)          # the junk row above is -8..-1
+    return 'canvas row %d (scanline %d), byte column %d' % (scanline // 2, scanline, b >> 3)
+
+
+def phase3(trials=8, seed=3):
+    """Check S3: fill, clear and the cursor macros against the C, on both buffers."""
+    rng = random.Random(seed)
+    ok = True
+    for build, buf in (('harness0', 'bufa'), ('harness1', 'bufb')):
+        boot(os.path.join(BUILD, build + '.ssd'))
+        syms = symbols(build)
+        mb = Mailbox()
+        lo = syms[buf] - 0x100
+        n = min(S3_IMAGE, ROM - lo)        # the image the host can poke
+        rom = peek(ROM, 0x100)
+        _, base = mb.call(CMD_S3, (S3_NONE,))
+        for op, name in enumerate(S3_OPS):
+            first = None
+            bad = 0
+            total = 0
+            for t in range(trials):
+                img = rng.randbytes(S3_IMAGE)
+                pats = rng.randbytes(256)
+                poke(lo, img[:n])
+                poke(syms['s3_pat'], pats)
+                err, us = mb.call(CMD_S3, (op,))
+                if err:
+                    raise B2Error('S3 %s: error %d' % (name, err))
+                total += us
+                got = peek(lo, S3_IMAGE)
+                want = s3_expect(op, img, pats)
+                diffs = [i for i in range(n) if got[i] != want[i]]
+                if n < S3_IMAGE and got[n:] != rom:
+                    raise B2Error('S3 %s: the ROM at &%X changed' % (name, ROM))
+                if diffs:
+                    bad += 1
+                    first = first or (diffs, got, want)
+            what = '%s %-5s %d images' % (build, name, trials)
+            cycles = (total / trials - base) * 2
+            if first is None:
+                print('ok     S3 %-30s %8.0f cycles' % (what, cycles))
+            else:
+                ok = False
+                diffs, got, want = first
+                i = diffs[0]
+                print('FAIL   S3 %s: %d differ; first, %d bytes, at &%04X, %s: C &%02X, Beeb &%02X'
+                      % (what, bad, len(diffs), lo + i, s3_where(i), want[i], got[i]))
+    print('phase 3:', 'all checks pass' if ok else 'FAILURES')
+    return ok
+
+
+CMD_S4 = 5
+S4_MAX = 64
+
+
+def s4_records(path):
+    """A file of S4 records: (pool bytes, CRC with B's junk row below, CRC without)."""
+    with open(path, 'rb') as f:
+        data = f.read()
+    out = []
+    i = 0
+    while i < len(data):
+        n = data[i]
+        end = i + 1 + 7 * n
+        out.append((data[i:end], data[end] | data[end + 1] << 8, data[end + 2] | data[end + 3] << 8))
+        i = end + 4
+    return out
+
+
+def s4_sets():
+    """The golden poses' pools and the random ones, from the oracle."""
+    d = os.path.join(BUILD, 's4')
+    os.makedirs(d, exist_ok=True)
+    g = os.path.join(BUILD, 'golden')
+    sets = []
+    for name, which, poses in (('sweep', 0, 'sweep_poses.bin'), ('rim', 0, 'rim_poses.bin'),
+                               ('search0', 0, 'search0_poses.bin'), ('map7', 7, 'map7_poses.bin'),
+                               ('stress', 9, 'stress_poses.bin')):
+        out = os.path.join(d, name + '.bin')
+        subprocess.run([TOOL, 's4', str(which), os.path.join(g, poses), out], check=True)
+        sets.append((name, s4_records(out)))
+    for name, seed, count, pieces in (('one piece', 1, 3000, 1), ('full pool', 2, 40, 255)):
+        out = os.path.join(d, name.replace(' ', '_') + '.bin')
+        subprocess.run([TOOL, 's4random', str(seed), str(count), str(pieces), out], check=True)
+        sets.append((name, s4_records(out)))
+    return sets
+
+
+def s4_beeb(mb, syms, pools):
+    """Plot pools on the Beeb, as many a call as fit: (CRC, microseconds) each."""
+    room = syms['junk0'] - syms['io_area']
+    out = []
+    i = 0
+    while i < len(pools):
+        batch = []
+        size = 0
+        while i + len(batch) < len(pools) and len(batch) < S4_MAX \
+                and size + len(pools[i + len(batch)]) <= room:
+            size += len(pools[i + len(batch)])
+            batch.append(pools[i + len(batch)])
+        poke(syms['io_area'], b''.join(batch))
+        err, _ = mb.call(CMD_S4, (len(batch),), timeout=300)
+        if err:
+            raise B2Error('S4: error %d' % err)
+        r = peek(syms['s4_out'], 4 * len(batch))
+        out += [(r[k] | r[k + 1] << 8, r[k + 2] | r[k + 3] << 8) for k in range(0, len(r), 4)]
+        i += len(batch)
+    return out
+
+
+def s4_culprit(mb, syms, pool, which):
+    """The first piece of a failing pool that fails on its own."""
+    n = pool[0]
+    pieces = [bytes([1]) + bytes(pool[1 + k * n + p] for k in range(7)) for p in range(n)]
+    d = os.path.join(BUILD, 's4')
+    with open(os.path.join(d, 'culprit_in.bin'), 'wb') as f:
+        f.write(b''.join(pieces))
+    subprocess.run([TOOL, 's4crc', os.path.join(d, 'culprit_in.bin'), os.path.join(d, 'culprit.bin')],
+                   check=True)
+    want = s4_records(os.path.join(d, 'culprit.bin'))
+    got = s4_beeb(mb, syms, pieces)
+    for p, ((_, ca, cb), (crc, _)) in enumerate(zip(want, got)):
+        if crc != (ca if which == 0 else cb):
+            x0, x1, y0, glo, ghi, ce, co = pieces[p][1:]
+            g = '%s%d.%03d' % ('-' if ghi & 0x80 else '+', ghi & 0x7F, glo * 1000 // 256)
+            return 'piece %d: x %d..%d, y0 %d, g %s, colour &%02X/&%02X' % (p + 1, x0, x1, y0, g, ce, co)
+    return 'no single piece fails on its own'
+
+
+def phase4(builds=('harness0', 'harness1')):
+    """Check S4: every golden pose's pool, and random ones, plotted on both buffers."""
+    sets = s4_sets()
+    ok = True
+    for build, which in (('harness0', 0), ('harness1', 1)):
+        if build not in builds:
+            continue
+        boot(os.path.join(BUILD, build + '.ssd'))
+        syms = symbols(build)
+        mb = Mailbox()
+        for name, records in sets:
+            got = s4_beeb(mb, syms, [r[0] for r in records])
+            bad = [k for k, (r, (crc, _)) in enumerate(zip(records, got)) if crc != r[1 + which]]
+            cycles = [us * 2 for _, us in got]
+            with open(os.path.join(BUILD, 's4', '%s_%s.cycles' % (name.replace(' ', '_'), build)), 'w') as f:
+                json.dump(cycles, f)                 # each pool's plot, for host/gonogo.py
+            what = '%s %-9s %5d pools' % (build, name, len(records))
+            if not bad:
+                print('ok     S4 %s, plot %6.0f cycles mean, %6d max' % (
+                    what, statistics.mean(cycles), max(cycles)))
+            else:
+                ok = False
+                k = bad[0]
+                print('FAIL   S4 %s: %d differ; first, pool %d (%d pieces): %s' % (
+                    what, len(bad), k, records[k][0][0], s4_culprit(mb, syms, records[k][0], which)))
+    print('phase 4:', 'all checks pass' if ok else 'FAILURES')
+    return ok
+
+
 def spike(seeds=range(256)):
     """The recursion spike (test/spike.6502) against host/spike.py's model, seed by seed."""
     import spike as model
@@ -447,6 +632,10 @@ def main(argv):
         only = set(argv[2].split(',')) if len(argv) > 2 and argv[2] != 'all' else None
         scale = float(argv[3]) if len(argv) > 3 else 1.0
         return 0 if phase2(only, scale) else 1
+    if cmd == 'phase4':
+        return 0 if (phase4(argv[2].split(',')) if len(argv) > 2 else phase4()) else 1
+    if cmd == 'phase3':
+        return 0 if phase3(int(argv[2]) if len(argv) > 2 else 8) else 1
     print('unknown command %s' % cmd, file=sys.stderr)
     return 2
 

@@ -593,3 +593,270 @@ S2 passes in full on b2, 104 runs, every routine byte-exact with the C.
 It found a fast path's bug on the path's first run, which is what it's
 for.
 Next: mode 5.
+
+## 2026-10-01 — Phase 3: mode 5
+
+Clears, fills and the cursor, all in `src/mode5.6502`, and all checked
+against mode5.c on both buffers.
+
+### The fill
+
+One body per buffer, unrolled. For each byte column it's an `LDA`, then
+63 times `EOR : STA`, down the even scanlines and then the odd:
+
+```
+    LDA base + s, X             ; the column's first: nothing above it
+    EOR base + r * 256 + k, X
+    STA base + r * 256 + k, X   ; ...and so on, 63 times a pass
+```
+
+X is the column's block, so no `abs,X` ever crosses a page: 9 cycles a
+byte, 37,035 a buffer measured, against the plan's "about 37k". The loop's
+`CLC` sits outside it (Rich's catch). The body never touches C, and the
+loop only goes round without a carry, so clearing it 32 times was 64
+cycles a fill for nothing. 775 bytes a buffer.
+
+### The clear
+
+Moved over from hw.6502 unchanged: `STA page,Y` for 16 pages, 256 times
+round. 21.9k cycles.
+
+### The cursor
+
+The C plotters' `pt_mode5_cur`, as the journal sketched it: a block
+address in zero page and Y the row's even scanline.
+
+- `AT c, page` places it: A is the canvas row, X the pixel column.
+- `ROW` EORs a pattern pair in, under a mask that's a variable or a
+  constant (`ROW blk, #&FF, pe, po` drops the `AND`), and leaves Y on the
+  odd scanline.
+- `DOWN` and `UP` move a row from there.
+- `NEXTBYTE` moves a byte right. Plain `NEXT` is Baron's: it ends a `FOR`.
+- `RIGHT` moves a pixel right.
+
+`ROW`, `DOWN` and `UP` leave C alone, for the plotters' fractions.
+
+mode5.h's comment says `AT` is two tables by row. It's cheaper without:
+
+```
+    TAY
+    CMP #&80 : ROR A            ; row ASR 2, the sign kept: the character
+    CMP #&80 : ROR A            ; row, -1 in the junk row above
+    CLC : ADC page : STA c + 1
+    TYA : AND #3 : ASL A : TAY  ; (row MOD 4) * 2
+    TXA : ASL A : AND #&F8 : STA c
+```
+
+That's 35 cycles and no bytes; the tables would save two cycles for 144.
+`RIGHT` only reaches the next block after its `LSR` has set C, so it
+adds 8 with `ADC #7`.
+
+The page is a parameter, like the multiplies' accumulator: whoever plots
+says which buffer.
+
+### S3
+
+An image is a buffer with its junk row either side, 4,608 bytes. The host
+pokes a random one, the Beeb runs an operation on it, and the host peeks
+it back and compares every byte with `beebtool s3`'s.
+
+The cursor gets four walks: a plot at every pixel of every row, then down
+every column, up every column, and along every row, rows -4 to 67 each
+time. Each walk reaches every pixel pair of the image exactly once, with
+a pattern of its own, so a misplaced EOR can't be cancelled out by a
+second one.
+
+All pass, 8 images an operation on each buffer. To check it can fail, I
+broke each macro in turn:
+
+| broken | caught by |
+|---|---|
+| `AT`: row MOD 2 for MOD 4 | plot, up, right |
+| `DOWN`: no step to the block below | down |
+| `UP`: the wrong scanline above | up |
+| `RIGHT`: the carry not counted | right |
+| `AT`: a logical shift, losing the sign | plot, down, right |
+
+Down misses the first one because it starts at row -4, where MOD 2 and
+MOD 4 agree. Each break is caught by the walks that use it. The last
+shows the junk rows really are compared: plot and right differ only in
+the junk row above, about 256 bytes, while down starts its walk there and
+goes wrong all the way down.
+
+### B moves up a page
+
+Rich's: &8000 is the paged ROM, and a store there goes nowhere. B's junk
+row below only ever takes a line's overrun, which nobody reads, so the
+ROM can be that junk row. B moves up to &7000, A to &5F00 and the shared
+junk row to &6F00, and a page comes free (more BSS for now).
+
+The plotters still read the junk row before they write it (`EOR (c),Y :
+STA (c),Y`), so overruns into &8000 read ROM, EOR it, and store into
+nothing. The C's junk row gets the real EORs, and nobody ever looks.
+
+S3 can't poke that row any more, so on B it compares the buffer and the
+junk row above, then checks &8000-&80FF still reads what it read before.
+The cursor walks write rows 64-67 straight into it, and it doesn't
+change, so b2's Model B really has a ROM there. Both start addresses are
+still below &1000 (&0BE0 and &0E00), so the hardware wrap stays out of
+it. A screenshot in jsbeeb shows each buffer whole, bottom row included.
+S0, the IRQ, the soak and S3 all pass again; the harness image now runs
+to &5DFF.
+
+Rich's second idea: the RAM junk rows, &5E00 and &6F00, are 512 bytes of
+scratch whenever the plotters aren't running. Capture can keep visit
+fields there, and the sprite pass its toggles, though not the pool or
+anything else that has to survive the plot. That's D13, for Phases 6-7.
+
+### Budget checkpoint
+
+mode5 is 1,664 bytes, nearly all of it the two fills. The release's code
+and data come to 3,064 bytes, or 5,305 with arith, of 16,128. BSS has
+4,096 bytes now, up a page.
+
+### Phase 3: done
+
+Next: the plotters, and the frame-rate go/no-go.
+
+## 2026-10-01 — Phase 4: the plotters, and the go/no-go
+
+### plot
+
+`src/plot.6502` has `plot`, which runs over the pool from `pool_last`
+down to 1. EOR commutes, so the order's free. It skips uncoloured pieces
+and pieces sitting on the bottom edge that don't rise, and hands each of
+the rest to one of three plotters:
+
+- **Flat.** Y becomes the row's offset from its page, eight a byte. A
+  whole byte is `ROW`, then `TYA : ADC #7 : TAY`, then `CPY last : BCC
+  full`. The compare's carry is the clear carry the next `ADC` wants:
+  42 cycles a byte.
+- **Shallow.** The journal's carry tree for the whole bytes, and a pixel
+  at a time for the ends.
+- **Steep.** A pixel pair, then the gradient's whole rows, a row at a
+  time, then the fraction's carry.
+
+Rising lines needed no code of their own. The C's borrow is `f < gm`,
+which is exactly the carry out of `(255 - f) + gm`, and the fraction
+stays complemented afterwards. So a rising line keeps 255 − f, starting
+at 127 rather than 128, and runs the falling code, moving up instead of
+down. One macro does both directions, where the sketch had two, with
+`SBC`.
+
+Nothing in a loop clears C. The carry is known at every step: the tree's
+leaves add `gm - 1` when it's set, flat lines get theirs from a compare,
+and the pixel loops from the mask's `LSR`.
+
+1,910 bytes, most of them the two trees (about 1.15K, as the sketch
+said).
+
+### S4
+
+The oracle renders every golden pose, keeps its pool, plots that alone
+into a zeroed buffer, and CRCs the result. The host packs the pools into
+the harness's pad, which is free once S0 has checked it. The Beeb unpacks
+each one into the pool pages, zeroes the image, times `plot` and CRCs the
+image. When a pool doesn't match, the host splits it into single pieces
+and names the first one that fails on its own.
+
+That's all 20,409 golden poses, 3,000 random single pieces and 40 full
+pools of 255 pieces, on both buffers. All identical, first time. So I
+broke it five ways:
+
+| broken | sweep frames that differ | named |
+|---|---|---|
+| a tree leaf a pixel short | 417 | a shallow piece |
+| the wrong mask after a byte, pixel by pixel | 626 | a shallow piece |
+| a flat end mask | 328 | a flat piece |
+| steep's fraction carry dropped | 273 | a steep piece |
+| rising lines starting at 128, not 127 | 453 | a rising piece |
+
+Each break was caught, and the piece named was the kind broken. The last
+is a rounding of one in 256, and it still shows up in 453 of 1,172 frames.
+
+Measured, the plot takes 10.2k cycles a frame on the sweep, 8.0k on the
+rims, 10.4k on map 7 and 11.6k on the stress map; the worst pose is
+40.8k. The cost model had guessed 7.1k to 9.3k.
+
+### Steep, a row at a time
+
+Rich asked whether steep lines recompute the address for each column.
+They don't: `AT` once, then only deltas. But they step a row at a time,
+14 cycles a row. Adding the whole delta at once costs 38 cycles a column
+however steep, or 46 rising:
+
+```
+    TYA : ADC g2 : AND #&FE     ; the target even scanline, from this block's top
+```
+
+Its low bits are the new Y and the rest are pages to add. It wins from
+two or three rows a column. The goldens have 2.7 steep columns a frame,
+and 88% of them move one row or two. Picking per line would save 6
+cycles a frame, so it's not done.
+
+### scrnbase, and the buffers move again
+
+Rich's: `scrnbase`, a page, is the buffer being drawn, and clear, plot
+and fill all work on it. The main loop sets `swapreq`; the IRQ shows the
+buffer and turns `scrnbase` to the other one. With A at &5800 and B at
+&7000, both multiples of &800, the CRTC's start address has a low byte of
+0 for both, so R13 never changes:
+
+```
+    LDA #12 : STA &FE00
+    LDA scrnbase : LSR A : LSR A : LSR A : STA &FE01
+    LDA scrnbase : EOR #(&58 EOR &70) : STA scrnbase
+```
+
+Clear and fill keep a body per buffer, with the addresses as operands,
+and pick one with a compare on `scrnbase`. One body through a pointer
+would cost 2 cycles a byte, about 8k a fill.
+
+The gap is good RAM. &6800 is A's junk row below and &6F00 B's above, and
+&6900-&6EFF between them is never touched by anything but us: 1.5K. A's
+junk row above (&5700) shrinks BSS below the screens to 2.25K, but the
+gap more than pays for that. The visits and the rest of capture's scratch
+fit the three junk rows, and six of the pool's eight pages the spare. So
+`BSS_BASE` can rise to about &5100, which gives code 768 bytes more
+(D13). Phase 7 settles it.
+
+S0, the IRQ timing, the soak, S3 and S4 all pass again, and jsbeeb shows
+both buffers whole.
+
+### The go/no-go
+
+`host/gonogo.py` (`make gonogo`) puts a frame together:
+
+- capture from the cost model's counters, with S2's measured arithmetic,
+  guesses for the rest, and 15 cycles a call;
+- plot as S4 measured it, pose by pose;
+- sprites guessed;
+- clear and fill, 58.9k between them;
+- the camera at 5k.
+
+| map | median | 90% | max | fps at the median | at 90% |
+|---|---|---|---|---|---|
+| 0 | 91k | 164k | 292k | 22.0 | 12.2 |
+| 7 | 109k | 191k | 288k | 18.3 | 10.5 |
+| 9 | 117k | 207k | 315k | 17.1 | 9.7 |
+
+The plan's guess for map 0 was 90k at the median and 151k at 90%: close.
+Frames are shown at vsyncs, though, and then it matters how the main loop
+waits. Over each map's frames in order:
+
+| map | post, then wait | capture during the wait |
+|---|---|---|
+| 0 | 16.0 fps | 18.2 fps |
+| 7 | 14.2 | 16.3 |
+| 9 | 13.5 | 15.2 |
+
+The camera and capture never touch a buffer, so they can run while the
+last swap is pending. Waiting just before the render, not straight after
+posting, buys about 13%. That's D14's open question, for Phase 9.
+
+Capture is the biggest piece, and still mostly guesses. Phases 5 and 6
+will say. The numbers go to Rich before Phase 5.
+
+### Phase 4: done
+
+Next: vertices, lines and the clip.

@@ -9,13 +9,19 @@
 \
 \   &300-&EFF    fixed tables (Phase 1); the NMI handler at &D00
 \   &F00-...     code and data, up to CODE_GUARD
-\   BSS_ORG      the per-frame state (release: &4E00-&5CFF; harness: inside
+\   BSS_ORG      the per-frame state (release: &4E00-&56FF; harness: inside
 \                the screen buffer not under test)
-\   &5D00        junk character row above buffer A
-\   &5E00        buffer A (4K)
-\   &6E00        junk character row below A and above B, shared
-\   &6F00        buffer B (4K)
-\   &7F00        junk character row below B
+\   &5700        junk character row above buffer A
+\   &5800        buffer A (4K)
+\   &6800        junk character row below A
+\   &6900-&6EFF  spare: never plotted, filled, cleared or shown
+\   &6F00        junk character row above B
+\   &7000        buffer B (4K)
+\   &8000        B's junk row below is the paged ROM: stores go nowhere
+\
+\ Both buffers start on a multiple of &800, so the CRTC's start address
+\ (the address DIV 8) has a low byte of 0: R13 stays 0 and a swap only
+\ writes R12, the page DIV 8.
 \
 \ Page 2 keeps &200-&205 (BRKV, IRQ1V) and never writes &27E-&29B (kept
 \ across BREAK); test builds talk to the host through a mailbox at
@@ -29,9 +35,11 @@ NMI_ADDR = &D00                 ; the 6502's NMI vector enters RAM here
 \ with seven sprites, 9 the stress map. (A default here via DEFINED doesn't
 \ settle: from the second pass on the symbol counts as defined.)
 
-SCREENS_ORG = &5D00
-BUF_A = &5E00
-BUF_B = &6F00
+SCREENS_ORG = &5700
+BUF_A = &5800
+BUF_B = &7000
+SPARE_ORG = &6900
+SPARE_END = &6F00
 SCREENS_END = &8000
 
 IF HARNESS

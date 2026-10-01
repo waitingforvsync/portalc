@@ -1034,9 +1034,17 @@ static int cost_map_[TC_MAX_FRAMES];
 static unsigned long tc_tot_[TC_N], tc_max_[TC_N];
 static uint32_t cost_frames_;
 
+static FILE *cost_dump_;    // per-frame counters, for the go/no-go (host/gonogo.py)
+
 static void cost_frame(uint32_t frame, int map)
 {
     RC_PANIC(frame < TC_MAX_FRAMES);
+    if (cost_dump_) {
+        fprintf(cost_dump_, "%d", map);
+        for (uint32_t i = 0; i < TC_N; i++)
+            fprintf(cost_dump_, ",%lu", tc_[i]);
+        fputc('\n', cost_dump_);
+    }
     double s[3] = {0, 0, 0};
     for (uint32_t i = 0; i < TC_N; i++) {
         s[tc_stage(i)] += tc_weight(i) * (double)tc_[i];
@@ -1058,9 +1066,22 @@ static int cmp_double(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-static void cost(const char *dir)
+static void cost(const char *dir, const char *dump)
 {
+    if (dump) {
+        cost_dump_ = fopen(dump, "w");
+        if (!cost_dump_) {
+            fprintf(stderr, "beebtool: cannot write %s\n", dump);
+            exit(1);
+        }
+        fprintf(cost_dump_, "map");
+        for (uint32_t i = 0; i < TC_N; i++)
+            fprintf(cost_dump_, ",%s", tc_names_[i]);
+        fputc('\n', cost_dump_);
+    }
     tr_run(dir, cost_frame);
+    if (cost_dump_)
+        fclose(cost_dump_);
     static double sorted[TC_MAX_FRAMES];
     static const int maps[] = {0, 7, 9};
     printf("variable work per frame, estimated 6502 cycles (capture + plot + sprites; clear, fill,\n"

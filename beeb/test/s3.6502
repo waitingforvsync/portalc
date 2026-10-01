@@ -1,0 +1,171 @@
+\ **************************************************************************
+\ *
+\ *     s3.6502 - check S3: the mode 5 buffer against the C (PLAN.md 5.7)
+\ *
+\ **************************************************************************
+\
+\ CMD_S3 runs operation arg0 on the buffer under test (A in harness0, B in
+\ harness1). The host pokes the image (the buffer and its junk row either
+\ side) and s3_pat first, then peeks the image back and compares it with
+\ beebtool s3's. B's junk row below is the ROM at &8000: the host can't
+\ poke it, and checks it reads the same afterwards. The plots take their patterns from s3_pat, two a plot in
+\ order, and between them reach every pixel pair of the image exactly
+\ once, junk rows included, so a misplaced EOR can't hide:
+\
+\   0 FILL    fill (fill_a or fill_b, by scrnbase)
+\   1 CLEAR   clear (clear_a or clear_b)
+\   2 PLOT    AT and ROW at every pixel column of every row, -4 to 67
+\   3 DOWN    each pixel column from row -4: ROW, DOWN, 72 times
+\   4 UP      each pixel column from row 67: ROW, UP, 72 times
+\   5 RIGHT   each row from column 0: ROW, RIGHT, 128 times
+\   6 NONE    nothing: the timing baseline
+\
+\ MB_USECS: the operation's microseconds.
+
+CMD_S3 = 4
+
+IF TESTBUF == 0
+    S3_BUF = BUF_A
+ELSE
+    S3_BUF = BUF_B
+ENDIF
+
+\ The next plot's patterns into pe and po, s3_pat[k] and s3_pat[k + 1].
+\ Clobbers X (the cursor's Y may be live).
+MACRO PATTERN k, pe, po
+    LDX k
+    LDA s3_pat,X : STA pe
+    LDA s3_pat + 1,X : STA po
+    INX : INX : STX k
+ENDMACRO
+
+\\ CMD_S3.
+.cmd_s3
+{
+    ZA_AUTO 4, t0               ; local: the clock at the start
+    LDA #HI(S3_BUF) : STA scrnbase   ; (no swaps in the harness: it stays)
+    JSR now
+    ZA_DISCARD t0               ; rebuilt whole by the loop
+    LDX #3
+.keep
+    LDA now.t,X : ZA_INDEXEDBY 0..3
+    STA t0,X : ZA_INDEXEDBY 0..3
+    DEX : BPL keep
+    LDA MB_ARG : BNE notfill
+    JSR fill
+    JMP timed
+.notfill
+    CMP #1 : BNE notclear
+    JSR clear
+    JMP timed
+.notclear
+    CMP #2 : BNE @+
+    JSR s3_plot
+    JMP timed
+.@  CMP #3 : BNE @+
+    JSR s3_down
+    JMP timed
+.@  CMP #4 : BNE @+
+    JSR s3_up
+    JMP timed
+.@  CMP #5 : BNE timed          ; 6 (or anything else): nothing
+    JSR s3_right
+.timed
+    JSR now
+    SEC
+    FOR i = 0 ..< 4             ; (unrolled: a CPX would break the borrow)
+        LDA now.t + i : SBC t0 + i : STA MB_USECS + i
+    NEXT
+    RTS
+}
+
+\\ Every pixel pair, row by row from -4 to 67, column by column.
+.s3_plot
+{
+    ZA_AUTO2 c                  ; local: the cursor
+    ZA_AUTO1 row, col           ; local: where
+    ZA_AUTO1 k, pe, po, m       ; local: the pattern index, the patterns, the mask
+    LDA #0 : STA k
+    LDA #&FC : STA row          ; from row -4
+.rows
+    LDA #0 : STA col
+.cols
+    PATTERN k, pe, po
+    LDA col : AND #3 : TAX
+    LDA pixmasks,X : STA m
+    LDX col : LDA row
+    AT c, scrnbase
+    ROW c, m, pe, po
+    INC col : BPL cols          ; 128 columns
+    INC row
+    LDA row : CMP #68 : BNE rows    ; to row 67, through 0
+    RTS
+}
+
+\\ Down each pixel column from row -4.
+.s3_down
+{
+    ZA_AUTO2 c                  ; local: the cursor
+    ZA_AUTO1 col, n             ; local: the column, rows left
+    ZA_AUTO1 k, pe, po, m       ; local: the pattern index, the patterns, the mask
+    LDA #0 : STA k : STA col
+.cols
+    LDA col : AND #3 : TAX
+    LDA pixmasks,X : STA m
+    LDX col : LDA #&FC
+    AT c, scrnbase
+    LDA #72 : STA n
+.rows
+    PATTERN k, pe, po
+    ROW c, m, pe, po
+    DOWN c
+    DEC n : BNE rows
+    INC col : BPL cols
+    RTS
+}
+
+\\ Up each pixel column from row 67.
+.s3_up
+{
+    ZA_AUTO2 c                  ; local: the cursor
+    ZA_AUTO1 col, n             ; local: the column, rows left
+    ZA_AUTO1 k, pe, po, m       ; local: the pattern index, the patterns, the mask
+    LDA #0 : STA k : STA col
+.cols
+    LDA col : AND #3 : TAX
+    LDA pixmasks,X : STA m
+    LDX col : LDA #67
+    AT c, scrnbase
+    LDA #72 : STA n
+.rows
+    PATTERN k, pe, po
+    ROW c, m, pe, po
+    UP c
+    DEC n : BNE rows
+    INC col : BPL cols
+    RTS
+}
+
+\\ Along each row from column 0, rows -4 to 67.
+.s3_right
+{
+    ZA_AUTO2 c                  ; local: the cursor
+    ZA_AUTO1 row, n             ; local: the row, columns left
+    ZA_AUTO1 k, pe, po, m       ; local: the pattern index, the patterns, the mask
+    LDA #0 : STA k
+    LDA #&FC : STA row
+.rows
+    LDX #0 : LDA row
+    AT c, scrnbase
+    LDA #&88 : STA m
+    LDA #128 : STA n
+.cols
+    PATTERN k, pe, po
+    ROW c, m, pe, po
+    DEY                         ; back to the row's even scanline
+    RIGHT c, m
+    DEC n : BNE cols
+    INC row
+    LDA row : CMP #68 : BNE rows
+    RTS
+}

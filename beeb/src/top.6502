@@ -16,14 +16,16 @@ INCLUDE "../data/consts.6502"
 ZA_POOL &00..&FB                ; &FC holds A across the OS's IRQ entry
 
 SECTION Screens, org = SCREENS_ORG
-.junk0  SKIP &100
+.junk0  SKIP &100                 ; above A
 .bufa   SKIP &1000
-.junk1  SKIP &100
-.bufb   SKIP &1000
-.junk2  SKIP &100
+.junk1  SKIP &100                 ; below A
+.spare  SKIP SPARE_END - SPARE_ORG
+.junk2  SKIP &100                 ; above B
+.bufb   SKIP &1000                ; its junk row below is the ROM at &8000
 .screens_end
 ENDSECTION
-ASSERT bufa == BUF_A AND bufb == BUF_B AND screens_end == SCREENS_END
+ASSERT bufa == BUF_A AND bufb == BUF_B AND spare == SPARE_ORG AND screens_end == SCREENS_END
+ASSERT LO(BUF_A DIV 8) == 0 AND LO(BUF_B DIV 8) == 0    ; R13 stays 0
 
 SECTION Bss, org = BSS_ORG, guard = BSS_END
     INCLUDE "bss.6502"
@@ -37,6 +39,7 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
     SECTION Code, org = CODE_ORG, guard = CODE_GUARD
         INCLUDE "tables.6502"
         INCLUDE "hw.6502"
+        INCLUDE "mode5.6502"
         INCLUDE "main.6502"
         INCLUDE "../data/shades.6502"
         IF MAP == 7
@@ -49,8 +52,11 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
         IF HARNESS
             INCLUDE "../test/mailbox.6502"
             INCLUDE "../test/spike.6502"
-            INCLUDE "arith.6502"
+            INCLUDE "arith.6502"            ; (release-bound, once main calls them)
+            INCLUDE "plot.6502"
             INCLUDE "../test/s2.6502"
+            INCLUDE "../test/s3.6502"
+            INCLUDE "../test/s4.6502"
             INCLUDE "../test/pad.6502"
         ENDIF
     ENDSECTION

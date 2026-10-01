@@ -885,6 +885,25 @@ typedef struct s2_run {
 
 static uint16_t crc16_tab_[256];
 
+// CRC-16/XMODEM, as the Beeb's crc_lo and crc_hi tables compute it.
+static void crc16_init(void)
+{
+    for (uint32_t v = 0; v < 256; v++) {
+        uint32_t c = v << 8;
+        for (int k = 0; k < 8; k++)
+            c = ((c << 1) ^ ((c & 0x8000) ? 0x1021 : 0)) & 0xFFFF;
+        crc16_tab_[v] = (uint16_t)c;
+    }
+}
+
+static uint16_t crc16(const uint8_t *p, size_t n)
+{
+    uint16_t crc = 0;
+    for (size_t i = 0; i < n; i++)
+        crc = (uint16_t)((crc << 8) ^ crc16_tab_[((crc >> 8) ^ p[i]) & 0xFF]);
+    return crc;
+}
+
 static uint32_t s2_xorshift(uint32_t x)
 {
     x ^= x << 13;
@@ -1089,12 +1108,7 @@ static void s2_case(int fn, s2_run *r)
 static void s2(int fn, int random, uint32_t start, uint32_t count)
 {
     pt_arith_init();
-    for (uint32_t v = 0; v < 256; v++) {
-        uint32_t c = v << 8;
-        for (int k = 0; k < 8; k++)
-            c = ((c << 1) ^ ((c & 0x8000) ? 0x1021 : 0)) & 0xFFFF;
-        crc16_tab_[v] = (uint16_t)c;
-    }
+    crc16_init();
     s2_run r = {.random = random, .x = start};
     uint8_t last[4] = {0};
     for (uint32_t i = 0; i < count; i++) {
@@ -1103,6 +1117,198 @@ static void s2(int fn, int random, uint32_t start, uint32_t count)
             memcpy(last, r.last, r.n);
     }
     printf("%u %u %u %u %u %u %u\n", r.crc, r.calls, last[0], last[1], last[2], last[3], r.x);
+}
+
+// ---- check S3: the mode 5 buffer (PLAN.md 5.7) ----
+//
+// An image is a buffer with its junk row either side, as the Beeb lays it
+// out. Each operation does what test/s3.6502's does; the plots take their
+// patterns from a 256-byte table, two a plot, and between them reach every
+// pixel pair of the image once.
+
+enum { S3_FILL, S3_CLEAR, S3_PLOT, S3_DOWN, S3_UP, S3_RIGHT, S3_NONE };
+
+static pt_pattern s3_next(const uint8_t *pats, uint8_t *k)
+{
+    pt_pattern p = {.e = pats[*k], .o = pats[(uint8_t)(*k + 1)]};
+    *k = (uint8_t)(*k + 2);
+    return p;
+}
+
+static void s3(int op, const char *in, const char *pats_path, const char *out)
+{
+    size_t n;
+    uint8_t *img = read_file(in, &n);
+    size_t np;
+    uint8_t *pats = read_file(pats_path, &np);
+    if (n != PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD || np != 256) {
+        fprintf(stderr, "beebtool: s3 wants a %d-byte image and 256 patterns\n",
+                PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD);
+        exit(1);
+    }
+    uint8_t *fb = img + PT_FB_GUARD;
+    uint8_t k = 0;
+    switch (op) {
+    case S3_FILL:
+        pt_mode5_fill(fb);
+        break;
+    case S3_CLEAR:
+        pt_mode5_clear(fb);
+        break;
+    case S3_PLOT:
+        for (int row = -PT_FB_GUARD_ROWS; row < PT_SCREEN_HEIGHT + PT_FB_GUARD_ROWS; row++)
+            for (uint8_t col = 0; col < PT_SCREEN_WIDTH; col++)
+                pt_mode5_plot(fb, col, (uint8_t)row, s3_next(pats, &k));
+        break;
+    case S3_DOWN:
+    case S3_UP:
+        for (uint8_t col = 0; col < PT_SCREEN_WIDTH; col++) {
+            int start = op == S3_DOWN ? -PT_FB_GUARD_ROWS : PT_SCREEN_HEIGHT + PT_FB_GUARD_ROWS - 1;
+            pt_mode5_cur cur = pt_mode5_at(col >> 2, (uint8_t)start);
+            for (int i = 0; i < PT_SCREEN_HEIGHT + 2 * PT_FB_GUARD_ROWS; i++) {
+                pt_mode5_eor(fb, cur, pt_mode5_pixmask(col), s3_next(pats, &k));
+                if (op == S3_DOWN)
+                    pt_mode5_down(&cur);
+                else
+                    pt_mode5_up(&cur);
+            }
+        }
+        break;
+    case S3_RIGHT:
+        for (int row = -PT_FB_GUARD_ROWS; row < PT_SCREEN_HEIGHT + PT_FB_GUARD_ROWS; row++) {
+            pt_mode5_cur cur = pt_mode5_at(0, (uint8_t)row);
+            uint8_t mask = 0x88;
+            for (uint8_t col = 0; col < PT_SCREEN_WIDTH; col++) {
+                pt_mode5_eor(fb, cur, mask, s3_next(pats, &k));
+                pt_mode5_right(&cur, &mask);
+            }
+        }
+        break;
+    default:
+        break;
+    }
+    FILE *f = open_out(NULL, out);
+    fwrite(img, 1, n, f);
+    fclose(f);
+    free(img);
+    free(pats);
+}
+
+// ---- check S4: the plotters (PLAN.md 5.7) ----
+//
+// A record is a pool as test/s4.6502 unpacks it - a piece count n, then
+// the pieces' x0, x1, y0, gradient low and high bytes, ce and co, n bytes
+// each - followed by two CRC-16s of the image plot() leaves in a zeroed
+// buffer: over its junk row above, the buffer and its junk row below (as
+// buffer A is checked), and without the junk row below (B's is the ROM).
+
+static void s4_record(FILE *f)
+{
+    uint8_t n = (uint8_t)(render_.pool_num - 1);
+    uint8_t rec[1 + 7 * 255];
+    rec[0] = n;
+    for (uint8_t i = 1; i <= n && i != 0; i++) {
+        const pt_piece *p = &render_.pool[i];
+        uint8_t v[7] = {p->x0, p->x1, p->y0, (uint8_t)p->g, (uint8_t)(p->g >> 8), p->ce, p->co};
+        for (int k = 0; k < 7; k++)
+            rec[1 + k * n + (i - 1)] = v[k];
+    }
+    fwrite(rec, 1, 1 + 7u * n, f);
+    memset(render_.fbmem, 0, sizeof(render_.fbmem));
+    plot(&render_);
+    uint16_t a = crc16(render_.fbmem, sizeof(render_.fbmem));
+    uint16_t b = crc16(render_.fbmem, sizeof(render_.fbmem) - PT_FB_GUARD);
+    uint8_t crcs[4] = {(uint8_t)a, (uint8_t)(a >> 8), (uint8_t)b, (uint8_t)(b >> 8)};
+    fwrite(crcs, 1, 4, f);
+}
+
+// Every pose's pool, rendered as the goldens render it.
+static void s4(int which, const char *poses, const char *out)
+{
+    crc16_init();
+    load_map(which);
+    pt_render_init(&render_, &map_);
+    size_t n;
+    uint8_t *p = read_file(poses, &n);
+    FILE *f = open_out(NULL, out);
+    for (size_t i = 0; i + 6 <= n; i += 6) {
+        pt_render_frame(&render_, (uint16_t)(p[i] | p[i + 1] << 8),
+                        (uint16_t)(p[i + 2] | p[i + 3] << 8), p[i + 4], p[i + 5]);
+        s4_record(f);
+    }
+    fclose(f);
+    free(p);
+}
+
+// count random pools of pieces pieces each: lines between two points on
+// the screen (or rising from its bottom edge), every gradient, some
+// uncoloured and some starting on the bottom edge without rising, which
+// plot skips.
+static void s4_random(uint32_t seed, uint32_t count, uint32_t pieces, const char *out)
+{
+    crc16_init();
+    load_map(0);    // (for a render state, fb and all; the map itself plays no part)
+    pt_render_init(&render_, &map_);
+    rc_random rng = rc_random_make(seed);
+    FILE *f = open_out(NULL, out);
+    for (uint32_t k = 0; k < count; k++) {
+        render_.pool_num = (uint16_t)(pieces + 1);
+        for (uint32_t i = 1; i <= pieces; i++) {
+            pt_piece *p = &render_.pool[i];
+            uint32_t r = rc_random_next(&rng);
+            uint8_t x0 = (uint8_t)(r & 127);
+            uint8_t len = (uint8_t)(1 + (r >> 7) % (uint32_t)(128 - x0));
+            if ((r >> 14) & 1)
+                len = (uint8_t)(1 + (r >> 15) % (len < 12 ? len : 12));    // short ones too
+            uint32_t s = rc_random_next(&rng);
+            uint8_t y0 = (uint8_t)(s % 65);
+            uint8_t y1 = (uint8_t)((s >> 8) % 64);
+            if ((s >> 16) % 4 == 0)
+                y1 = y0 == 64 ? 63 : y0;    // flat lines, the commonest kind
+            uint32_t dy = y1 > y0 ? (uint32_t)(y1 - y0) : (uint32_t)(y0 - y1);
+            uint32_t mag = len > 1 ? dy * 256 / (uint32_t)(len - 1) : 0;
+            if (mag > 0x7FFF)
+                mag = 0x7FFF;
+            p->x0 = x0;
+            p->x1 = (uint8_t)(x0 + len);
+            p->y0 = y0;
+            p->g = pt_g_make((uint16_t)mag, y1 < y0);
+            uint32_t c = rc_random_next(&rng);
+            p->ce = (uint8_t)c;
+            p->co = (uint8_t)(c >> 8);
+            if (((c >> 16) & 15) == 0)
+                p->ce = p->co = 0;    // a bound only
+            p->next = 0;
+        }
+        s4_record(f);
+    }
+    fclose(f);
+}
+
+// Pools given as records without their CRCs (the host's, splitting a
+// pool that failed into single pieces), with them added.
+static void s4_crc(const char *in, const char *out)
+{
+    crc16_init();
+    load_map(0);
+    pt_render_init(&render_, &map_);
+    size_t n;
+    uint8_t *p = read_file(in, &n);
+    FILE *f = open_out(NULL, out);
+    for (size_t i = 0; i < n;) {
+        uint8_t np = p[i];
+        render_.pool_num = (uint16_t)(np + 1);
+        for (uint8_t k = 0; k < np; k++) {
+            const uint8_t *v = &p[i + 1 + k];
+            render_.pool[k + 1] = (pt_piece) {.x0 = v[0], .x1 = v[np], .y0 = v[2 * np],
+                                              .g = (uint16_t)(v[3 * np] | v[4 * np] << 8),
+                                              .ce = v[5 * np], .co = v[6 * np]};
+        }
+        s4_record(f);
+        i += 1 + 7u * np;
+    }
+    fclose(f);
+    free(p);
 }
 
 #ifdef BEEBTOOL_TRACE
@@ -1121,7 +1327,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "cost")) {
-        cost(argv[2]);
+        cost(argv[2], argc >= 4 ? argv[3] : NULL);
         return 0;
     }
 #endif
@@ -1152,6 +1358,23 @@ int main(int argc, char **argv)
            (uint32_t)strtoul(argv[5], NULL, 0));
         return 0;
     }
+    if (argc >= 5 && !strcmp(argv[1], "s4")) {
+        s4(atoi(argv[2]), argv[3], argv[4]);
+        return 0;
+    }
+    if (argc >= 4 && !strcmp(argv[1], "s4crc")) {
+        s4_crc(argv[2], argv[3]);
+        return 0;
+    }
+    if (argc >= 6 && !strcmp(argv[1], "s4random")) {
+        s4_random((uint32_t)strtoul(argv[2], NULL, 0), (uint32_t)strtoul(argv[3], NULL, 0),
+                  (uint32_t)strtoul(argv[4], NULL, 0), argv[5]);
+        return 0;
+    }
+    if (argc >= 6 && !strcmp(argv[1], "s3")) {
+        s3(atoi(argv[2]), argv[3], argv[4], argv[5]);
+        return 0;
+    }
     if (argc >= 5 && !strcmp(argv[1], "render")) {
         render(atoi(argv[2]), argv[3], argv[4], argc >= 6 && !strcmp(argv[5], "poison"));
         return 0;
@@ -1160,6 +1383,6 @@ int main(int argc, char **argv)
         camera(atoi(argv[2]), argv[3], argv[4], argc >= 6 && !strcmp(argv[5], "poison"));
         return 0;
     }
-    fprintf(stderr, "usage: beebtool export|tables|expect|goldens|render|camera ...\n");
+    fprintf(stderr, "usage: beebtool export|tables|expect|goldens|s2|s3|s4|s4random|render|camera ...\n");
     return 2;
 }

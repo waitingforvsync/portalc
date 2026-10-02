@@ -164,7 +164,9 @@ translating (`host/replay.py`, run by `b2.py phase5`):
   arguments into a staging block (`rp_*`), which `test/s5.6502`'s shim
   unpacks into zero page (`cx_*`, `cb_*`, `l_*`, `ev_*`, `ep_*`, `fr_*`)
   before the call and packs back after. Staging rather than poking zero
-  page keeps every write in code Baron can see.
+  page keeps every write in code Baron can see. `col_gt` and `col_ge`
+  test a visit's end vertex in place, so their VV goes in as visit 0's
+  (no visit is 0).
 
 The shim times the call alone (`now` round the `JSR`), so each record's
 replay also gives its cycles. The host peeks everything back, re-encodes

@@ -12,7 +12,10 @@
 \ capture is CRCed before the plot (its own state lives in the junk rows,
 \ D13), and the image's junk rows zeroed then, as the C's never held it.
 \ With arg2 set (one pose, for a diagnosis) it stops after the capture,
-\ the state left for the host and its zero-page counts in s6_extra.
+\ the state left for the host and its zero-page counts in s6_extra. In the
+\ profiler's build (SUITE 4), arg3 set samples the PC every PROF_TICK
+\ microseconds through the frames' own stages (system VIA T1, hw.6502's
+\ IRQ), into prof_buf from its start; prof_ptr ends past the last.
 \ Per pose, S6_REC bytes in s6_out:
 \
 \    0  a CRC-16 of the capture: the pieces 1..pool_last (x0 x1 y0 glo ghi
@@ -30,11 +33,25 @@
 \   13  the plot's, sprite pass's and fill's (3 bytes)
 
 CMD_S6 = 9
+PROF_TICK = 997                 ; (prime-ish, so it walks across the code's loops)
 S6_MAX = 16                     ; (s6_out indexed by a byte: 16 records of 16)
 S6_REC = 16
 S6_GAP = 16                     ; the canary stops this far below the command's own S
 
 ZA_AUTO2 s6crc                  ; the CRC being formed
+
+\ The profiler's sampling on (if arg3 asks for it) and off, in its build.
+MACRO PROF_ON
+    IF SUITE == 4
+        LDA MB_ARG + 3 : STA prof_on
+    ENDIF
+ENDMACRO
+
+MACRO PROF_OFF
+    IF SUITE == 4
+        LDA #0 : STA prof_on
+    ENDIF
+ENDMACRO
 ZA_AUTO 4, s6t                  ; the clock at the start of what's being timed
 
 \ Fold A into s6crc (CRC-16/XMODEM). Clobbers X.
@@ -84,6 +101,17 @@ ZA_AUTO 4, s6t                  ; the clock at the start of what's being timed
     LDA #LO(io_area) : STA rec
     LDA #HI(io_area) : STA rec + 1
     LDA #0 : STA k
+IF SUITE == 4
+    STA prof_on
+    LDA #LO(prof_buf) : STA prof_ptr
+    LDA #HI(prof_buf) : STA prof_ptr + 1
+    LDA MB_ARG + 3 : BEQ @+
+    LDA #&40 : STA &FE4B        ; T1 free-running, PB7 alone
+    LDA #LO(PROF_TICK - 2) : STA &FE46
+    LDA #HI(PROF_TICK - 2) : STA &FE45  ; (starts it)
+    LDA #&C0 : STA &FE4E        ; its interrupt on
+.@
+ENDIF
     LDA MB_ARG : STA left : BNE pose
     RTS
 .pose
@@ -106,10 +134,14 @@ ZA_AUTO 4, s6t                  ; the clock at the start of what's being timed
     TXA : BNE canary
 
     JSR s6_start
+    PROF_ON
     JSR clear
+    PROF_OFF
     LDX k : LDY #8 : JSR s6_stop        ; (its third byte, 0, under capture's)
     JSR s6_start
+    PROF_ON
     JSR capture
+    PROF_OFF
     LDA #0 : ROL A
     LDX k : STA s6_out + 7,X
     LDY #10 : JSR s6_stop
@@ -136,10 +168,12 @@ ELSE
 ENDIF
     JSR s6_start
     LDX k : LDA s6_out + 7,X : BNE dropped
+    PROF_ON
     JSR plot
     LDA MB_ARG + 1 : BEQ @+
     JSR sprite_pass
 .@  JSR fill
+    PROF_OFF
 .dropped
     LDX k : LDY #13 : JSR s6_stop
 
@@ -165,6 +199,9 @@ ENDIF
     DEC left : BEQ done
     JMP pose                    ; (out of branch range)
 .done
+IF SUITE == 4
+    LDA #&40 : STA &FE4E        ; T1's interrupt off
+ENDIF
     RTS
 }
 

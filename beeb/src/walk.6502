@@ -27,11 +27,11 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
 \\ Transform map vertex X: tf_*.
 .tf_vertex
 {
-    LDA vx_lo,X : STA transform.wx
-    LDA vx_hi,X : STA transform.wx + 1
-    LDA vy_lo,X : STA transform.wy
-    LDA vy_hi,X : STA transform.wy + 1
-    JMP transform
+    LDA vx_lo,X : SEC : SBC fr_camx : STA rot.x     ; (transform's first step)
+    LDA vx_hi,X : SBC fr_camx + 1 : STA rot.x + 1
+    LDA vy_lo,X : SEC : SBC fr_camy : STA rot.y
+    LDA vy_hi,X : SBC fr_camy + 1 : STA rot.y + 1
+    JMP transform.rel
 }
 
 \\ Visit Y's end vertex from tf_*. Keeps X and Y.
@@ -59,18 +59,6 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDA vs1_fl,Y : STA vs0_fl,Y
     LDA vs1_f,Y : STA vs0_f,Y
     LDA vs1_e,Y : STA vs0_e,Y
-    RTS
-}
-
-\\ Visit Y's end vertex as the one col_gt and col_ge test (cv_*).
-.vs_cv1
-{
-    LDA vs1_xl,Y : STA cv_x
-    LDA vs1_xh,Y : STA cv_x + 1
-    LDA vs1_yl,Y : STA cv_y
-    LDA vs1_yh,Y : STA cv_y + 1
-    LDA vs1_sx,Y : STA cv_sx
-    LDA vs1_fl,Y : STA cv_flags
     RTS
 }
 
@@ -170,8 +158,7 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
 .resume
     STA vs
 .seek                           ; to the first edge ending strictly right of ch_x
-    LDY vs : JSR vs_cv1
-    LDA ch_x : JSR col_gt : BCS found
+    LDY vs : LDA ch_x : JSR col_gt : BCS found
     LDX ch_cell : LDY vs
     JSR visit_advance
     JMP seek
@@ -263,22 +250,10 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDX po_cell
     LDY cell_visit,X : STY el_vis
     LDA vs_k,Y : CLC : ADC c_first,X : STA ei
-    LDA vs0_xl,Y : STA ev_xl    ; the edge's vertices, for its lines
-    LDA vs0_xh,Y : STA ev_xh
-    LDA vs0_yl,Y : STA ev_yl
-    LDA vs0_yh,Y : STA ev_yh
-    LDA vs0_sx,Y : STA ev_sx
+    LDA vs0_sx,Y : STA ev_sx    ; the edge's vertices, as far as its span needs
     LDA vs0_fl,Y : STA ev_flags
-    LDA vs0_f,Y : STA ev_f
-    LDA vs0_e,Y : STA ev_e
-    LDA vs1_xl,Y : STA ev_xl + 1
-    LDA vs1_xh,Y : STA ev_xh + 1
-    LDA vs1_yl,Y : STA ev_yl + 1
-    LDA vs1_yh,Y : STA ev_yh + 1
     LDA vs1_sx,Y : STA ev_sx + 1
     LDA vs1_fl,Y : STA ev_flags + 1
-    LDA vs1_f,Y : STA ev_f + 1
-    LDA vs1_e,Y : STA ev_e + 1
 
     \ 1. the column span, from the vertices' flags and columns. None for an
     \ edge wholly left of the left ray, or starting past the right ray (its
@@ -317,6 +292,13 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     CMP xa : BEQ none : BCC none
     STA po_x
     LDA #0 : STA el_have
+    LDY el_vis                  ; the start vertex whole: the child's P, if any
+    LDA vs0_xl,Y : STA ev_xl
+    LDA vs0_xh,Y : STA ev_xh
+    LDA vs0_yl,Y : STA ev_yl
+    LDA vs0_yh,Y : STA ev_yh
+    LDA vs0_f,Y : STA ev_f
+    LDA vs0_e,Y : STA ev_e
 
     \ 2. take ownership of the bound sub-chains over [xa, xb)
     LDA xa : STA cut.xa
@@ -340,6 +322,13 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     JMP child_portal
 
 .drawn
+    LDY el_vis                  ; the end vertex whole, for the lines
+    LDX vs1_xl,Y : STX ev_xl + 1
+    LDX vs1_xh,Y : STX ev_xh + 1
+    LDX vs1_yl,Y : STX ev_yl + 1
+    LDX vs1_yh,Y : STX ev_yh + 1
+    LDX vs1_f,Y : STX ev_f + 1
+    LDX vs1_e,Y : STX ev_e + 1
     TAY                         ; the wall's shade, plus 1
     LDA shade_e - 1,Y : STA wle
     LDA shade_o - 1,Y : STA wlo
@@ -503,12 +492,7 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
 \ Line slot A of the edge, at height h in colour l_ce, l_co, clipped over
 \ [xa, xb) with the context in cx_*, its cursors fresh.
 .edge_clip
-    PHA
-    JSR edge_line
-    PLA                         ; its active piece: slot * 24 + the visit
-    ASL A : ASL A : ASL A : STA cx_act
-    ASL A : ADC cx_act          ; (no carries)
-    ADC el_vis : STA cx_act
+    JSR edge_line               ; (and its active piece, cx_act)
     LDA #0 : STA cx_tp : STA cx_bpset
     LDA h_below : STA clip_edge_line.below
     LDA xa : STA clip_edge_line.xa
@@ -715,7 +699,7 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     JMP issue                   ; the steps ran out
 .@  DEC steps
     LDX po_cell
-    LDY cell_visit,X : JSR vs_cv1
+    LDY cell_visit,X
     LDA po_xr : JSR col_ge
     LDA #0 : ROL A : STA last
     JSR process_edge
@@ -806,17 +790,18 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDA #1 : STA num_visits : STA depth
     \ the root bounds: a plotted top, seeding the fill with the cell's
     \ ceiling, and a dummy bottom off the screen
-    LDA #0
-    STA pool_alloc.x0 : STA pool_alloc.y0
-    STA pool_alloc.g : STA pool_alloc.g + 1
-    LDA #128 : STA pool_alloc.x1
     LDY c_ceil,X
-    LDA shade_e,Y : STA pool_alloc.ce
-    LDA shade_o,Y : STA pool_alloc.co
-    JSR pool_alloc : STX po_tcur
-    LDA #PT_SCREEN_HEIGHT : STA pool_alloc.y0
-    LDA #0 : STA pool_alloc.ce : STA pool_alloc.co
-    JSR pool_alloc : STX po_bcur
+    POOL_NEW : STX po_tcur
+    LDA shade_e,Y : STA p_ce,X
+    LDA shade_o,Y : STA p_co,X
+    LDA #0 : STA p_y0,X
+    STA p_x0,X : STA p_glo,X : STA p_ghi,X : STA p_next,X
+    LDA #128 : STA p_x1,X
+    POOL_NEW : STX po_bcur
+    LDA #0 : STA p_ce,X : STA p_co,X
+    STA p_x0,X : STA p_glo,X : STA p_ghi,X : STA p_next,X
+    LDA #128 : STA p_x1,X
+    LDA #PT_SCREEN_HEIGHT : STA p_y0,X
     JSR root_portal
     JSR walk
     CLC

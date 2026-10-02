@@ -48,17 +48,19 @@ ZA_AUTO1 el_vis                 ; its visit
 .transform
 {
     ZA_AUTO2 wx, wy             ; in
-    ZA_AUTO2 t                  ; local: a ray sum, then x clamped to 1
+    ZA_AUTO2 t                  ; local: a ray sum
     LDA wx : SEC : SBC fr_camx : STA rot.x
     LDA wx + 1 : SBC fr_camx + 1 : STA rot.x + 1
     LDA wy : SEC : SBC fr_camy : STA rot.y
     LDA wy + 1 : SBC fr_camy + 1 : STA rot.y + 1
+.rel                           ; (tf_vertex: from the camera already, rot.x and rot.y)
     LDA fr_angle : JSR rot
     LDA rot.rx : STA tf_x
     LDA rot.rx + 1 : STA tf_x + 1
     LDA rot.ry : STA tf_y
     LDA rot.ry + 1 : STA tf_y + 1
-    \ the ray sums' signs and zeros become the flags
+    \ the ray sums' signs and zeros become the flags (a zero on a ray's
+    \ backward extension is behind: the other ray's sign)
     LDY #0
     LDA tf_x : CLC : ADC tf_y : STA t
     LDA tf_x + 1 : ADC tf_y + 1 : BPL apos
@@ -71,89 +73,95 @@ ZA_AUTO1 el_vis                 ; its visit
     LDA tf_x : SEC : SBC tf_y : STA t
     LDA tf_x + 1 : SBC tf_y + 1 : BPL bpos
     TYA : ORA #VF_BNEG : TAY
-    JMP seams
+    AND #VF_AZERO : BEQ flags
+    TYA : ORA #VF_ANEG : TAY    ; a zero, b negative
+    JMP flags
 .bpos
-    ORA t : BNE seams
+    ORA t : BNE flags
     TYA : ORA #VF_BZERO : TAY
-.seams                          ; zero on a ray's backward extension: behind
-    TYA : AND #VF_ANEG OR VF_BZERO : CMP #VF_ANEG OR VF_BZERO : BNE @+
-    TYA : ORA #VF_BNEG : TAY
-.@  TYA : AND #VF_BNEG OR VF_AZERO : CMP #VF_BNEG OR VF_AZERO : BNE @+
-    TYA : ORA #VF_ANEG : TAY
-.@  STY tf_flags
-    LDA #64 : STA tf_sx
-    LDA #0 : STA tf_f : STA tf_e
-    TYA : AND #VF_ANEG OR VF_BNEG : BNE done    ; outside: column and reciprocal undefined
-    LDA tf_x : STA t            ; inside, so x >= 0; the eye vertex takes depth 1
-    LDA tf_x + 1 : STA t + 1
-    ORA t : BNE @+
-    INC t
-.@  RECIP16 t
+    BPL flags                   ; a not negative (VF_ANEG is bit 7)
+    ORA #VF_BNEG : TAY          ; b zero, a negative
+.flags
+    STY tf_flags
+    TYA : AND #VF_ANEG OR VF_BNEG : BNE outside
+    LDY tf_x + 1 : BEQ byte     ; inside, so x >= 0: its reciprocal, the eye vertex
+    RECIPW tf_x, 0              ; (x = 0) taking depth 1
+    JMP recip
+.byte
+    LDY tf_x : BNE @+
+    INY
+.@  RECIP8
+.recip
     STA tf_f : STX tf_e
-    LDA tf_flags : AND #VF_AZERO : BEQ @+
-    LDA #0 : STA tf_sx          ; exactly on a ray: the exact column
-    RTS
-.@  LDA tf_flags : AND #VF_BZERO : BEQ @+
-    LDA #128 : STA tf_sx
-    RTS
-.@  LDA tf_y : STA project_col.y    ; (x > 0 here)
+    LDA tf_flags : AND #VF_AZERO OR VF_BZERO : BNE exact
+    LDA tf_y : STA project_col.y    ; (x > 0 here)
     LDA tf_y + 1 : STA project_col.y + 1
     LDA tf_f : STA project_col.f
     LDA tf_e : STA project_col.e
     JSR project_col
     STA tf_sx
-.done
+    RTS
+.exact                          ; exactly on a ray: the exact column
+    AND #VF_AZERO : BEQ @+
+    LDA #0 : STA tf_sx
+    RTS
+.@  LDA #128 : STA tf_sx
+    RTS
+.outside                        ; outside: column and reciprocal undefined
+    LDA #64 : STA tf_sx
+    LDA #0 : STA tf_f : STA tf_e
     RTS
 }
 
-\\ A behind vertex's column, mirrored through the camera: project(-y, -x).
-\\ in: cv. out: A.
+\\ Visit Y's end vertex's column when it's behind, mirrored through the
+\\ camera: project(-y, -x). out: A.
 .col_behind
 {
     ZA_AUTO2 nx                 ; local: -x
-    LDA #0 : SEC : SBC cv_x : STA nx
-    LDA #0 : SBC cv_x + 1 : STA nx + 1
-    LDA #0 : SEC : SBC cv_y : STA project_col.y
-    LDA #0 : SBC cv_y + 1 : STA project_col.y + 1
+    LDA #0 : SEC : SBC vs1_xl,Y : STA nx
+    LDA #0 : SBC vs1_xh,Y : STA nx + 1
+    LDA #0 : SEC : SBC vs1_yl,Y : STA project_col.y
+    LDA #0 : SBC vs1_yh,Y : STA project_col.y + 1
     RECIP16 nx
     STA project_col.f : STX project_col.e
     JMP project_col
 }
 
-\\ Is the vertex's column strictly right of column A? The same projection
-\\ as the span columns, so the walk and the spans agree.
-\\ in: cv, A = c. out: C set if so.
+\\ Is visit Y's end vertex's column strictly right of column A? The same
+\\ projection as the span columns, so the walk and the spans agree.
+\\ in: Y = the visit, A = c. out: C set if so.
 .col_gt
 {
     ZA_AUTO1 c                  ; local
     STA c
-    BIT cv_flags : BMI aneg : BVS yes   ; outside right
-    LDA c : CMP cv_sx           ; inside: sx > c?
-    JMP flip
-.aneg
-    BVC no                      ; outside left
-    JSR col_behind              ; behind: the mirror's column < c
-    CMP c
-.flip                           ; C was c >= sx (or col >= c): turn it round
+    LDA vs1_fl,Y : BMI aneg
+    ASL A : BMI yes             ; (VF_BNEG) outside right
+    LDA c : CMP vs1_sx,Y        ; inside: sx > c
     BCS no
 .yes
     SEC
     RTS
+.aneg
+    ASL A : BPL no              ; outside left
+    JSR col_behind              ; behind: the mirror's column < c
+    CMP c : BCC yes
 .no
     CLC
     RTS
 }
 
-\\ Is the vertex's column at or right of column A? in: cv, A = c. out: C set if so.
+\\ Is visit Y's end vertex's column at or right of column A?
+\\ in: Y = the visit, A = c. out: C set if so.
 .col_ge
 {
     ZA_AUTO1 c                  ; local
     STA c
-    BIT cv_flags : BMI aneg : BVS yes
-    LDA cv_sx : CMP c           ; inside: sx >= c
+    LDA vs1_fl,Y : BMI aneg
+    ASL A : BMI yes             ; (VF_BNEG) outside right
+    LDA vs1_sx,Y : CMP c        ; inside: sx >= c
     RTS
 .aneg
-    BVC no
+    ASL A : BPL no              ; outside left
     JSR col_behind              ; behind: the mirror's column <= c
     CMP c : BEQ yes : BCS no
 .yes
@@ -163,8 +171,6 @@ ZA_AUTO1 el_vis                 ; its visit
     CLC
     RTS
 }
-ZA_AUTO2 cv_x, cv_y             ; the vertex col_gt and col_ge test: depth, lateral...
-ZA_AUTO1 cv_sx, cv_flags        ; ...column, flags
 
 \ ---- frustum side clips (spec 7.6) ----
 
@@ -324,9 +330,8 @@ ZA_AUTO1 cv_sx, cv_flags        ; ...column, flags
     ZA_AUTO1 syf, cs            ; local: the far endpoint's row; the clip column
     ZA_AUTO1 sign, fr           ; local: the gradient's sign; the clip column's fraction
     ZA_AUTO2 off, y0q           ; local: the start row's offset, and the start row (u8.8)
-    LDA h_m : STA d
-    LDA #0 : STA d + 1
-    ASL d : ROL d + 1 : ASL d : ROL d + 1 : ASL d : ROL d + 1 : ASL d : ROL d + 1
+    LDA h_m : LSR A : LSR A : LSR A : LSR A : STA d + 1   ; 16 * h.m, a nibble
+    LDA h_m : ASL A : ASL A : ASL A : ASL A : STA d       ; across the two bytes
     LDA #0 : STA edge
     STA l_y0 : STA l_g : STA l_g + 1
     LDA h_below : BEQ @+
@@ -471,14 +476,13 @@ ZA_AUTO1 cv_sx, cv_flags        ; ...column, flags
 \\ already on the screen, so its piece runs on to the edge's end; only a
 \\ line without one is made, side-clipping the endpoints first (once for
 \\ all the edge's lines). in: A = slot, h, l_ce and l_co, the el_* and
-\\ ev_* state. out: the line.
+\\ ev_* state. out: the line, and cx_act.
 .edge_line
 {
-    ZA_AUTO1 slot, t            ; local: the slot, then slot * 8
-    STA slot
-    ASL A : ASL A : ASL A : STA t   ; slot * 24 + the visit
-    ASL A : CLC : ADC t
-    CLC : ADC el_vis : TAX
+    ZA_AUTO1 t                  ; local: slot * 8
+    ASL A : ASL A : ASL A : STA t   ; slot * 24 + the visit: the line's active
+    ASL A : ADC t               ; piece, in cx_act for the clip (no carries)
+    ADC el_vis : STA cx_act : TAX
     LDY vis_act,X : BEQ made
     LDA p_x0,Y : STA l_x0       ; carried on: the piece's start, to the edge's end
     LDA el_sx1 : STA l_x1

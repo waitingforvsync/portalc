@@ -17,7 +17,7 @@
 \   6 REPLAY replay a recorded call (s5.6502)
 \   7 S5T    every map vertex transformed, per pose, CRCed (s5.6502)
 \   8 S5M    make_line on the host's synthetic endpoints (s5.6502)
-\   9 S6     whole captures and frames at the host's poses (s6.6502)
+\   9 S6     whole captures and frames at the host's poses (s6.6502; SUITE 4)
 
 CMD_PING = 0
 CMD_TIME = 1
@@ -53,6 +53,10 @@ ELIF SUITE == 3
 .@  CMP #CMD_S4 : BNE unknown
     JSR cmd_s4
     JMP done
+ELIF SUITE == 4
+.@  CMP #CMD_S6 : BNE unknown
+    JSR cmd_s6
+    JMP done
 ELSE
 .@  CMP #CMD_REPLAY : BNE @+
     JSR cmd_replay
@@ -60,11 +64,8 @@ ELSE
 .@  CMP #CMD_S5T : BNE @+
     JSR cmd_s5t
     JMP done
-.@  CMP #CMD_S5M : BNE @+
+.@  CMP #CMD_S5M : BNE unknown
     JSR cmd_s5m
-    JMP done
-.@  CMP #CMD_S6 : BNE unknown
-    JSR cmd_s6
     JMP done
 ENDIF
 .unknown

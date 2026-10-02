@@ -86,15 +86,19 @@ MACRO MULU16_FRAC u, r
 ENDMACRO
 
 \ The same rounded to nearest: 128 added to the low partial before its
-\ shift. Clobbers X, Y.
+\ shift. A u under 256 skips the high multiply. Clobbers X, Y.
 MACRO MULU16_FRAC_ROUND u, r
 {
     LDY u : MULX
     CPX #&80 : ADC #0 : STA r   ; (u.lo * m + 128) >> 8: the low byte's carry rounds
-    LDY u + 1 : MULX : STA r + 1
+    LDY u + 1 : BEQ byte
+    MULX : STA r + 1
     TXA : CLC : ADC r : STA r
     BCC done
     INC r + 1
+    BCS done                    ; (always)
+.byte
+    STY r + 1                   ; (Y = 0)
 .done
 }
 ENDMACRO
@@ -363,7 +367,8 @@ ENDMACRO
     LDA e : CMP #6 : BCC near
     LDA f : SETMUL
     LDY u : MULHI : STA lo      ; (|y|.lo * f) >> 8
-    LDY u + 1 : MULX : TAY      ; |y|.hi * f: Y = high, X = low
+    LDY u + 1 : BEQ @+          ; (|y| under 256: no more)
+    MULX : TAY                  ; |y|.hi * f: Y = high, X = low
     TXA : CLC : ADC lo : STA lo
     BCC @+
     INY

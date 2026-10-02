@@ -216,6 +216,19 @@ ENDMACRO
 
 \ ---- the drivers: inputs from s2_in (and s2_in2), outputs folded in ----
 
+\ Fold a 3-byte and a 2-byte result in.
+MACRO OUT_Q3 q
+    LDA q : OUT 0
+    LDA q + 1 : OUT 1
+    LDA q + 2 : OUT 2
+ENDMACRO
+
+MACRO OUT_Q2 q
+    LDA q : OUT 0
+    LDA q + 1 : OUT 1
+ENDMACRO
+
+IF S2_PART == 1                 ; (the drivers are split between two harnesses: both
 .drv_mulu8
 {
     USED
@@ -294,17 +307,6 @@ ENDMACRO
     RTS
 }
 
-\ Fold a 3-byte and a 2-byte result in.
-MACRO OUT_Q3 q
-    LDA q : OUT 0
-    LDA q + 1 : OUT 1
-    LDA q + 2 : OUT 2
-ENDMACRO
-
-MACRO OUT_Q2 q
-    LDA q : OUT 0
-    LDA q + 1 : OUT 1
-ENDMACRO
 
 .drv_mul_recip8
 {
@@ -389,6 +391,8 @@ ENDMACRO
 }
 
 \ grad_mag: dy = in0 (<= 64), dx = in1 (>= 1); others skipped.
+ENDIF                           ; carry the whole release, and one can't carry all of them)
+IF S2_PART == 2
 .drv_grad_mag
 {
     LDA s2_in : CMP #65 : BCS skip
@@ -608,9 +612,22 @@ ENDMACRO
     RTS
 }
 
-s2_drivers_list = {drv_mulu8, drv_mulu16_frac, drv_mulu16_frac_round, drv_mulg_u16, drv_recip8,
-                   drv_recip16, drv_mul_recip8, drv_mul_recip16, drv_div_t, drv_div_cols, drv_div_q8,
-                   drv_grad_mag, drv_gradq8_mag, drv_project_col, drv_project_col_q8, drv_project_q8,
-                   drv_project_rowd, drv_lerp16, drv_rot, drv_dir8, drv_ray_basis}
+ENDIF
+
+\ A routine this harness's part doesn't drive: the host asked the wrong one.
+.drv_none
+    TRAP 11
+
+IF S2_PART == 1
+    s2_drivers_list = {drv_mulu8, drv_mulu16_frac, drv_mulu16_frac_round, drv_mulg_u16, drv_recip8,
+                       drv_recip16, drv_mul_recip8, drv_mul_recip16, drv_div_t, drv_div_cols,
+                       drv_div_q8, drv_none, drv_none, drv_none, drv_none, drv_none, drv_none,
+                       drv_none, drv_none, drv_none, drv_none}
+ELSE
+    s2_drivers_list = {drv_none, drv_none, drv_none, drv_none, drv_none, drv_none, drv_none, drv_none,
+                       drv_none, drv_none, drv_none, drv_grad_mag, drv_gradq8_mag, drv_project_col,
+                       drv_project_col_q8, drv_project_q8, drv_project_rowd, drv_lerp16, drv_rot,
+                       drv_dir8, drv_ray_basis}
+ENDIF
 .s2_drivers
     EQUW s2_drivers_list

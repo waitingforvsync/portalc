@@ -1231,3 +1231,147 @@ The candidates so far:
 ### Phase 6: done
 
 Next: sprites.
+
+## 2026-10-01 — Optimisation: the first pass
+
+Phase 7's journal entry is still owed. This one jumped the queue.
+
+### The profiler
+
+The SUITE 4 harnesses carry a sampler. The system VIA's T1 fires every
+997 µs (1,994 cycles), and while `prof_on` says a frame is running, the
+IRQ takes the interrupted PC off the stack and into a 1,760-byte buffer.
+
+`host/profile.py` runs the S6 poses with sprites on (the sweep, a quarter
+of the rim, map 7, a quarter of the stress set: 7,739 frames). It maps
+each PC to its instruction in the listing and reports by routine, by
+label, by overlapping 64-byte window and by instruction.
+`profile.py bench` runs the same poses unsampled, for a before and after.
+
+### Where it went
+
+| Before | Share |
+|---|---|
+| fill | 24.5% |
+| clear | 14.4% |
+| sprite pass | 12.6% (24.7% on map 7) |
+| plot | 6.8% |
+| `rot` | 4.9% |
+| `process_edge`'s own | 4.4% |
+| `transform` | 2.7% |
+| the next thirty | 0.5 to 2.4% each |
+
+Fill and clear are at the floor: 9 cycles a byte (`EOR abs,X`, `STA
+abs,X`) and 5.3. That's 40% of every frame I can't touch.
+
+Everything else is spread thin. No silver bullet, just a lot of lead ones.
+
+The sprite pass is the odd one out: cheap most of the time and dreadful
+up close. A sprite filling the screen made a 648k-cycle frame on the
+sweep and 763k on map 7.
+
+### What changed
+
+The ones that mattered:
+
+- **Pixels that paint alike paint together.** A close sprite is scaled
+  up, so a byte's four pixels come from one or two source columns. Each
+  pixel's paint only ever touches its own bits, so pixels with the same
+  source column and clip rows can share one paint under a wider mask.
+  And clip rows past the art's own first and last rows can't change a run
+  (rows only increase), so they're clamped to them first. That makes most
+  of a close-up's pixels agree:
+
+```
+    LDX gm : BEQ new
+    CMP gcol : BNE other        ; the waiting pixels' column and rows: this one joins
+    LDX top : CPX gtop : BNE other
+    LDX bot : CPX gbot : BNE other
+    LDA c : AND #3 : TAX
+    LDA pixmasks,X : ORA gm : STA gm
+```
+
+- **`rot` skips the high multiply** when a coordinate is under 256. In
+  the recorded transforms that's 68% of x and 88% of y. A transform's
+  median went from 758 cycles to 660.
+- **The sprite pass's toggles are a linked list**, so inserting and
+  removing cost the same anywhere. Shuffling the array was 6% of a
+  close-up. The toggles above every sprite in a byte column fold into the
+  list's head, which only the prefix ever reads.
+- **The sprite pass reads a byte column's blocks** (4 rows, 8 bytes) with
+  one OR each, since most are empty, and counts them down.
+- **`row_step` has a shallow path**: a gradient under 1 is one multiply.
+- **`col_gt` and `col_ge` read a visit's end vertex in place**, rather
+  than having it copied into `cv_*` first. `vs_cv1` is gone.
+- **`process_edge` copies the edge's vertices as far as they're needed**:
+  flags and columns for the span, the start for a child, the end only for
+  lines.
+
+And smaller ones: `pool_alloc` inlined; the pool's pages written
+directly; `project_col` skipping its high multiply too; `transform`'s
+seams only tested on a zero sum; `edge_line` handing `cx_act` to the
+clip; the sprite bounds stepped in place; the source column's rounding
+folded into its start; the palette pointed one back so a shade is two
+loads; and instances that miss a byte column skipped before anything's
+set up.
+
+### The numbers
+
+Mean frame 152.6k cycles before, 138.9k after: 9% off. Capture is 11.5%
+faster, the render (plot, sprites, fill) 9.7%, the clear not at all.
+
+| | Mean | 90% before | 90% after | Max before | Max after |
+|---|---|---|---|---|---|
+| sweep | -10.0% | 284k | 236k | 648k | 409k |
+| rim | -7.9% | 233k | 201k | 518k | 367k |
+| map 7 | -11.1% | 329k | 284k | 763k | 505k |
+| stress | -7.1% | 244k | 225k | 405k | 350k |
+
+The worst frames gained most: a third off the close-ups.
+
+### The demo's loop
+
+The demo used to draw a frame whole, post it, and spin until the vsync
+swapped it in: on average half a vsync gone every frame, to rounding.
+Capture needs neither buffer, so now it doesn't wait for one:
+
+```
+.loop
+    JSR capture                 ; the next frame, while the last one's swap is pending
+.wait
+    LDA swapreq : BNE wait      ; only the clear needs the back buffer
+    JSR clear
+    ...
+    LDA #1 : STA swapreq
+    JMP loop
+```
+
+Measured on b2, the demo's turning camera went from 3.36 vsyncs a frame
+to 2.85: 14.9 frames a second to 17.5. Phase 9's loop should start out
+this way.
+
+### What it cost
+
+354 bytes, most of them the sprite pass's. The release now runs to
+&4C0D, 1,266 bytes under &5100. BSS has 128 bytes left.
+
+That makes the projection for Phases 8 and 9 worse, not better. If bytes
+get dearer than cycles, the first to give back is the head fold: 35 bytes
+for 0.2%.
+
+### Not done
+
+- **The vertex cache.** The C transforms 13.1 vertices a frame on map 0,
+  10.0 of them distinct (map 7: 14.1 and 11.8; stress: 21.3 and 16.7).
+  The repeats are nearly all one vertex: Q, the far end of a portal,
+  which the child's walk transforms again a moment after its parent did.
+  A general cache costs more to fill than it saves. Reusing Q alone, from
+  the parent's visit while it's still on that edge, would save 1.4k to
+  2.8k cycles a frame for about 50 bytes and 72 of BSS.
+- **`rot`'s per-frame half.** The angle's table values and signs are the
+  same for every vertex in a frame. Hoisting them saves 30 cycles a call,
+  0.35%, and touches the S2 and S5 shims.
+- **Reading less of the toggle image.** The C reads every toggle down to
+  the deepest sprite's bottom, and its capacity counts them, so the Beeb
+  has to as well. Reading only down to the lowest visible row would be a
+  spec change, on both sides.

@@ -47,31 +47,46 @@ ZA_AUTO1 l_ce, l_co
 
 \ ---- rows ----
 
-\\ y + or - |g| * dx: the add saturates at &FFFF, the subtract stops at 0.
+\\ y + or - |g| * dx: the add saturates at &FFFF, the subtract stops at 0
+\\ (and a product past &FFFF reaches either end whatever y was).
 \\ in: y, g, A = dx. out: y.
 .row_step
 {
     ZA_AUTO2 y, g               ; in (y also out)
-    ZA_AUTO2 m, d               ; local: |g|, |g| * dx
+    ZA_AUTO1 m, dl              ; local: |g|'s high byte, then the product's; its low byte
     TAY : BEQ done              ; at the anchor: nothing to add
-    SETMUL
-    LDA g : STA m
-    LDA g + 1 : AND #&7F : STA m + 1
-    ORA m : BEQ done            ; flat
-    MULG_U16 m, d
+    LDA g + 1 : AND #&7F : BNE steep
+    ORA g : BEQ done            ; flat
+    TYA : SETMUL                ; dx
+    LDY g : MULX : STX dl       ; shallow: |g|.lo * dx, 16 bits
+.sign
+    STA m
     BIT g + 1 : BMI up
-    LDA y : CLC : ADC d : STA y
-    LDA y + 1 : ADC d + 1 : STA y + 1
+    LDA y : CLC : ADC dl : STA y
+    LDA y + 1 : ADC m : STA y + 1
     BCC done
+.ff
     LDA #&FF : STA y : STA y + 1
     RTS
 .up
-    LDA y : SEC : SBC d : STA y
-    LDA y + 1 : SBC d + 1 : STA y + 1
+    LDA y : SEC : SBC dl : STA y
+    LDA y + 1 : SBC m : STA y + 1
     BCS done
+.zero
     LDA #0 : STA y : STA y + 1
 .done
     RTS
+.sat
+    BIT g + 1 : BMI zero
+    BPL ff                      ; (always)
+.steep
+    STA m
+    TYA : SETMUL                ; dx
+    LDY m : MULX : BNE sat      ; |g|.hi * dx past a byte: past 16 bits
+    STX m                       ; its low byte, 8 bits up
+    LDY g : MULX : STX dl       ; + |g|.lo * dx
+    CLC : ADC m : BCS sat       ; its high byte; a carry saturates
+    BCC sign                    ; (always)
 }
 
 \\ Piece X's row at column A (at or past its x0), in row_step.y.
@@ -107,25 +122,14 @@ ENDMACRO
 
 \ ---- the pool ----
 
-\\ A new piece from pool_alloc's fields, its next 0. out: X = its index.
-.pool_alloc
-{
-    ZA_AUTO1 x0, x1, y0, ce, co ; in
-    ZA_AUTO2 g                  ; in
+\ A new piece: X = its index, its fields the caller's to fill straight
+\ into the pool's pages. Keeps A.
+MACRO POOL_NEW
     LDX pool_last : INX : BNE room
     OVERFLOW 2                  ; the pool's full
 .room
     STX pool_last
-    LDA x0 : STA p_x0,X
-    LDA x1 : STA p_x1,X
-    LDA y0 : STA p_y0,X
-    LDA g : STA p_glo,X
-    LDA g + 1 : STA p_ghi,X
-    LDA ce : STA p_ce,X
-    LDA co : STA p_co,X
-    LDA #0 : STA p_next,X
-    RTS
-}
+ENDMACRO
 
 \\ Split piece X at column A: it keeps [x0, c), a new piece takes [c, x1),
 \\ its row re-anchored (rounded) at c. out: X = the piece, Y = the new one.
@@ -134,20 +138,18 @@ ENDMACRO
     ZA_AUTO1 p, c               ; local
     STX p : STA c
     JSR piece_y
-    ROW_OF : STA pool_alloc.y0
-    LDX p
-    LDA c : STA pool_alloc.x0
-    LDA p_x1,X : STA pool_alloc.x1
-    LDA p_glo,X : STA pool_alloc.g
-    LDA p_ghi,X : STA pool_alloc.g + 1
-    LDA p_ce,X : STA pool_alloc.ce
-    LDA p_co,X : STA pool_alloc.co
-    JSR pool_alloc
-    TXA : TAY                   ; the new piece
-    LDX p
-    LDA p_next,X : STA p_next,Y
-    TYA : STA p_next,X
-    LDA c : STA p_x1,X
+    POOL_NEW
+    ROW_OF : STA p_y0,X
+    LDY p
+    LDA p_x1,Y : STA p_x1,X
+    LDA c : STA p_x0,X : STA p_x1,Y
+    LDA p_glo,Y : STA p_glo,X
+    LDA p_ghi,Y : STA p_ghi,X
+    LDA p_ce,Y : STA p_ce,X
+    LDA p_co,Y : STA p_co,X
+    LDA p_next,Y : STA p_next,X ; linked in after it
+    TXA : STA p_next,Y
+    TAY : LDX p
     RTS
 }
 
@@ -330,14 +332,15 @@ ENDMACRO
     JMP chain_extents
 .fresh
     LDA r0 : JSR line_y
-    ROW_OF : STA pool_alloc.y0
-    LDA r0 : STA pool_alloc.x0
-    LDA r1 : STA pool_alloc.x1
-    LDA l_g : STA pool_alloc.g
-    LDA l_g + 1 : STA pool_alloc.g + 1
-    LDA l_ce : STA pool_alloc.ce
-    LDA l_co : STA pool_alloc.co
-    JSR pool_alloc
+    POOL_NEW
+    ROW_OF : STA p_y0,X
+    LDA r0 : STA p_x0,X
+    LDA r1 : STA p_x1,X
+    LDA l_g : STA p_glo,X
+    LDA l_g + 1 : STA p_ghi,X
+    LDA l_ce : STA p_ce,X
+    LDA l_co : STA p_co,X
+    LDA #0 : STA p_next,X
     TXA : LDY cx_act : STA vis_act,Y
     LDA cx_build : BEQ done
 .append

@@ -1,4 +1,5 @@
 \ portal.6502 - the release program: PORTAL on the disc.
 HARNESS = FALSE
+SUITE = 0                       ; (no checks: test builds pick theirs with -D)
 PROG_NAME = "PORTAL"
 INCLUDE "src/top.6502"

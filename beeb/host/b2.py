@@ -277,7 +277,9 @@ def phase1():
         print('%-6s %s: %s' % ('ok' if good else 'FAIL', name, detail))
 
     for build, which in (('harness0', 0), ('harness1', 0), ('harness0_map7', 7), ('harness0_map9', 9),
-                         ('harness_s2', 0), ('harness_s34_0', 0), ('harness_s34_1', 0)):
+                         ('harness_s2', 0), ('harness_s2b', 0), ('harness_s34_0', 0), ('harness_s34_1', 0),
+                         ('harness_prof', 0), ('harness_prof1', 0), ('harness_prof_map7', 7),
+                         ('harness_prof_map9', 9)):
         boot(os.path.join(BUILD, build + '.ssd'))
         n, bad = check_image(build, 'HARNESS')
         result('S0', not bad, '%s: &%X bytes at &300 %s' % (
@@ -361,16 +363,23 @@ S2_RUNS = [
   + _edges(16, [0, 1, 0x0F, 0x10, 0xFF])
 
 
+S2_SPLIT = 11                      # the first routine harness_s2b drives
+
+
 def phase2(only=None, scale=1.0):
     """Check S2: every arithmetic routine against the C, and its cost."""
-    build = 'harness_s2'
-    boot(os.path.join(BUILD, build + '.ssd'))
-    syms = symbols(build)
-    mb = Mailbox()
     ok = True
-    for fn, rnd, start, count, timed in S2_RUNS:
+    build = None
+    # S2_PART 1 drives the arithmetic (0-10), part 2 the projections
+    for fn, rnd, start, count, timed in sorted(S2_RUNS, key=lambda r: r[0] >= S2_SPLIT):
         if only is not None and S2_NAMES[fn] not in only:
             continue
+        want = 'harness_s2' if fn < S2_SPLIT else 'harness_s2b'
+        if want != build:
+            build = want
+            boot(os.path.join(BUILD, build + '.ssd'))
+            syms = symbols(build)
+            mb = Mailbox()
         count = max(1, int(count * scale))
         crc, calls, _, _ = s2_expect(fn, rnd, start, count)
         bcrc, bcalls, _, us = s2_beeb(mb, syms, fn, rnd, start, count)
@@ -717,10 +726,11 @@ CMD_S6 = 9
 S6_MAX = 16
 S6_REC = 16                             # the Beeb's record (test/s6.6502)
 S6_ORACLE = 14                          # the oracle's: the pose, the CRCs, pool_last, num_visits
-S6_SETS = (('harness0', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
-           ('harness1', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
-           ('harness0_map7', 7, ['map7_poses.bin']),
-           ('harness0_map9', 9, ['stress_poses.bin', 'search9_poses.bin']))
+S6_SETS = (('harness_prof', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
+           ('harness_prof1', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
+           ('harness_prof_map7', 7, ['map7_poses.bin']),
+           ('harness_prof_map9', 9, ['stress_poses.bin', 'search9_poses.bin']))
+S6_B = {'harness_prof1'}                # the builds whose image is buffer B's
 
 
 def s6_expect(which, name, dump=None, sprites=False):
@@ -820,8 +830,8 @@ def s6_diagnose(mb, syms, build, which, name, k, want, sprites):
         return
     s6_beeb(mb, syms, [w[:6]], sprites)
     image = dump[len(state):]
-    beeb = peek(syms['junk0'] if build != 'harness1' else syms['junk2'],
-                image_n if build != 'harness1' else image_n - 256)
+    beeb = peek(syms['junk0'] if build not in S6_B else syms['junk2'],
+                image_n if build not in S6_B else image_n - 256)
     for i, (a, b) in enumerate(zip(image, beeb)):
         if a != b:
             print('       capture identical; first image difference at offset &%X (row %d, byte column %d):'
@@ -847,7 +857,7 @@ def s6_frames(build, which, names, sprites=False):
         got = s6_beeb(mb, syms, [w[:6] for w in want], sprites)
         bad = []
         for k, (w, g) in enumerate(zip(want, got)):
-            img = w[10:12] if build == 'harness1' else w[8:10]   # B's junk row below is the ROM
+            img = w[10:12] if build in S6_B else w[8:10]   # B's junk row below is the ROM
             if g[7] or g[0:2] != w[6:8] or g[2:4] != img or (g[4], g[5]) != (w[12], w[13]):
                 bad.append(k)
         clear = [2 * int.from_bytes(g[8:10], 'little') for g in got]
@@ -874,8 +884,8 @@ def s6_abort():
     """D9: an overflow mid-capture drops the frame - S unwound, counted - and
     the next frames, sprites on, render exactly (each capture starts its own
     state afresh, cell_visit included)."""
-    boot(os.path.join(BUILD, 'harness0.ssd'))
-    syms = symbols('harness0')
+    boot(os.path.join(BUILD, 'harness_prof.ssd'))
+    syms = symbols('harness_prof')
     mb = Mailbox()
     want = s6_expect(0, 'sweep_poses.bin', sprites=True)[:2 * S6_MAX]
     first, then = want[:S6_MAX], want[S6_MAX:]

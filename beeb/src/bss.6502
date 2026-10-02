@@ -34,7 +34,7 @@ IN_ROWS = 33                    ; row edges an instance keeps: its art's height 
 .in_t2  SKIP PT_MAX_INSTS
 \ ...and the sprite pass's, stepped along its columns
 .in_col SKIP PT_MAX_INSTS       ; the source column at the current one
-.in_cn0 SKIP PT_MAX_INSTS       ; its right edge, u8.8, 24 bits
+.in_cn0 SKIP PT_MAX_INSTS       ; its right edge plus a half (rounding), u8.8, 24 bits
 .in_cn1 SKIP PT_MAX_INSTS
 .in_cn2 SKIP PT_MAX_INSTS
 .in_cseg SKIP PT_MAX_INSTS      ; the segment the bound cursors are in, 0 = none yet
@@ -46,10 +46,21 @@ IN_ROWS = 33                    ; row edges an instance keeps: its art's height 
 .in_byl SKIP PT_MAX_INSTS
 .in_byh SKIP PT_MAX_INSTS
 .in_rows SKIP (PT_MAX_INSTS - 1) * IN_ROWS  ; each one's row edges (rowbase)
+.in_top SKIP PT_MAX_INSTS       ; its top edge's row, rows[0]
+.in_bot SKIP PT_MAX_INSTS       ; its bottom edge's row, rows[h]
+.in_h   SKIP PT_MAX_INSTS       ; its art's height, and where the art is:
+.in_dl  SKIP PT_MAX_INSTS       ; its data...
+.in_dh  SKIP PT_MAX_INSTS
+.in_pl  SKIP PT_MAX_INSTS       ; ...and its palette (one back)
+.in_ph  SKIP PT_MAX_INSTS
 
-\ The sprite pass's byte column: its toggle rows, top to bottom.
-.tg_row SKIP PT_MAX_TOGS
-.tg_e   SKIP PT_MAX_TOGS
-.tg_o   SKIP PT_MAX_TOGS
+\ The sprite pass's byte column: its toggles, a list from node 0 (its
+\ head, no toggle) through tg_nx in row order to TG_TAIL (row &FF, past
+\ them all), so inserting and removing cost the same anywhere.
+TG_TAIL = PT_MAX_TOGS + 1
+.tg_row SKIP TG_TAIL + 1
+.tg_e   SKIP TG_TAIL + 1
+.tg_o   SKIP TG_TAIL + 1
+.tg_nx  SKIP TG_TAIL + 1
 
 .aborts SKIP 1                  ; frames dropped on an overflow (D9)

@@ -198,12 +198,12 @@ RP_BP = 34
 .nottf
     CMP #15 : BNE notgt
     JSR rp_cv_in
-    JSR rp_start : JSR col_gt : JSR rp_stop
+    JSR rp_start : LDY #0 : JSR col_gt : JSR rp_stop
     JMP rp_bool_out
 .notgt
     CMP #16 : BNE unknown
     JSR rp_cv_in
-    JSR rp_start : JSR col_ge : JSR rp_stop
+    JSR rp_start : LDY #0 : JSR col_ge : JSR rp_stop
     JMP rp_bool_out
 .unknown
     CMP #255 : BNE bad
@@ -387,15 +387,16 @@ RP_BP = 34
 }
 ZA_AUTO 4, rp_t0                ; the replay's clock at the call
 
-\ The record's VV and c for col_gt and col_ge: A = c.
+\ The record's VV and c for col_gt and col_ge: the VV as visit 0's end
+\ vertex (no visit's), A = c.
 .rp_cv_in
 {
-    LDA rp_buf : STA cv_x
-    LDA rp_buf + 1 : STA cv_x + 1
-    LDA rp_buf + 2 : STA cv_y
-    LDA rp_buf + 3 : STA cv_y + 1
-    LDA rp_buf + 4 : STA cv_sx
-    LDA rp_buf + 5 : STA cv_flags
+    LDA rp_buf : STA vs1_xl
+    LDA rp_buf + 1 : STA vs1_xh
+    LDA rp_buf + 2 : STA vs1_yl
+    LDA rp_buf + 3 : STA vs1_yh
+    LDA rp_buf + 4 : STA vs1_sx
+    LDA rp_buf + 5 : STA vs1_fl
     LDA rp_buf + 8
     RTS
 }

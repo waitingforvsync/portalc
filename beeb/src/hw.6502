@@ -23,10 +23,40 @@ IF HARNESS
     ZA_AUTO 4, usecs            ; IRQ writes: microseconds up to t2last; now reads
     ZA_AUTO2 t2last             ; IRQ writes: T2 when the clock last caught up; now reads
 ENDIF
+IF HARNESS AND SUITE == 4
+    ZA_AUTO1 prof_on            ; main sets: sample the PC at each T1 tick (the profiler)
+    ZA_AUTO2 prof_ptr           ; IRQ writes: where the next sample goes; main resets and reads
+ENDIF
 
 .irq
 {
     ZA_INTERRUPT
+IF HARNESS AND SUITE == 4
+    \ the profiler's tick (system VIA T1, test/s6.6502): the interrupted PC,
+    \ two bytes up the stack past the flags, into the sample buffer
+    ZA_AUTO1 sx, sy             ; local: X and Y (the OS saved only A)
+    BIT &FE4D : BVC vsync       ; T1?
+    LDA &FE44                   ; acknowledged
+    LDA prof_on : BEQ quiet
+    STX sx : STY sy
+    LDA prof_ptr : CMP #LO(prof_end)
+    LDA prof_ptr + 1 : SBC #HI(prof_end) : BCS full
+    TSX
+    LDY #0
+    LDA &102,X : STA (prof_ptr),Y
+    INY
+    LDA &103,X : STA (prof_ptr),Y
+    LDA prof_ptr : CLC : ADC #2 : STA prof_ptr
+    BCC full
+    INC prof_ptr + 1
+.full
+    LDX sx : LDY sy
+.quiet
+    LDA &FE4D : AND #&02 : BNE vsync
+    LDA &FC                     ; just the tick
+    RTI
+.vsync
+ENDIF
     LDA #&02 : STA &FE4D            ; acknowledge vsync (CA1)
 IF HARNESS
     ZA_AUTO1 hi, lo             ; local: T2 read consistently

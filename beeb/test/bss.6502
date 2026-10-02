@@ -1,8 +1,16 @@
 \ bss.6502 (test) - the harness's own state, after the release BSS
 
-IO_SIZE = 1024
+IF SUITE == 4
+    IO_SIZE = 128                   ; (poses only: the rest is the profiler's)
+    PROF_SIZE = 1760
+ELSE
+    IO_SIZE = 1024
+    PROF_SIZE = 0
+ENDIF
 .io_area SKIP IO_SIZE               ; the host's I/O area: poses, pools, records
 .io_end
+.prof_buf SKIP PROF_SIZE            ; the profiler's samples: PCs, two bytes each (hw.6502)
+.prof_end
 
 .crc_lo SKIP 256                    ; the CRC-16 of each byte (crc.6502)
 .crc_hi SKIP 256
@@ -32,6 +40,11 @@ ELIF SUITE == 3
 
 \ check S4 (s4.6502): each pool's image CRC and plot microseconds
 .s4_out SKIP 4 * S4_MAX
+ELIF SUITE == 4
+
+\ checks S6 and S7 (s6.6502), and the profiler: each pose's results
+.s6_out SKIP S6_REC * S6_MAX
+.s6_extra SKIP 5                    ; a diagnosis's zero-page counts: num_insts, the order, seg_next, num_pend
 ELSE
 
 \ checks S5 and S5u (s5.6502): a replayed call's context, line, arguments and results
@@ -45,8 +58,4 @@ ELSE
 .rp_buf SKIP 40                     ; the arguments, as the record has them (make_line on)
 .rp_res SKIP 41                     ; the results, likewise
 .s5t_out SKIP 2 * S5T_MAX           ; check S5: each pose's CRC of its view vertices
-
-\ check S6 (s6.6502): each pose's results
-.s6_out SKIP S6_REC * S6_MAX
-.s6_extra SKIP 5                    ; a diagnosis's zero-page counts: num_insts, the order, seg_next, num_pend
 ENDIF

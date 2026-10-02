@@ -1165,6 +1165,15 @@ In the implementation (`sprite_pass`, run between plotting and the fill):
   transparent run or the column's end; its first colour is the last run starting at
   or above the clipped `ya`.
 
+On the Beeb (beeb/src/sprites.6502) the list is linked, from a head through to a tail
+whose row is past every row, so an insert or a removal costs the same anywhere. The
+toggles above every sprite in the byte column fold into the head, which only the
+prefix reads (they still count against the cap). And a byte's pixels with the same
+source column and clip rows share one `paint` under their combined mask, the clip rows
+first clamped to the art's own first and last row edges, past which they can't change
+a run. Each pixel's bits are independent, so painting them together is the same as
+one after another.
+
 ### 9.6 Cost and memory
 
 Per covered byte column: ~11 cycles per scanned row (so at most ~700), plus per

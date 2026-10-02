@@ -53,7 +53,9 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
         INCLUDE "walk.6502"
         INCLUDE "sprites.6502"
         INCLUDE "../data/shades.6502"
-        IF MAP == 7
+        IF MAP == 1
+            INCLUDE "../data/map1.6502"
+        ELIF MAP == 7
             INCLUDE "../data/map7.6502"
         ELIF MAP == 9
             INCLUDE "../data/map9.6502"
@@ -68,9 +70,10 @@ SECTION Loader, org = &1200, load = &FFFF1200, exec = &FFFF0000 + entry, filenam
             ELIF SUITE == 3
                 INCLUDE "../test/s3.6502"
                 INCLUDE "../test/s4.6502"
+            ELIF SUITE == 4                 ; whole frames (S6, S7), and the profiler
+                INCLUDE "../test/s6.6502"
             ELSE
                 INCLUDE "../test/s5.6502"
-                INCLUDE "../test/s6.6502"
             ENDIF
             INCLUDE "../test/pad.6502"
         ENDIF

@@ -42,8 +42,8 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 
 | Path | What |
 |---|---|
-| `portal.6502`, `boot.6502` | the release program (`PORTAL`) and its `!BOOT` |
-| `harness.6502`, `tboot.6502` | the test harness (`HARNESS`): the release code so far and one suite of checks, `-D SUITE=0` (S5 onwards; `harness0`, `harness1` and the map builds), `3` (S3 and S4: `harness_s34_0`, `_1`) or `2` (S2: `harness_s2`), with `-D TESTBUF=0` or `1` and `-D MAP=0`, `7` or `9` |
+| `portal.6502`, `boot.6502` | the release program (`PORTAL`) and its `!BOOT`: `build/portal.ssd` on map 0, `build/portal_mapN.ssd` on map N (map 1 is map 0 starting in the second room); `make MAP=N demo` runs it |
+| `harness.6502`, `tboot.6502` | the test harness (`HARNESS`): the release code and one suite of checks, `-D SUITE=0` (S5 and its replays: `harness0`, `harness1` and the map builds), `4` (S6 and S7 frames, the abort check and the profiler: `harness_prof`, `harness_prof1` and the map builds), `3` (S3 and S4: `harness_s34_0`, `_1`) or `2` (S2, in two parts by `-D S2_PART`: `harness_s2` the arithmetic, `harness_s2b` the projections), with `-D TESTBUF=0` or `1` and `-D MAP=0`, `7` or `9` |
 | `src/top.6502` | the sections: screens, BSS, and the loader carrying the payload |
 | `src/layout.6502` | the memory map and the mailbox |
 | `src/stub.6502` | the loader's entry: takes the machine over, copies the payload to &300 |
@@ -72,6 +72,7 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | `host/trace.py`, `host/trace_hooks.c` | the traced copy of render.c and its hooks (`REPLAY.md`) |
 | `host/coverage.sh`, `host/uncovered.py`, `host/uncovered.txt` | the coverage gate |
 | `host/gonogo.py` | the frame-rate go/no-go: predicted frame times from measured costs |
+| `host/profile.py` | the sampling profiler: where whole frames' cycles go, by routine, label, 64-byte window and instruction; `bench` for the cycles alone |
 | `host/replay.py` | unit replay on the Beeb: records decoded, poked, called, compared (`REPLAY.md`) |
 | `REPLAY.md` | the unit-replay record format |
 

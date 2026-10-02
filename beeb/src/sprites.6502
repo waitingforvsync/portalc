@@ -333,6 +333,25 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 
 \ ---- the sprite pass (spec 9.5) ----
 
+\ Instance X's bound row (yl, yh) one column on, in place: the plotter's
+\ own step, so the clip rows are the plotted rows. in: Y = the piece.
+MACRO STEP1 yl, yh
+{
+    LDA p_ghi,Y : BMI up
+    LDA yl,X : CLC : ADC p_glo,Y : STA yl,X
+    LDA yh,X : ADC p_ghi,Y : BCC done
+    LDA #&FF : STA yl,X         ; saturating at &FFFF
+    BNE done                    ; (always)
+.up
+    AND #&7F : STA gh
+    LDA yl,X : SEC : SBC p_glo,Y : STA yl,X
+    LDA yh,X : SBC gh : BCS done
+    LDA #0 : STA yl,X           ; stopping at 0
+.done
+    STA yh,X
+}
+ENDMACRO
+
 \\ The sprites, far to near, into the toggle image: per byte column, the
 \\ plotted toggles read into a sparse list, and each instance's opaque
 \\ runs over it painted as toggles, clipped to the bounds its segments
@@ -340,20 +359,26 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 .sprite_pass
 {
     ZA_AUTO1 b0, b1, bc, c0, c1 ; local: the byte columns covered, this one, its pixels
-    ZA_AUTO1 ymax               ; local: how far down this byte column's sprites reach
+    ZA_AUTO1 ymax, ytop         ; local: how far down and up this byte column's sprites reach
     ZA_AUTO1 ii, c, ce          ; local: an instance, its pixel column, the last + 1
     ZA_AUTO1 top, bot           ; local: the column's clip rows
     ZA_AUTO1 h, rb              ; local: the art's height, the instance's row edges
+    ZA_AUTO1 r0, rh             ; local: its first and last row edges
+    ZA_AUTO1 gm, gcol           ; local: the pixels waiting to paint, their column...
+    ZA_AUTO1 gtop, gbot         ; ...and clip rows
     ZA_AUTO1 m, mn              ; local: the pixel's mask, and not it
     ZA_AUTO1 p, q               ; local: the runs, as indexes into the art's data
     ZA_AUTO1 ya, yb             ; local: a silhouette run's rows
     ZA_AUTO 3, y                ; local: a row edge, u8.8, 24 bits
     ZA_AUTO2 cur                ; local: the cursor's block
-    ZA_AUTO1 row, te            ; local: reading the toggles
+    ZA_AUTO1 row, te, nb        ; local: reading the toggles, the blocks left
+    ZA_AUTO1 tg_free, tg_bump   ; local: the toggle nodes free, and never used yet
+    ZA_AUTO1 gh                 ; local: a bound's step, its magnitude's high byte
     LDA order_head : BNE some
     RTS
 .some
     LDA #&FF : STA b0
+    STA tg_row + TG_TAIL        ; (the toggle list's end, past every row)
     LDA #0 : STA b1
     LDX order_head
 .setup                          ; each instance's row edges and cursors...
@@ -381,10 +406,22 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     INY
     TYA : SEC : SBC rowbase,X   ; k + 1
     CMP h : BEQ edge : BCC edge
+    LDA in_rows - 1,Y : STA in_bot,X    ; (what the byte columns want, once)
+    LDY rowbase,X : LDA in_rows,Y : STA in_top,X
+    LDA h : STA in_h,X
+    LDA spr_data : STA in_dl,X
+    LDA spr_data + 1 : STA in_dh,X
+    LDA spr_pal : SEC : SBC #1 : STA in_pl,X     ; (one back: entries count from 1)
+    LDA spr_pal + 1 : SBC #0 : STA in_ph,X
     LDA #0 : STA in_col,X
-    LDA in_l0,X : CLC : ADC in_scl,X : STA in_cn0,X     ; col_next = left + scale
-    LDA in_l1,X : ADC in_sch,X : STA in_cn1,X
-    LDA in_l2,X : ADC #0 : STA in_cn2,X
+    LDA in_l0,X : CLC : ADC in_scl,X : STA in_cn0,X     ; col_next = left + scale,
+    LDA in_l1,X : ADC in_sch,X : STA in_cn1,X           ; plus a half: its rounding
+    LDA in_l2,X : ADC #0 : STA in_cn2,X                 ; done once
+    LDA in_cn0,X : EOR #&80 : STA in_cn0,X
+    BMI @+                      ; (no carry out of the half)
+    INC in_cn1,X : BNE @+
+    INC in_cn2,X
+.@
     LDA in_seg,X : STA in_cseg,X
     LDA #&FF : STA in_cc,X
     LDA in_cx0,X : LSR A : LSR A    ; ...and the byte columns covered
@@ -401,15 +438,16 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 .column
     LDA bc : ASL A : ASL A : STA c0
     CLC : ADC #4 : STA c1
-    LDA #0 : STA ymax           ; how far down this byte column's sprites reach
+    LDA #0 : STA ymax           ; how far up and down this byte column's sprites reach
+    LDA #&FF : STA ytop
     LDX order_head
 .reach
     LDA in_cx0,X : CMP c1 : BCS @+
     LDA c0 : CMP in_cx1,X : BCS @+
-    JSR inst_art
-    LDY #1 : LDA (spr_data),Y   ; the bottom edge: rows[h]
-    CLC : ADC rowbase,X : TAY
-    LDA in_rows,Y : CMP ymax : BCC @+
+    LDA in_top,X : CMP ytop : BCS low
+    STA ytop
+.low
+    LDA in_bot,X : CMP ymax : BCC @+
     STA ymax
 .@  LDA in_next,X : TAX : BNE reach
     LDA ymax : BNE toggles
@@ -422,24 +460,60 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 .toggles
     CMP #PT_SCREEN_HEIGHT : BCC @+
     LDA #PT_SCREEN_HEIGHT - 1 : STA ymax
-.@  LDA #0 : STA num_togs : STA row  ; the plotted toggles down to there
+.@  LSR A : LSR A : STA nb       ; the plotted toggles down to there, a block (4
+    LDA #1 : STA tg_bump            ; rows) at a time: most hold none at all. (The
+    LDA #0 : STA num_togs           ; nodes from 1, node 0's fold the toggles above
+    STA tg_free                     ; every sprite here.)
+    STA tg_e : STA tg_o
     LDX c0
-    AT cur, scrnbase
-.read
+    AT cur, scrnbase                ; (row 0: cur is the column's top block, Y 0)
+.block
+    LDY #0 : LDA (cur),Y
+    FOR i = 1 ..< 8
+        INY : ORA (cur),Y
+    NEXT
+    BNE inked
+.nextblock
+    INC cur + 1
+    DEC nb : BPL block
+    BMI read                        ; (always)
+.inked
+    LDA cur + 1 : SEC : SBC scrnbase    ; its first row
+    ASL A : ASL A : STA row
+    LDY #0
+.rowread
     LDA (cur),Y : STA te
-    INY : ORA (cur),Y : BEQ @+
-    LDX num_togs : CPX #PT_MAX_TOGS : BCC room
-    OVERFLOW 10                 ; the toggles are full
+    INY : ORA (cur),Y : BEQ rowdone
+    TYA : LSR A : CLC : ADC row     ; (Y odd: its row in the block)
+    CMP ymax : BEQ @+ : BCS read
+.@  LDX num_togs : CPX #PT_MAX_TOGS : BCC room
+    OVERFLOW 10                     ; the toggles are full
 .room
-    LDA row : STA tg_row,X
+    INC num_togs                    ; (folded or not: the list's capacity is the C's)
+    CMP ytop : BCC fold             ; above every sprite here: folded into node 0
+    LDX tg_bump : INC tg_bump       ; a node, after the last
+    STA tg_row,X
+    TXA : STA tg_nx - 1,X
     LDA te : STA tg_e,X
     LDA (cur),Y : STA tg_o,X
-    INC num_togs
-.@  DOWN cur
-    LDA row : INC row
-    CMP ymax : BCC read
+    JMP rowdone
+.fold
+    LDA te : EOR tg_e : STA tg_e
+    LDA (cur),Y : EOR tg_o : STA tg_o
+.rowdone
+    INY : CPY #8 : BCC rowread
+    BCS nextblock                   ; (always)
+.read                               ; (cur's low byte stays the column's, for plot)
+    LDX tg_bump : DEX               ; the last node's next: the tail
+    LDA #TG_TAIL : STA tg_nx,X
 
     LDX order_head
+.test
+    LDA in_cx0,X : CMP c1 : BCS skip    ; any of its columns in this byte?
+    LDA c0 : CMP in_cx1,X : BCC inst
+.skip
+    LDA in_next,X : TAX : BNE test
+    JMP nextcol
 .inst
     STX ii
     LDA in_cx0,X : CMP c0 : BCS @+  ; [c, ce): the instance's columns in this byte
@@ -448,26 +522,67 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     LDA in_cx1,X : CMP c1 : BCC @+
     LDA c1
 .@  STA ce
-    JSR inst_art
-    LDY #1 : LDA (spr_data),Y : STA h
+    LDA in_dl,X : STA spr_data
+    LDA in_dh,X : STA spr_data + 1
+    LDA in_pl,X : STA spr_pal   ; (its palette one back, for entries from 1)
+    LDA in_ph,X : STA spr_pal + 1
+    LDA in_h,X : STA h
+    LDA in_bot,X : STA rh       ; rows[h]...
+    LDA in_top,X : STA r0       ; ...and rows[0]
     LDA rowbase,X : STA rb
-.pixel
-    LDA c : CMP ce : BCC @+
+    LDA #0 : STA gm             ; no pixels waiting
+.pixel                          ; each pixel column's clip rows and source column; pixels
+    LDA c : CMP ce : BCC @+     ; that would paint the same go together
+    JSR flush
     JMP nextinst
-.@  JSR bounds : BCC hid
-    LDA top : CMP bot : BCC @+
-.hid
-    JMP nextpix
-.@  JSR inst_col                ; (never past the art's width: render.c's test is dead)
-    CLC : ADC #2 : TAY          ; its runs
-    LDA (spr_data),Y : STA p
+.@  JSR bounds : BCC nextpix
+    LDA top : CMP r0 : BCS @+   ; the clip rows within the art's: rows past its ends
+    LDA r0                      ; can't change a run (rows only increase)
+.@  STA top
+    LDA bot : CMP rh : BCC @+
+    LDA rh
+.@  STA bot
+    CMP top : BEQ nextpix : BCC nextpix ; none of it shows
+    JSR inst_col                ; (never past the art's width: render.c's test is dead)
+    LDX gm : BEQ new
+    CMP gcol : BNE other        ; the waiting pixels' column and rows: this one joins
+    LDX top : CPX gtop : BNE other
+    LDX bot : CPX gbot : BNE other
     LDA c : AND #3 : TAX
-    LDA pixmasks,X : STA m
-    EOR #&FF : STA mn
-.runs                           ; each silhouette run: consecutive opaque runs, clipped
+    LDA pixmasks,X : ORA gm : STA gm
+    JMP nextpix
+.other
+    PHA
+    JSR flush                   ; ...else they're painted, and it waits instead
+    PLA
+.new
+    STA gcol
+    LDA top : STA gtop
+    LDA bot : STA gbot
+    LDA c : AND #3 : TAX
+    LDA pixmasks,X : STA gm
+.nextpix
+    INC c
+    JMP pixel
+.nextinst
+    LDX ii
+    JMP skip
+
+\ Paint the waiting pixels gm of source column gcol, clipped to rows [gtop,
+\ gbot): each silhouette run, consecutive opaque runs. Pixels are painted
+\ independently, bit by bit, so the ones with the same column and rows can
+\ share the work.
+.flush
+    LDA gm : BNE @+
+    RTS
+.@  STA m : EOR #&FF : STA mn
+    LDA #0 : STA gm
+    LDA gcol : CLC : ADC #2 : TAY   ; its runs
+    LDA (spr_data),Y : STA p
+.runs
     LDY p
     LDA (spr_data),Y : AND #7 : BNE opaque
-    INY : LDA (spr_data),Y : AND #&F8 : BEQ nextpix   ; the column ends transparent
+    INY : LDA (spr_data),Y : AND #&F8 : BEQ flushed ; the column ends transparent
     STY p                       ; transparent: on to the next run
     JMP runs
 .opaque
@@ -477,8 +592,8 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     STY q                       ; a transparent run, or the column's end
     LDY p : LDA (spr_data),Y
     LSR A : LSR A : LSR A : CLC : ADC rb : TAX
-    LDA in_rows,X : CMP top : BCS @+    ; ya = rows[p], at least top
-    LDA top
+    LDA in_rows,X : CMP gtop : BCS @+   ; ya = rows[p], at least the top
+    LDA gtop
 .@  STA ya
     LDY q : LDA (spr_data),Y : AND #&F8 : BNE @+
     LDA h                       ; the column's end: rows[h]
@@ -486,23 +601,16 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 .@  LSR A : LSR A : LSR A
 .ybk
     CLC : ADC rb : TAX
-    LDA in_rows,X : CMP bot : BCC @+    ; yb = rows[q], at most bot
-    LDA bot
+    LDA in_rows,X : CMP gbot : BCC @+   ; yb = rows[q], at most the bottom
+    LDA gbot
 .@  STA yb
     LDA ya : CMP yb : BCS @+
     JSR paint
-.@  LDY q : LDA (spr_data),Y : AND #&F8 : BEQ nextpix
+.@  LDY q : LDA (spr_data),Y : AND #&F8 : BEQ flushed
     STY p
     JMP runs
-.nextpix
-    LDX ii
-    INC c
-    JMP pixel
-.nextinst
-    LDX ii
-    LDA in_next,X : TAX : BEQ @+
-    JMP inst
-.@  JMP nextcol
+.flushed
+    RTS
 
 \ Move instance ii's bound cursors to column c (columns only increase): C
 \ clear when no segment covers it (hidden there), else the clip rows, top
@@ -554,11 +662,7 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 .tstep
     LDA in_tk,X : CLC : ADC in_cseg,X : TAY
     LDA segs + SEG_PIECES,Y : TAY
-    LDA in_tyl,X : STA step1.y
-    LDA in_tyh,X : STA step1.y + 1
-    JSR step1
-    STA in_tyh,X
-    LDA step1.y : STA in_tyl,X
+    STEP1 in_tyl, in_tyh
 .bottom
     \ the bottom likewise, its pieces after the top's
     LDY in_cseg,X
@@ -577,11 +681,7 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     LDY in_cseg,X
     LDA in_bk,X : CLC : ADC segs + SEG_NT,Y : ADC in_cseg,X : TAY
     LDA segs + SEG_PIECES,Y : TAY
-    LDA in_byl,X : STA step1.y
-    LDA in_byh,X : STA step1.y + 1
-    JSR step1
-    STA in_byh,X
-    LDA step1.y : STA in_byl,X
+    STEP1 in_byl, in_byh
 .rows
     LDA c : STA in_cc,X
     LDA in_tyh,X : CMP #PT_SCREEN_HEIGHT + 1 : BCC @+   ; row_of: the high byte, at most H
@@ -599,11 +699,9 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
 .inst_col
     LDX ii
 .cnext
-    LDA in_cn0,X : CMP #&80     ; round(col_next) <= c: on a column
-    LDA in_cn1,X : ADC #0 : TAY
-    LDA in_cn2,X : ADC #0 : BMI next
+    LDA in_cn2,X : BMI next     ; round(col_next) <= c: on a column
     BNE got
-    CPY c : BEQ next : BCS got
+    LDA in_cn1,X : CMP c : BEQ next : BCS got
 .next
     INC in_col,X
     LDA in_cn0,X : CLC : ADC in_scl,X : STA in_cn0,X
@@ -623,7 +721,9 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     ZA_AUTO1 pe, po             ; local: the colour being painted
     ZA_AUTO1 ne, no             ; local: the next
     ZA_AUTO1 acce, acco         ; local: the world's value before the sprite
-    ZA_AUTO1 ti                 ; local: the walk through the toggles
+    ZA_AUTO1 tp, pp             ; local: the walk through the toggles: the last
+                                ; entry passed, and the one before it
+    ZA_AUTO1 en                 ; local: an entry being erased
     ZA_AUTO1 trow, xe, xo       ; local: a toggle to put, or erase down to trow
     LDY p : LDA (spr_data),Y : AND #7   ; the first colour: the last run starting
 .first                                  ; at or above ya
@@ -635,17 +735,22 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     JMP first
 .found
     STY p
-    LDY pe : JSR shade : STX pe : STA po
-    LDA #0 : STA acce : STA acco : TAX  ; the prefix: the world's value at ya
+    LDY pe : LDA (spr_pal),Y : TAY ; its shade
+    LDA shade_e,Y : STA pe
+    LDA shade_o,Y : STA po
+    LDA tg_e : STA acce         ; the prefix: the world's value at ya, from node 0's
+    LDA tg_o : STA acco         ; fold on
+    LDX #0
 .prefix
-    CPX num_togs : BCS @+
-    LDA tg_row,X : CMP ya : BEQ fold : BCS @+
+    LDY tg_nx,X
+    LDA tg_row,Y : CMP ya : BEQ fold : BCS @+
 .fold
-    LDA acce : EOR tg_e,X : STA acce
-    LDA acco : EOR tg_o,X : STA acco
-    INX
+    LDA acce : EOR tg_e,Y : STA acce
+    LDA acco : EOR tg_o,Y : STA acco
+    STX pp
+    TYA : TAX
     JMP prefix
-.@  STX ti
+.@  STX tp
     LDA ya : STA trow
     LDA acce : EOR pe : AND m : STA xe
     LDA acco : EOR po : AND m : STA xo
@@ -657,7 +762,9 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     LDA in_rows,X : CMP yb : BCS end
     STA trow
     LDA (spr_data),Y : AND #7 : BEQ end
-    TAY : JSR shade : STX ne : STA no
+    TAY : LDA (spr_pal),Y : TAY ; its shade
+    LDA shade_e,Y : STA ne
+    LDA shade_o,Y : STA no
     JSR erase
     LDA pe : EOR ne : AND m : STA xe
     LDA po : EOR no : AND m : STA xo
@@ -677,115 +784,105 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     JSR put
 .@  RTS
 
-\ Palette entry Y (1..7)'s shade: X = even, A = odd.
-.shade
-    DEY : LDA (spr_pal),Y : TAY
-    LDX shade_e,Y : LDA shade_o,Y
-    RTS
-
 \ A toggle (xe, xo) at row trow, kept one entry a row: merged into the
-\ entry at ti - 1 or ti if it's that row (and removed if it cancels out),
-\ else inserted at ti; the screen gets it either way. ti moves past it.
+\ entry at tp or the one after if it's that row (and removed if it cancels
+\ out), else inserted after tp; the screen gets it either way. The walk
+\ moves past it. (Rows only increase through a paint, so once tp's entry
+\ is removed, the one before it is never needed.)
 .put
     LDA xe : ORA xo : BEQ @+
     JSR plot
-    LDX ti : BEQ notprev
-    LDA tg_row - 1,X : CMP trow : BNE notprev
-    DEX                         ; the entry before
-    JMP merge
-.@  RTS
-.notprev
-    CPX num_togs : BCS insert
-    LDA tg_row,X : CMP trow : BNE insert
-.merge
-    LDA tg_e,X : EOR xe : STA tg_e,X
+    LDX tp : BEQ notprev
+    LDA tg_row,X : CMP trow : BNE notprev
+    LDA tg_e,X : EOR xe : STA tg_e,X    ; the entry passed
     LDA tg_o,X : EOR xo : STA tg_o,X
     ORA tg_e,X : BNE @+
-    STX ti                      ; cancelled out: gone
-    JMP remove
-.@  INX : STX ti
+    LDY pp                      ; cancelled out: gone, the walk back one
+    LDA tg_nx,X : STA tg_nx,Y
+    STY tp
+    JMP free
+.@  RTS
+.notprev
+    LDY tg_nx,X
+    LDA tg_row,Y : CMP trow : BNE insert
+    TYA : TAX
+    LDA tg_e,X : EOR xe : STA tg_e,X    ; the entry after
+    LDA tg_o,X : EOR xo : STA tg_o,X
+    ORA tg_e,X : BNE past
+    LDY tp                      ; cancelled out: gone
+    LDA tg_nx,X : STA tg_nx,Y
+    JMP free
+.past
+    LDA tp : STA pp
+    STX tp
     RTS
-.insert
-    LDY num_togs : CPY #PT_MAX_TOGS : BCC gap
+.insert                         ; after tp, X
+    LDA num_togs : CMP #PT_MAX_TOGS : BCC room
     OVERFLOW 10                 ; the toggles are full
-.gap
-    CPY ti : BEQ @+             ; open a gap at ti
-    LDA tg_row - 1,Y : STA tg_row,Y
-    LDA tg_e - 1,Y : STA tg_e,Y
-    LDA tg_o - 1,Y : STA tg_o,Y
-    DEY
-    JMP gap
-.@  LDA trow : STA tg_row,Y
+.room
+    INC num_togs
+    LDY tg_free : BEQ bump      ; a node: a freed one, else a new one
+    LDA tg_nx,Y : STA tg_free
+    JMP got
+.bump
+    LDY tg_bump : INC tg_bump
+.got
+    LDA trow : STA tg_row,Y
     LDA xe : STA tg_e,Y
     LDA xo : STA tg_o,Y
-    INC num_togs
-    INY : STY ti
+    LDA tg_nx,X : STA tg_nx,Y   ; linked in...
+    TYA : STA tg_nx,X
+    STX pp                      ; ...and passed
+    STY tp
     RTS
 
-\ Erase this pixel's world toggles at rows up to trow from ti on, folding
-\ them into acc; ti moves past them.
+\ Free node X, unlinked.
+.free
+    LDA tg_free : STA tg_nx,X
+    STX tg_free
+    DEC num_togs
+    RTS
+
+\ Erase this pixel's world toggles at rows up to trow after tp, folding
+\ them into acc; the walk moves past them.
 .erase
-    LDX ti : CPX num_togs : BCS erased
-    LDA tg_row,X : CMP trow : BEQ @+ : BCS erased
-.@  LDA tg_e,X : AND m : STA xe
-    LDA tg_o,X : AND m : STA xo
+    LDX tp
+.eloop
+    LDY tg_nx,X : STY en
+    LDA tg_row,Y : CMP trow : BEQ @+ : BCS erased
+.@  LDA tg_e,Y : AND m : STA xe
+    LDA tg_o,Y : AND m : STA xo
     ORA xe : BEQ skip
     LDA acce : EOR xe : STA acce
     LDA acco : EOR xo : STA acco
-    LDA trow : PHA
-    LDA tg_row,X : STA trow
-    JSR plot                    ; annuls the pixel's plotted toggle
-    PLA : STA trow
-    LDX ti
+    LDA tg_row,Y : JSR plota    ; annuls the pixel's plotted toggle
+    LDX en
     LDA tg_e,X : AND mn : STA tg_e,X
     LDA tg_o,X : AND mn : STA tg_o,X
     ORA tg_e,X : BNE skip
-    JSR remove
-    JMP erase
+    LDY tp                      ; emptied: gone
+    LDA tg_nx,X : STA tg_nx,Y
+    JSR free
+    LDX tp
+    JMP eloop
 .skip
-    INC ti
-    JMP erase
+    LDA tp : STA pp             ; passed
+    LDX en : STX tp
+    JMP eloop
 .erased
     RTS
 
-\ Remove toggle X.
-.remove
-    DEC num_togs
-.shift
-    CPX num_togs : BCS @+
-    LDA tg_row + 1,X : STA tg_row,X
-    LDA tg_e + 1,X : STA tg_e,X
-    LDA tg_o + 1,X : STA tg_o,X
-    INX
-    JMP shift
-.@  RTS
-
-\ EOR the toggle (xe, xo) into row trow of byte column bc.
+\ EOR the toggle (xe, xo) into row trow (0..H) of byte column bc, or row
+\ A at plota: cur's low byte is the column's still, from reading its
+\ toggles. Clobbers X.
 .plot
-    LDA trow : LDX c0
-    AT cur, scrnbase
+    LDA trow
+.plota
+    TAX : LSR A : LSR A
+    CLC : ADC scrnbase : STA cur + 1
+    TXA : AND #3 : ASL A : TAY
     ROW cur, #&FF, xe, xo
     RTS
 }
 }
 
-\\ A bound row one column on: the plotter's own step, so the clip rows are
-\\ the plotted rows. in: y, Y = the piece. out: y, A = its high byte. Keeps X.
-.step1
-{
-    ZA_AUTO2 y                  ; in (and out)
-    ZA_AUTO1 gh                 ; local: the magnitude's high byte
-    LDA p_ghi,Y : BMI up
-    LDA y : CLC : ADC p_glo,Y : STA y
-    LDA y + 1 : ADC p_ghi,Y : BCC done
-    LDA #&FF : STA y            ; saturating at &FFFF
-    BNE done                    ; (always)
-.up
-    AND #&7F : STA gh
-    LDA y : SEC : SBC p_glo,Y : STA y
-    LDA y + 1 : SBC gh : BCS done
-    LDA #0 : STA y              ; stopping at 0
-.done
-    STA y + 1
-    RTS
-}

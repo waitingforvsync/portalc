@@ -1232,9 +1232,190 @@ The candidates so far:
 
 Next: sprites.
 
-## 2026-10-01 — Optimisation: the first pass
+## 2026-10-01 — Phase 7: sprites
 
-Phase 7's journal entry is still owed. This one jumped the queue.
+### What's there
+
+`src/sprites.6502` (2,653 bytes) is the rest of render.c, the sprites
+(spec §9):
+
+- **`inst_new`** projects a cell's sprite on the cell's first visit: its
+  scale, its corner and column cursor in 24 bits, and the columns it
+  covers. Behind, too near or wholly off the screen, it's instance 0, the
+  C's null one. Most calls find no sprite at all: a median of 24 cycles,
+  a mean of 343.
+- **`seg_record`** runs as the walk enters a portal in a cell with a
+  sprite. It records the bound pieces over the columns the portal and the
+  sprite share, while the chains are still whole. A segment is 5 bytes
+  plus one a piece, from a 256-byte pool.
+- **`inst_issue`** runs as a walk call pops. The instances its portals
+  left pending go to the tail of the draw order, innermost first (spec
+  §9.4).
+- **`sprite_pass`** runs between the plot and the fill. Per byte column,
+  it reads the plotted toggles into a list, paints each instance's opaque
+  runs over them as more toggles, clipped by its segments, and plots the
+  list back.
+
+The walk's side is three calls and a byte:
+
+```
+.walk
+    LDA num_pend : STA pend     ; this call's portals leave theirs above it
+.portal
+    JSR seg_record
+    ...
+    LDA pend : PHA              ; D15's ninth byte
+    JSR take
+    INC depth
+    JSR walk
+    ...
+.issue
+    LDA pend
+    JMP inst_issue
+```
+
+And `visit_new` calls `inst_new`. Four new overflows: the instances (7),
+the segments (8), the pending stack (9) and a byte column's toggles (10).
+
+### D13, placed
+
+`BSS_BASE` goes up to &5100:
+
+| Where | What |
+|---|---|
+| The junk rows | the visits' 20 tables, `cell_visit`, the pending stack, the active pieces, the closed list |
+| The spare, &6900-&6EFF | six of the pool's eight pages |
+| BSS, &5100 | the pool's other two, the segments, the instances, their row edges, the toggles: 1,312 bytes |
+
+The junk rows are capture's only until the plot overruns into them. So
+capture zeroes `cell_visit` at its start, where the C clears it at the
+frame's end. Test builds CRC the capture before they zero the junk rows
+for the plot, so the whole-frame checks still compare the overruns.
+
+### The harness, again
+
+With the sprites in, suite 0 came out 959 bytes past &5700. So:
+
+- S3 and S4 have a suite of their own, `SUITE=3` (`harness_s34_0` and
+  `_1`).
+- The CRC tables are built at start-up by `crc_init`, not assembled:
+  512 bytes back.
+
+S6's record now times the capture, the render (plot, sprites, fill) and
+the clear separately, and takes the state's CRC before the plot. Later
+the profiler needed room as well, and the frames got `SUITE=4` (next
+entry).
+
+### The tenth pose
+
+The first frames with sprites stopped with error 6: `root_exact`'s
+fallback, the one that can't happen. One pose at a time, all 16 of the
+batch matched. In a batch, the tenth pose failed, and every one after it,
+whatever they were. Pose 9 twelve times over failed from the tenth copy
+on.
+
+The host writes a batch's poses into `io_area`, which was the pad after
+the code. The sprites had brought the code to &56C7, 57 bytes short of
+&5700, and 16 poses are 96 bytes. From the tenth on they were in junk0,
+where capture keeps its visits. Each frame wrote its visits over the
+poses still to come.
+
+`io_area` is in test BSS now.
+
+### Read before run
+
+Four bugs came out of reading the code back before it ever ran:
+
+- `step1`'s upward step stored the gradient's high byte over the row's,
+  then subtracted it from itself.
+- A pixel column ending at the art's row 32 went through `h << 3`, which
+  is 256. In a byte.
+- `bstep` indexed the segment with a Y it had just lost.
+- `seg_record` indexed its new segment from the pool's next free byte,
+  less 5. For the pool's last segment that wraps to 0, and it would have
+  written in front of `segs`.
+
+Baron had its say too: two `LDY abs,Y`, a mode the 6502 never had, and
+some branches out of range.
+
+### Checking it
+
+The replays (S5u) now cover the sprite functions, and the walk's
+replays carry the full sprite state:
+
+| | Records | |
+|---|---|---|
+| `inst_new` | 179 | identical |
+| `seg_record` | 185 | identical |
+| `inst_issue` | 142 | identical |
+
+All 17 targets pass. S7 renders whole frames with sprites on, and the
+sweep's 1,172 matched on Phase 7's own code. The full run came after the
+optimisation pass (next entry), on its code:
+
+| | Poses | |
+|---|---|---|
+| Map 0, buffer A | 7,545 | identical |
+| Map 0, buffer B | 7,545 | identical |
+| Map 7 | 2,344 | identical |
+| The stress map | 10,520 | identical |
+
+That's S6's 27,954 frames again, sprites and all. The abort check passes
+with sprites on: 5 of 16 frames dropped, 5 counted, and the next 16
+frames as the C draws them. It no longer checks that `cell_visit` is empty,
+since capture empties it at the start now.
+
+The stress frames take the stack to &146, the ninth byte at work (S6's
+reached &153).
+
+Not broken on purpose yet. The mutation round is written but has never
+run: it aims at suite 0's builds, which don't render frames any more.
+It's owed.
+
+### What it costs
+
+On the sweep, with Phase 7's code (cycles):
+
+| | Sprites off | Sprites on |
+|---|---|---|
+| Median | 109k | 109k |
+| 90% | 196k | 284k |
+| Max | 364k | 648k |
+
+Most frames barely notice the boulder. Get close to it and the worst
+frame nearly doubles. That's where the optimisation pass went first.
+
+### The demo
+
+Rich wanted to see it run once the sprites were code complete: the
+camera fixed at the map's start, turning an angle unit a vsync. So the
+release learned to render. Everything from arith to the sprites came out
+of the harness-only block, and the main loop became the demo. The angle
+at each capture is the vsync count, on from the start's, so it turns at
+50 units a second however long the frames take.
+
+`make demo` runs it in b2 at real speed, in our own config folder. (The
+checks' b2 runs flat out, which would spin it like a top.) `MAP=7` gives
+it seven sprites.
+
+### Budget
+
+The sprites came to 2,653 bytes against Phase 5's estimate of 2.0K. With
+the renderer in, the release runs to &4AB1: 1,614 bytes under &5100.
+Phases 8 and 9 were estimated at 1.6K and 0.5K, so the projection becomes
+about 17.4K against D13's 16,896: about 500 over. It's off the line now,
+on the wrong side. §2.4's fallbacks, cheapest first, are still the way
+back.
+
+Every harness carries the release, so the camera's 1.6K comes out of
+each of them as well, and most haven't got it. The tightest,
+`harness0_map7`, has 383 bytes left today.
+
+### Phase 7: done
+
+Next: the camera. But first, a detour.
+
+## 2026-10-01 — Optimisation: the first pass
 
 ### The profiler
 
@@ -1375,3 +1556,78 @@ for 0.2%.
   the deepest sprite's bottom, and its capacity counts them, so the Beeb
   has to as well. Reading only down to the lowest visible row would be a
   spec change, on both sides.
+
+## 2026-10-01 — The demo: a better view, another room, and a tear that wasn't
+
+### Out of the boulder's way
+
+Map 0's start looks straight down the passage, with the boulder bang in
+the middle of it. So on maps 0 and 7 the demo's camera now stands 136 to
+the right, at (1756, 1400) in cell 6: the closest it can stand and still
+see the passage past the boulder. All 256 angles from there match the C (S7, sprites
+on).
+
+### Map 1: the second room
+
+Map 1 is map 0 with a different start: (812, 1536) in cell 8, between
+the pillar and the corridor back to the first room, facing the pillar
+and the stairs at angle 150. As it turns, it looks back down the
+corridor at the boulder from the other side.
+
+- `beebtool`'s `start_pose` knows map 1, and `beebtool export` writes
+  `data/map1.6502`: map 0's geometry, the new start.
+- `make build/portal_map1.ssd` builds the disc. Any `portal_mapN.ssd`
+  is the release on map N, and `make MAP=1 demo` runs it.
+
+All 256 angles match the C. On b2 it does 13.9 frames a second with
+nothing dropped. That's slower than map 0's 17.5, as there's more to
+walk from there: capture's median is 93k cycles, against 22k at map 0's
+demo pose.
+
+### Even scanlines only? No
+
+Rich asked: could the sprite pass read only the even scanlines of a byte
+column, looking for anything not black? Half the reads.
+
+Before the fill, a byte isn't a colour, it's a toggle, and the shades
+are two-scanline dithers. So a toggle can be zero on its even line and
+not on its odd. Shades 9 and 12 are both &50 on the even scanline, but
+&A0 and &A5 on the odd: a line between them is a toggle of (0, &05). Half
+of the shade pairs map 0 uses have a pixel like that.
+
+Miss one and the colour under the sprite is wrong down to the column's
+end, an erase can miss a world toggle, and the toggle count drifts from
+the C's. And if it worked, it would save about 1% of a frame.
+
+### The tear that wasn't
+
+Rich saw what looked like tearing in b2, as if there were one buffer.
+There are two, and the program keeps out of the one on show:
+
+- 300 samples of map 1 running, each reading the shown buffer twice,
+  with `scrnbase` and the swap stamp read either side. In the 184 with
+  no swap in between, the shown buffer never changed by a byte. (The
+  other 116 straddled a swap.)
+- The swap is in the vsync IRQ, at row 26, after the 16 displayed rows.
+  The 6845 takes the new R12 at the next frame's start, 13 rows later,
+  and the back buffer isn't cleared until the IRQ has been.
+- Nothing holds the IRQ off. The release has no `SEI` after start-up.
+
+So the tear is probably b2's. It shows an emulated 50Hz picture at the
+host's refresh rate, so a host frame can catch the top of one Beeb frame
+over the bottom of the last. Phase 0's "(probably) doesn't tear" stands,
+still with its "probably": a b2 screenshot of a tear would settle it.
+Its config has `screenshot_last_vsync` set, which by its name takes the
+last whole Beeb frame.
+
+There is some judder, and it's honest. The camera turns a unit a vsync,
+but the frames don't all take the same number of vsyncs, so on map 1 the
+turn from one frame to the next goes 3, 4, 3, 3, 4.
+
+### Not done
+
+- **A demo without the boulder.** There's no such map, but skipping
+  `sprite_pass` gives one: S6 already draws frames that way, exactly as
+  the C does with sprites off. Capture still projects the boulder and
+  records its segments, a few hundred cycles. A `-D NOSPRITES` in
+  `main.6502` and the Makefile, if wanted.

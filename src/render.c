@@ -1079,6 +1079,20 @@ static pt_line edge_line(const pt_render *r, pt_edgelines *el, uint8_t slot, pt_
     return make_line(el->e0, el->e1, h, col);
 }
 
+// One of an edge's lines that forms no bound: clipped from the bounds'
+// cursors at the span's start, merges only.
+static void plain_line(pt_render *r, pt_clip *cx, pt_edgelines *el, uint8_t slot, pt_relh h,
+                       pt_pattern col, uint8_t xa, uint8_t xb)
+{
+    const pt_visit *vs = &r->visits[el->vis];
+    cx->tp = vs->tcur;
+    cx->bp = vs->bcur;
+    cx->own = 0;
+    cx->slot = slot;
+    pt_line l = edge_line(r, el, slot, h, col);
+    clip_line(r, cx, &l, xa, xb);
+}
+
 // Process the visit's current edge: its lines, and the child through it, if
 // any (its visit, entered; 0 for none).
 static uint8_t process_edge(pt_render *r, uint8_t vi)
@@ -1120,9 +1134,10 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     vs->tcur = piece_at(r, vs->tcur, xa);    // the bounds' pieces at xa: chains
     vs->bcur = piece_at(r, vs->bcur, xa);    // only ever gain pieces, never lose them
 
-    // 2. a soft edge hands the bounds on as they are. A cell already walked
-    // over these columns can only be a rounding mishap with the eye on a
-    // vertex: it is not entered again.
+    // 2. a soft edge is level both ways and has no lines: it hands the
+    // bounds on as they are. A cell already walked over these columns can
+    // only be a rounding mishap with the eye on a vertex: it is not entered
+    // again.
     if (e->colour == PT_EDGE_SOFT) {
         uint8_t ci = visit_of(r, e->adj);
         pt_visit *cv = &r->visits[ci];
@@ -1141,47 +1156,38 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     pt_pattern ca_floor = pt_shade(ca->floor);
     pt_relh ha_c = rel_h(ca->ceil_z, r->eye_z);
     pt_relh ha_f = rel_h(ca->floor_z, r->eye_z);
-    pt_clip cx = {.tp = vs->tcur, .bp = vs->bcur, .tmax = vs->tmax, .bmin = vs->bmin,
-                  .vis = vi, .shut = ST_NONE};
-    pt_line l;
+    pt_clip cx = {.tmax = vs->tmax, .bmin = vs->bmin, .vis = vi, .shut = ST_NONE};
 
     if (e->adj == 0) {
-        // 3. a solid wall: its ceiling line and floor line, merges only, so
-        // each starts from the bounds' cursors again
-        cx.slot = PT_SLOT_CEIL;
-        l = edge_line(r, &el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall));
-        clip_line(r, &cx, &l, xa, xb);
-        cx.tp = vs->tcur;
-        cx.bp = vs->bcur;
-        cx.own = 0;
-        cx.slot = PT_SLOT_FLOOR;
-        l = edge_line(r, &el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor));
-        clip_line(r, &cx, &l, xa, xb);
+        // 3. a solid wall: its ceiling line and floor line, merges only
+        plain_line(r, &cx, &el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall), xa, xb);
+        plain_line(r, &cx, &el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor), xa, xb);
         return 0;
     }
 
     const pt_cell *cb = &m->cells[e->adj];
     pt_pattern cb_ceil = pt_shade(cb->ceil);
     pt_pattern cb_floor = pt_shade(cb->floor);
+    pt_pattern cc = pt_pattern_xor(ca_ceil, cb_ceil);
+    pt_pattern ff = pt_pattern_xor(cb_floor, ca_floor);
+    bool level_c = cb->ceil_z == ca->ceil_z;
+    bool level_f = cb->floor_z == ca->floor_z;
 
     // 3. the lines forming no bound go first: merges only, against the
-    // bounds intact
-    if (cb->ceil_z > ca->ceil_z) {
-        cx.slot = PT_SLOT_CEIL;
-        l = edge_line(r, &el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall));
-        clip_line(r, &cx, &l, xa, xb);
-        cx.tp = vs->tcur;
-        cx.bp = vs->bcur;
-        cx.own = 0;
-    }
-    if (cb->floor_z < ca->floor_z) {
-        cx.slot = PT_SLOT_FLOOR;
-        l = edge_line(r, &el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor));
-        clip_line(r, &cx, &l, xa, xb);
-        cx.tp = vs->tcur;
-        cx.bp = vs->bcur;
-        cx.own = 0;
-    }
+    // bounds intact. Where the two cells' ceilings (or floors) are level,
+    // the line there forms no bound either: everything seen past it is
+    // farther, so on the screen it's below a level ceiling's line and above
+    // a level floor's, and the child just keeps the parent's bound on that
+    // side. The line is then only a change of colour, and isn't even made
+    // if the shades match too.
+    if (cb->ceil_z > ca->ceil_z)
+        plain_line(r, &cx, &el, PT_SLOT_CEIL, ha_c, pt_pattern_xor(ca_ceil, wall), xa, xb);
+    else if (level_c && (cc.e | cc.o) != 0)
+        plain_line(r, &cx, &el, PT_SLOT_CEIL_BOUND, ha_c, cc, xa, xb);
+    if (cb->floor_z < ca->floor_z)
+        plain_line(r, &cx, &el, PT_SLOT_FLOOR, ha_f, pt_pattern_xor(wall, ca_floor), xa, xb);
+    else if (level_f && (ff.e | ff.o) != 0)
+        plain_line(r, &cx, &el, PT_SLOT_FLOOR_BOUND, ha_f, ff, xa, xb);
 
     // 4. the bound-forming lines, built into the child's visit (a scratch
     // record, visit 0, for a cell already walked over these columns: the
@@ -1190,59 +1196,76 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     // is above the top. The ceiling line then builds the top bound against
     // the parent's top and the child's bottom, over the columns the floor
     // line left open: where that closed the child, the ceiling line is above
-    // the top as well, and merges with nothing evaluated.
+    // the top as well, and merges with nothing evaluated. A level side has
+    // no line: the child shares the parent's bound there.
     uint8_t ci = visit_of(r, e->adj);
     uint8_t bv = r->visits[ci].xr > xa ? 0 : ci;
     pt_visit *cv = &r->visits[bv];
-    cv->tcur = cv->bcur = 0;
-    cv->tmax = 0;
-    cv->bmin = PT_SCREEN_HEIGHT;
-    cx.child = bv;
-    cx.cbfb = pt_pattern_xor(cb_ceil, cb_floor);
+    pt_pattern cbfb = pt_pattern_xor(cb_ceil, cb_floor);
+    pt_line l;
 
-    pt_relh h = ha_f;
-    pt_pattern col = pt_pattern_xor(cb_floor, ca_floor);
-    if (cb->floor_z < ca->floor_z) {
-        h = rel_h(cb->floor_z, r->eye_z);
-        col = pt_pattern_xor(cb_floor, wall);
-    }
-    cx.slot = PT_SLOT_FLOOR_BOUND;
-    cx.shut = ST_ABOVE;
-    l = edge_line(r, &el, PT_SLOT_FLOOR_BOUND, h, col);
-    clip_line(r, &cx, &l, xa, xb);
-    run_end(r, &cx);
-    uint8_t fl = cx.ol;
-    uint8_t fr = cx.orr;
-    if (fl >= fr)
-        fl = fr = xb;
-
-    h = ha_c;
-    col = pt_pattern_xor(ca_ceil, cb_ceil);
-    if (cb->ceil_z > ca->ceil_z) {
-        h = rel_h(cb->ceil_z, r->eye_z);
-        col = pt_pattern_xor(wall, cb_ceil);
-    }
-    cx = (pt_clip) {.tp = vs->tcur, .bp = cv->bcur, .tmax = vs->tmax, .bmin = cv->bmin,
-                    .vis = vi, .slot = PT_SLOT_CEIL_BOUND, .shut = ST_NONE, .child = bv,
-                    .cbfb = cx.cbfb};
-    l = edge_line(r, &el, PT_SLOT_CEIL_BOUND, h, col);
-    merge_above(r, &cx, &l, xa, fl);
-    if (fl < fr) {
-        cx.shut = ST_BELOW;
-        clip_line(r, &cx, &l, fl, fr);
+    uint8_t ol = xa;
+    uint8_t orr = xb;
+    if (level_f) {
+        cv->bcur = vs->bcur;
+        cv->bmin = vs->bmin;
+    } else {
+        cv->bcur = 0;
+        cv->bmin = PT_SCREEN_HEIGHT;
+        pt_relh h = ha_f;
+        pt_pattern col = ff;
+        if (cb->floor_z < ca->floor_z) {
+            h = rel_h(cb->floor_z, r->eye_z);
+            col = pt_pattern_xor(cb_floor, wall);
+        }
+        cx = (pt_clip) {.tp = vs->tcur, .bp = vs->bcur, .tmax = vs->tmax, .bmin = vs->bmin,
+                        .vis = vi, .slot = PT_SLOT_FLOOR_BOUND, .shut = ST_ABOVE, .child = bv,
+                        .cbfb = cbfb};
+        l = edge_line(r, &el, PT_SLOT_FLOOR_BOUND, h, col);
+        clip_line(r, &cx, &l, xa, xb);
         run_end(r, &cx);
-        cx.shut = ST_NONE;
+        ol = cx.ol;
+        orr = cx.orr;
+        if (ol >= orr)
+            ol = orr = xb;
     }
-    merge_above(r, &cx, &l, fr, xb);
+
+    if (level_c) {
+        cv->tcur = vs->tcur;
+        cv->tmax = vs->tmax;
+    } else {
+        cv->tcur = 0;
+        cv->tmax = 0;
+        pt_relh h = ha_c;
+        pt_pattern col = cc;
+        if (cb->ceil_z > ca->ceil_z) {
+            h = rel_h(cb->ceil_z, r->eye_z);
+            col = pt_pattern_xor(wall, cb_ceil);
+        }
+        cx = (pt_clip) {.tp = vs->tcur, .bp = cv->bcur, .tmax = vs->tmax, .bmin = cv->bmin,
+                        .vis = vi, .slot = PT_SLOT_CEIL_BOUND, .shut = ST_NONE, .child = bv,
+                        .cbfb = cbfb};
+        l = edge_line(r, &el, PT_SLOT_CEIL_BOUND, h, col);
+        merge_above(r, &cx, &l, xa, ol);
+        if (ol < orr) {
+            cx.shut = ST_BELOW;
+            clip_line(r, &cx, &l, ol, orr);
+            run_end(r, &cx);
+            cx.shut = ST_NONE;
+        }
+        merge_above(r, &cx, &l, orr, xb);
+        ol = cx.ol;
+        orr = cx.orr;
+    }
 
     // 5. the child: the run of columns the two lines left open
-    if (cx.ol >= cx.orr)
+    if (ol >= orr)
         return 0;
     if (bv == 0) {
-        close_columns(r, cv->bcur, cx.ol, cx.orr, cx.cbfb);
+        close_columns(r, cv->bcur, ol, orr, cbfb);
         return 0;
     }
-    return enter(r, ci, ei, cx.ol, cx.orr, v0);
+    return enter(r, ci, ei, ol, orr, v0);
 }
 
 // ---- the frame (spec 7.1, 7.4, 7.5) ----

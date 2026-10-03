@@ -2167,3 +2167,223 @@ a level where the old 6502 saved a whole portal, isn't in the model at all.
 The traced build follows: `flip`, `hide`, `meet`, `merge`, `own_piece` and
 `chain_add` take their rows, the clip's record carries the line cursor, and
 there's a `line_step` counter. 5,348 records, all reproduce.
+
+## 2026-10-04 — Rows as plain bytes: why relinking and heading ties come back
+
+I wanted to see the raw cost of dropping `yf`: rows as whole bytes, a piece
+or line keeping just the row at its start, and its row at column c being
+`y0 + round(g * (c - x0))`. Comparisons and crossings work on those rows.
+That's an experiment, uncommitted. To make it hold up it needed two things
+the `yf` version doesn't: relinking instead of twins, and a tie rule I've
+called heading ties. This entry is why.
+
+Both come from one fact. With whole rows, a piece split partway along a
+line restarts on the rounded row there, with the half assumed, and from
+then on it can be up to a row off the line it came from.
+
+### Why the child's bound needs the parent's piece
+
+My pit again. Cell 14's bottom bound is the lip A. Through 14's edge to 20,
+say the floor line B is hidden below A over columns 45 to 52, and shows
+above it from 52 to 62.
+
+```
+  row 30                BBBBBBBBB      B above A: it shows
+  row 31  AAAAAAAAAAAAAAAAAAAAAAA      A, 14's bottom bound
+  row 32  BBBBBBBBBBBBB                B below A: hidden
+          45           52       62
+```
+
+So 20's bottom bound is A where B is hidden and B where it shows. 20's own
+lines, H for instance, are clipped against A over 45 to 52. In chains:
+
+```
+  14's bottom:  A'(45..52) -> C(52..62) -> ...     A split at 52
+  20's bottom:  A'(45..52) -> B(52..62)
+```
+
+A' would need two `next`s. Two ways round that:
+
+- **Relinking.** Move A' into 20's chain (`A'.next = B`), and step 14's own
+  cursor on to C. 14 never needs A' again: its later edges are all to the
+  right of it. This is what I'd sketched: change the left side in place,
+  and let the right side carry on.
+- **A twin.** Give 20 a new, uncoloured piece on A's line over 45 to 52,
+  and leave A' alone. 20's own merges colour the twin, and it plots on
+  A's rows, so the toggles stack as if they'd gone into A'.
+
+A twin only works if it lands on exactly A's rows. With `yf` it does. With
+plain bytes the twin rounds at column 45 by itself, and A at its own start,
+so they can be a row apart. The child's merges would then sit a row off the
+line they belong to. So bytes mean relinking.
+
+### What relinking drags in
+
+**A split even with no colour.** If B's colour against A is 0 (the same
+floor shade on both sides), nothing needs recolouring. A still has to be
+cut at 52, so that A' can end where B starts. A chain is walked by x, and
+a piece runs on to its `x1`.
+
+**The cursor follows.** After the edge, 14's bottom cursor must be C, the
+piece after A'. Only the clip knows that, so the clip hands it back.
+
+**Shared chains.** A child through a soft edge has no lines and makes no
+bounds: it walks its parent's own chain. Its edges then relink pieces of
+that chain into its own children's. Say 10A's bottom bound is one piece P,
+and 10A sees 10D through a soft edge over columns 6 to 45. Inside 10D, the
+floor line of the edge down into 20 is hidden below P over 6 to 30, so
+that part of P is relinked into 20's bottom:
+
+```
+  P(0..6) -> P'(6..30) -> 20's bottom chain ...
+             P''(30..128)          <- now nothing points here
+```
+
+Back in 10A, its cursor still sits on P. Walk `next` from there and you're
+in 20's chain, and P'' is lost. So 10D's walk ends with its cursor on P'',
+and 10A takes it back. Tail calls hand it down a chain of soft edges, so
+`walk` tracks which visit holds it.
+
+The old code dodged all of this with `cut`: splitting the parent's chain at
+every edge's span ends, so each edge owned its own pieces. In a busy frame
+that was 34 of 78 pieces, 30 of them the same colour as their neighbour.
+
+The level skip (below) makes more children share a chain: through a level
+side, the child walks the parent's bound on that side. So the hand-back
+became per side.
+
+### Why heading ties
+
+The clip counts a line on its bound as hidden: it merges, which plots the
+same pixels once instead of twice. A hidden run ends at the crossing,
+`c + floor(d0 / dg) + 1`. With exact rows a line is exactly on its bound
+almost never, and for a column at most. With whole rows, "the same row" is
+everywhere. It goes like this, in a frame from room 1's ring:
+
+1. A rising bound A starts on row 20 at column 93, gradient -0.37. A flat
+   line F is on row 20 over the same columns.
+2. At 93 they share a row, so F counts as hidden. The rows are 0 apart, so
+   the crossing comes out at 94: a one-column hidden run.
+3. F merges into A over that column, so A is split at 94.
+4. A's new right part restarts on its rounded row: 20.5 - 0.37 = 20.13,
+   which is row 20 again.
+5. At 94 they still share row 20. Back to step 2.
+
+```
+  what it should be                     what it was
+  row  7                     AAA        row  7
+                       AAAAAA
+                 AAAAAA
+           AAAAAA
+  row 20  AA                            row 20  AAAAAAAAAAAAAAAAAAAAAA  (31 pieces)
+          FFFFFFFFFFFFFFFFFFFFFF                FFFFFFFFFFFFFFFFFFFFFF
+          93                  128               93                  128
+```
+
+A never rises. It ends 13 rows below where it should, and everything
+between fills the wrong colour: a wedge. With `yf` the split keeps 20.13,
+so the next column is 19.76 (row 19), and F has left it after one column.
+
+The obvious fix is to call a shared row inside, and only a row strictly
+past the bound hidden. But rows past the top of the screen saturate to row
+0, which is the screen's own top row. A line off the top would then read
+as inside and be drawn off the end of the buffer (it was).
+
+**Heading ties:** when the line and the bound share a row, the line is
+inside if it's heading away from the bound, and hidden otherwise. Rows grow
+downwards, so by the gradients:
+
+```
+  same row as the top bound:     line's gradient greater (it drops away)    -> inside
+  same row as the bottom bound:  line's gradient smaller (it climbs away)   -> inside
+  same row, where the line was cut off at the screen's edge                 -> hidden
+```
+
+In the example A is F's top bound and climbs away from it while F stays
+level, so F counts as inside at 93: no run, no split, and A is never
+touched.
+
+It's cheap. Of about 45 side tests a frame on map 0, 13 are ties. Five of
+those are in cut-off columns, and the other 8 need the gradient compare,
+perhaps 30 cycles on the 6502. About 3 come out inside, and each of those is
+a one-column hidden run (a merge, up to two splits, a relink and an own
+piece) not done.
+
+### Level sides
+
+Where the two cells' ceilings meet level, the ceiling line can't bound
+anything in the child. Everything seen past it is farther away, so on the
+screen it's below a level ceiling's line, and floors likewise. So the child
+keeps the parent's bound on that side, and the line is drawn as a plain
+line only if the shades differ. If they match, it isn't made at all. A soft
+edge is just level both ways with no lines.
+
+On map 0 that's 18% fewer projections (15.9 to 13.0 a frame) and 17% fewer
+clips. The pool peaks at 89 instead of 115. Map 9's cells mostly differ in
+height, so it barely moves.
+
+### How it comes out
+
+Against the floating-point ray cast, over about 67,000 frames:
+
+| map 0 | wrong pixels | mean pool | worst frame vs `yf` |
+|---|---|---|---|
+| `yf` (committed) | 1,892,329 | 23.0 | |
+| bytes, twins | 1,931,323 | 30.3 | +212 (wedges) |
+| bytes, relinking | 1,927,467 | 27.9 | +212 (wedges) |
+| bytes, relinking, heading ties | 1,897,883 | 22.7 | +28 |
+| ... and the level skip | 1,897,807 | 18.9 | +28 |
+
+Map 9 still has 49 frames 50 or more pixels worse than `yf`, all in room
+Q. There, along long shallow edges, two lines `yf` keeps a row apart land
+on the same row, leaving a one- or two-row sliver of the wrong colour.
+That's the kind of misalignment I expected from plain bytes.
+
+The cost model (estimated 6502 cycles a frame, current goldens) against
+the committed `yf` version:
+
+| map | capture | total |
+|---|---|---|
+| 0 | 24,161 -> 21,937 | 33,135 -> 30,664 |
+| 7 | 31,314 -> 28,275 | 46,640 -> 43,286 |
+| 9 | 33,913 -> 33,960 | 43,033 -> 42,917 |
+
+Nearly all of that is the level skip. Bytes against `yf` is about even. The
+level skip doesn't need bytes: it would drop into the `yf` version as is.
+
+So the trade is a pool page (`yf`) against relinking (a split even with no
+colour, the cursor hand-backs and three more bytes a level in `walk`),
+heading ties, and the odd sliver.
+
+## 2026-10-04 — Back to exact rows, with the level skip
+
+Plain-byte rows saved a pool page and about 2% of the capture's cycles
+(cheaper compares, a constant low byte), and paid most of it back in
+relinking, heading ties and the odd sliver. Not worth it unless that page
+turns out to be the one the Beeb can't spare. So the experiment is gone
+(the patch is kept, in case it is).
+
+The level skip stays, now in the `yf` version, where it's simpler: a level
+side shares the parent's chain, and since twins never relink anything,
+there's no cursor to hand back. `walk` didn't change.
+
+Against the commit before it, over the comparer's 67,000 frames:
+
+- map 0: 10 frames change, all slightly closer to the ray cast. 18% fewer
+  projections (15.9 to 13.0 a frame), 17% fewer clips. Mean pool 23.0 to
+  19.2, peak 102 to 79.
+- map 9: 186 frames change, 161 closer. The 25 further off (by up to 41
+  pixels) are all on the shelf R1, which is 16 units tall: the eye is above
+  its ceiling, and both versions are thousands of pixels from the ray cast
+  there anyway.
+
+The cost model, estimated 6502 cycles a frame:
+
+| map | capture | total | slowest 10% |
+|---|---|---|---|
+| 0 | 24,161 -> 21,321 | 33,135 -> 30,171 | 78,567 -> 70,118 |
+| 7 | 31,314 -> 27,563 | 46,640 -> 42,714 | 93,288 -> 85,196 |
+| 9 | 33,913 -> 33,401 | 43,033 -> 42,442 | 89,972 -> 88,211 |
+
+That's better than the whole plain-byte experiment managed. The replay
+records are remade: 4,984, all reproduce. 34/34 tests.

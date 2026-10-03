@@ -17,8 +17,7 @@
 
 #define PT_POOL_SIZE 256      // piece 0 is the null link
 #define PT_MAX_DEPTH 16      // portals nested along a line of sight (the walk's
-                              // recursion; about 10 bytes of 6502 stack each)
-#define PT_MAX_CLOSED 8
+                              // recursion, which keeps only a visit index)
 #define PT_MAX_VISITS PT_MAX_CELLS    // distinct cells one frame may visit; entry 0 is null
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
 #define PT_SPRITE_NEAR 32     // sprites nearer than this depth are skipped
@@ -45,12 +44,14 @@ static inline uint8_t pt_g_isneg(uint16_t g)
     return (uint8_t)(g >> 15);
 }
 
-// A line piece (8 bytes): a screen-space line over columns [x0, x1), row
-// y0 +- (c - x0) * g, colour (ce, co), chained by pool index.
+// A line piece (9 bytes): a screen-space line over columns [x0, x1), row
+// (y0, yf) +- (c - x0) * g, colour (ce, co), chained by pool index.
 typedef struct pt_piece {
     uint8_t x0;
     uint8_t x1;
-    uint8_t y0;      // row at x0; PT_SCREEN_HEIGHT marks off screen (flat floor markers)
+    uint8_t y0;      // the row at x0, u8.8 with the rounding bias in: the row
+    uint8_t yf;      // (PT_SCREEN_HEIGHT marks off screen), and the fraction
+                     // plus a half (128 for a line placed on a whole row)
     uint16_t g;      // gradient, sign bit + u7.8 magnitude, rows per column
     uint8_t ce;      // colour patterns; ce | co == 0 means unplotted
     uint8_t co;
@@ -88,25 +89,31 @@ enum {
     PT_NUM_SLOTS,
 };
 
-// A visited cell, created when its first visit is entered and shared by
-// every later visit that frame. Visits of one cell run in increasing x and never
-// nest (a ray crosses a convex cell once), so the ring cursor lives here
-// rather than in the frame: a later visit resumes from the edge the
-// previous one ended on, and a line continuing across a contiguous seam
-// extends its piece.
+// A visited cell, made when an edge into it is first clipped and shared by
+// every later visit that frame. Visits of one cell run in increasing x and
+// never nest (a ray crosses a convex cell once), so the visit record holds
+// the portal being walked as well as the ring cursor: a later visit resumes
+// from the edge the previous one ended on, and a line continuing across a
+// contiguous seam extends its piece. The walk recurses on the index alone.
 typedef struct pt_visit {
     uint8_t cell;         // back-reference, to clear the cell's index at frame end
     uint8_t k;            // the current edge, as a ring index 0..num_edges-1
-    uint8_t xr;           // right column of the latest visit entered
+    uint8_t x;            // where the next edge's span starts: the end of the
+                          // last one (the portal's left column to begin with)
+    uint8_t xr;           // the portal's right column; 0 until first walked
+    uint8_t tcur, bcur;   // the top and bottom bounds: chains of pieces, each
+                          // cursor at or before column x (the chains' heads
+                          // as the parent's clip built them)
+    uint8_t tmax, bmin;   // conservative row extents of the bounds
     pt_vv v0;             // view data of the current edge's start vertex
     pt_vv v1;             // and of its end vertex
     uint8_t inst;         // the cell's sprite instance this frame, 0 = none
-    uint8_t active[PT_NUM_SLOTS];    // last visible piece of each of edge k's
-                                     // lines (0 = none), cleared when the
-                                     // cursor moves on: extended by a
-                                     // contiguous visit, and the line itself
-                                     // for any later one (a piece's x0, y0
-                                     // and g never change)
+    uint8_t active[PT_NUM_SLOTS];    // the last piece of each of edge k's
+                                     // lines (0 = none yet), cleared when the
+                                     // cursor moves on: visible or not (a
+                                     // hidden piece has no colour), it is the
+                                     // line itself for any later visit (a
+                                     // piece's x0, row and g never change)
 } pt_visit;
 
 // A sprite projected for the frame (spec 9.2), on its cell's first visit.
@@ -151,18 +158,6 @@ enum {
     PT_SEG_NB,      // x order: each runs to the next one's x0, the last to x1
     PT_SEG_PIECES,
 };
-
-// A portal being walked: the state the recursive walk keeps across a
-// child's walk (on the 6502, what is saved around the JSR). The cell's
-// visit record holds the rest: the cursor on the edge being walked.
-typedef struct pt_portal {
-    uint8_t cell;
-    uint8_t x;            // where the next edge's span starts: the end of the
-                          // last one (the portal's left column to begin with)
-    uint8_t xr;           // right column bound
-    uint8_t tcur, bcur;   // current piece of the top / bottom bound chain
-    uint8_t tmax, bmin;   // conservative row extents over the span
-} pt_portal;
 
 typedef struct pt_render {
     const pt_map *map;

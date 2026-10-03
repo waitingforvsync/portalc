@@ -104,8 +104,9 @@ static void enc_line(tr_buf *b, const pt_line *l)
 {
     put8(b, l->x0);
     put8(b, l->x1);
-    put8(b, l->y0);
+    put16(b, l->y);
     put16(b, l->g);
+    put8(b, l->below);
     put8(b, l->ce);
     put8(b, l->co);
 }
@@ -115,44 +116,12 @@ static pt_line dec_line(const uint8_t **q)
     pt_line l;
     l.x0 = get8(q);
     l.x1 = get8(q);
-    l.y0 = get8(q);
+    l.y = get16(q);
     l.g = get16(q);
+    l.below = get8(q);
     l.ce = get8(q);
     l.co = get8(q);
     return l;
-}
-
-static void enc_portal(tr_buf *b, const pt_portal *p)
-{
-    put8(b, p->cell);
-    put8(b, p->x);
-    put8(b, p->xr);
-    put8(b, p->tcur);
-    put8(b, p->bcur);
-    put8(b, p->tmax);
-    put8(b, p->bmin);
-}
-
-static pt_portal dec_portal(const uint8_t **q)
-{
-    pt_portal p;
-    p.cell = get8(q);
-    p.x = get8(q);
-    p.xr = get8(q);
-    p.tcur = get8(q);
-    p.bcur = get8(q);
-    p.tmax = get8(q);
-    p.bmin = get8(q);
-    return p;
-}
-
-static void enc_closed(tr_buf *b, const pt_closedl *cl)
-{
-    for (uint32_t i = 0; i < PT_MAX_CLOSED; i++)
-        put8(b, cl->l[i]);
-    for (uint32_t i = 0; i < PT_MAX_CLOSED; i++)
-        put8(b, cl->r[i]);
-    put8(b, cl->num);
 }
 
 // A side-clipped endpoint (7): x, y, sx, rx.f, rx.e.
@@ -177,7 +146,7 @@ static pt_ep dec_ep(const uint8_t **q)
 }
 
 // An edge's line state (34): the vertices, their columns, the endpoints
-// once made, and the visit by index.
+// once made, and the visit.
 static void enc_el(tr_buf *b, const pt_edgelines *el)
 {
     enc_vv(b, el->v0);
@@ -187,12 +156,12 @@ static void enc_el(tr_buf *b, const pt_edgelines *el)
     put8(b, el->have_ep);
     enc_ep(b, &el->e0);
     enc_ep(b, &el->e1);
-    put8(b, (uint32_t)(el->vs - el->r->visits));
+    put8(b, el->vis);
 }
 
-static pt_edgelines dec_el(const uint8_t **q, const pt_render *r)
+static pt_edgelines dec_el(const uint8_t **q)
 {
-    pt_edgelines el = {.r = r};
+    pt_edgelines el;
     el.v0 = dec_vv(q);
     el.v1 = dec_vv(q);
     el.sx0 = get8(q);
@@ -200,81 +169,55 @@ static pt_edgelines dec_el(const uint8_t **q, const pt_render *r)
     el.have_ep = get8(q);
     el.e0 = dec_ep(q);
     el.e1 = dec_ep(q);
-    el.vs = &r->visits[get8(q)];
+    el.vis = get8(q);
     return el;
 }
 
-static pt_closedl dec_closed(const uint8_t **q)
-{
-    pt_closedl cl;
-    for (uint32_t i = 0; i < PT_MAX_CLOSED; i++)
-        cl.l[i] = get8(q);
-    for (uint32_t i = 0; i < PT_MAX_CLOSED; i++)
-        cl.r[i] = get8(q);
-    cl.num = get8(q);
-    return cl;
-}
-
-// A pt_clip, its pointers resolved: the chain builder and closed list by
-// content (a flag first: absent is a null pointer), the visit by index.
+// A pt_clip (19), field by field.
 static void enc_cx(tr_buf *b, const pt_clip *cx)
 {
-    put8(b, cx->thead);
-    put8(b, cx->bhead);
+    put8(b, cx->tp);
+    put8(b, cx->bp);
     put8(b, cx->tmax);
     put8(b, cx->bmin);
-    put8(b, cx->role);
-    put8(b, cx->build != NULL);
-    pt_chainb cb = cx->build ? *cx->build : (pt_chainb) {0};
-    put8(b, cb.head);
-    put8(b, cb.tail);
-    put8(b, cb.tmax);
-    put8(b, cb.bmin);
+    put8(b, cx->vis);
+    put8(b, cx->slot);
+    put8(b, cx->shut);
+    put8(b, cx->child);
+    put8(b, cx->tail);
+    put8(b, cx->own);
+    put8(b, cx->lc);
+    put16(b, cx->ly);
     put8(b, cx->cbfb.e);
     put8(b, cx->cbfb.o);
-    put8(b, cx->closed != NULL);
-    pt_closedl cl = cx->closed ? *cx->closed : (pt_closedl) {0};
-    enc_closed(b, &cl);
-    put8(b, cx->vis ? (uint32_t)(cx->vis - cx->r->visits) : 0xFF);
-    put8(b, cx->slot);
-    put8(b, cx->tp);
-    put8(b, cx->bp_set);
-    put8(b, cx->bp);
+    put8(b, cx->rl);
+    put8(b, cx->rr);
+    put8(b, cx->ol);
+    put8(b, cx->orr);
 }
 
-// The replay's pt_clip, with storage for what it points at.
-typedef struct tr_cx {
-    pt_clip cx;
-    pt_chainb build;
-    pt_closedl closed;
-} tr_cx;
-
-static void dec_cx(const uint8_t **q, pt_render *r, tr_cx *t)
+static pt_clip dec_cx(const uint8_t **q)
 {
-    pt_clip *cx = &t->cx;
-    *cx = (pt_clip) {.r = r};
-    cx->thead = get8(q);
-    cx->bhead = get8(q);
-    cx->tmax = get8(q);
-    cx->bmin = get8(q);
-    cx->role = get8(q);
-    bool has_build = get8(q);
-    t->build.head = get8(q);
-    t->build.tail = get8(q);
-    t->build.tmax = get8(q);
-    t->build.bmin = get8(q);
-    cx->build = has_build ? &t->build : NULL;
-    cx->cbfb.e = get8(q);
-    cx->cbfb.o = get8(q);
-    bool has_closed = get8(q);
-    t->closed = dec_closed(q);
-    cx->closed = has_closed ? &t->closed : NULL;
-    uint8_t vis = get8(q);
-    cx->vis = vis == 0xFF ? NULL : &r->visits[vis];
-    cx->slot = get8(q);
-    cx->tp = get8(q);
-    cx->bp_set = get8(q);
-    cx->bp = get8(q);
+    pt_clip cx;
+    cx.tp = get8(q);
+    cx.bp = get8(q);
+    cx.tmax = get8(q);
+    cx.bmin = get8(q);
+    cx.vis = get8(q);
+    cx.slot = get8(q);
+    cx.shut = get8(q);
+    cx.child = get8(q);
+    cx.tail = get8(q);
+    cx.own = get8(q);
+    cx.lc = get8(q);
+    cx.ly = get16(q);
+    cx.cbfb.e = get8(q);
+    cx.cbfb.o = get8(q);
+    cx.rl = get8(q);
+    cx.rr = get8(q);
+    cx.ol = get8(q);
+    cx.orr = get8(q);
+    return cx;
 }
 
 // The frame state: everything the walk reads or writes that the frame
@@ -287,6 +230,7 @@ static void enc_fs(tr_buf *b, const pt_render *r)
         put8(b, p->x0);
         put8(b, p->x1);
         put8(b, p->y0);
+        put8(b, p->yf);
         put16(b, p->g);
         put8(b, p->ce);
         put8(b, p->co);
@@ -297,7 +241,12 @@ static void enc_fs(tr_buf *b, const pt_render *r)
         const pt_visit *v = &r->visits[i];
         put8(b, v->cell);
         put8(b, v->k);
+        put8(b, v->x);
         put8(b, v->xr);
+        put8(b, v->tcur);
+        put8(b, v->bcur);
+        put8(b, v->tmax);
+        put8(b, v->bmin);
         enc_vv(b, v->v0);
         enc_vv(b, v->v1);
         put8(b, v->inst);
@@ -338,6 +287,7 @@ static void dec_fs(const uint8_t **q, pt_render *r)
         p->x0 = get8(q);
         p->x1 = get8(q);
         p->y0 = get8(q);
+        p->yf = get8(q);
         p->g = get16(q);
         p->ce = get8(q);
         p->co = get8(q);
@@ -348,7 +298,12 @@ static void dec_fs(const uint8_t **q, pt_render *r)
         pt_visit *v = &r->visits[i];
         v->cell = get8(q);
         v->k = get8(q);
+        v->x = get8(q);
         v->xr = get8(q);
+        v->tcur = get8(q);
+        v->bcur = get8(q);
+        v->tmax = get8(q);
+        v->bmin = get8(q);
         v->v0 = dec_vv(q);
         v->v1 = dec_vv(q);
         v->inst = get8(q);
@@ -394,23 +349,22 @@ static void dec_fs(const uint8_t **q, pt_render *r)
 // be kept, which is what makes recording tens of thousands of frames cheap.
 
 enum {
-    TR_emit, TR_resolve_block, TR_clip_line, TR_clip_edge_line, TR_cut, TR_inst_new, TR_seg_record,
-    TR_inst_issue, TR_child_portal, TR_next_open, TR_close_columns, TR_process_edge, TR_make_line,
-    TR_edge_line, TR_transform, TR_col_gt, TR_col_ge, TR_N,
+    TR_own_piece, TR_chain_add, TR_close_columns, TR_run_end, TR_merge, TR_flip, TR_hide, TR_meet,
+    TR_clip_line, TR_merge_above, TR_inst_new, TR_seg_record, TR_inst_issue, TR_visit_of, TR_enter,
+    TR_process_edge, TR_make_line, TR_edge_line, TR_transform, TR_col_gt, TR_col_ge, TR_N,
 };
 
 static const char *const tr_names_[TR_N] = {
-    "emit", "resolve_block", "clip_line", "clip_edge_line", "cut", "inst_new", "seg_record",
-    "inst_issue", "child_portal", "next_open", "close_columns", "process_edge", "make_line",
-    "edge_line", "transform", "col_gt", "col_ge",
+    "own_piece", "chain_add", "close_columns", "run_end", "merge", "flip", "hide", "meet",
+    "clip_line", "merge_above", "inst_new", "seg_record", "inst_issue", "visit_of", "enter",
+    "process_edge", "make_line", "edge_line", "transform", "col_gt", "col_ge",
 };
 
-// The pure ones (next_open, the line maker, the transform and the column
-// tests) never touch the frame: their records carry no frame state
+// The pure ones (the line maker, the transform and the column tests) never
+// touch the frame: their records carry no frame state
 static bool tr_has_fs(uint32_t fn)
 {
-    return fn != TR_next_open && fn != TR_make_line && fn != TR_transform && fn != TR_col_gt
-        && fn != TR_col_ge;
+    return fn != TR_make_line && fn != TR_transform && fn != TR_col_gt && fn != TR_col_ge;
 }
 
 #define TR_FIRST 64
@@ -548,187 +502,44 @@ static void tr_write(tr_frame *f, const uint8_t *after, uint32_t after_n)
 
 #define TR_DONE() tr_write(f, ab_.p, ab_.n)
 
-static void tr_before_emit(pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1, uint8_t st)
+static void tr_before_own_piece(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1,
+                                uint8_t st, uint16_t y)
 {
-    TR_BEFORE(emit, cx->r);
+    TR_BEFORE(own_piece, r);
     enc_cx(b, cx);
     enc_line(b, L);
     put8(b, r0);
     put8(b, r1);
     put8(b, st);
-    enc_fs(b, cx->r);
-}
-
-static void tr_after_emit(pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1, uint8_t st)
-{
-    (void) L, (void) r0, (void) r1, (void) st;
-    TR_AFTER(emit, cx->r);
-    enc_cx(b, cx);
-    TR_DONE();
-}
-
-static void tr_before_resolve_block(pt_clip *cx, const pt_line *L, uint8_t c, uint8_t e)
-{
-    TR_BEFORE(resolve_block, cx->r);
-    enc_cx(b, cx);
-    enc_line(b, L);
-    put8(b, c);
-    put8(b, e);
-    enc_fs(b, cx->r);
-}
-
-static void tr_after_resolve_block(pt_clip *cx, const pt_line *L, uint8_t c, uint8_t e)
-{
-    (void) L, (void) c, (void) e;
-    TR_AFTER(resolve_block, cx->r);
-    enc_cx(b, cx);
-    TR_DONE();
-}
-
-static void tr_before_clip_line(pt_clip *cx, const pt_line *L, uint8_t st)
-{
-    TR_BEFORE(clip_line, cx->r);
-    enc_cx(b, cx);
-    enc_line(b, L);
-    put8(b, st);
-    enc_fs(b, cx->r);
-}
-
-static void tr_after_clip_line(pt_clip *cx, const pt_line *L, uint8_t st)
-{
-    (void) L, (void) st;
-    TR_AFTER(clip_line, cx->r);
-    enc_cx(b, cx);
-    TR_DONE();
-}
-
-static void tr_before_clip_edge_line(pt_clip *cx, pt_line L, pt_relh h, uint8_t xa, uint8_t xb)
-{
-    TR_BEFORE(clip_edge_line, cx->r);
-    enc_cx(b, cx);
-    enc_line(b, &L);
-    put8(b, h.m);
-    put8(b, h.below);
-    put8(b, xa);
-    put8(b, xb);
-    enc_fs(b, cx->r);
-}
-
-static void tr_after_clip_edge_line(pt_clip *cx, pt_line L, pt_relh h, uint8_t xa, uint8_t xb)
-{
-    (void) L, (void) h, (void) xa, (void) xb;
-    TR_AFTER(clip_edge_line, cx->r);
-    enc_cx(b, cx);
-    TR_DONE();
-}
-
-static void tr_before_cut(pt_render *r, uint8_t *cursor, uint8_t xa, uint8_t xb)
-{
-    TR_BEFORE(cut, r);
-    put8(b, *cursor);
-    put8(b, xa);
-    put8(b, xb);
+    put16(b, y);
     enc_fs(b, r);
 }
 
-static void tr_after_cut(pt_render *r, uint8_t *cursor, uint8_t xa, uint8_t xb, uint8_t ret)
+static void tr_after_own_piece(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1,
+                               uint8_t st, uint16_t y, uint8_t ret)
 {
-    (void) xa, (void) xb;
-    TR_AFTER(cut, r);
-    put8(b, ret);
-    put8(b, *cursor);
-    TR_DONE();
-}
-
-static void tr_before_inst_new(pt_render *r, uint8_t cell)
-{
-    TR_BEFORE(inst_new, r);
-    put8(b, cell);
-    enc_fs(b, r);
-}
-
-static void tr_after_inst_new(pt_render *r, uint8_t cell, uint8_t ret)
-{
-    (void) cell;
-    TR_AFTER(inst_new, r);
+    (void) L, (void) r0, (void) r1, (void) st, (void) y;
+    TR_AFTER(own_piece, r);
+    enc_cx(b, cx);
     put8(b, ret);
     TR_DONE();
 }
 
-static void tr_before_seg_record(pt_render *r, const pt_portal *p)
+static void tr_before_chain_add(pt_render *r, pt_clip *cx, uint8_t q, uint8_t r1, uint16_t y)
 {
-    TR_BEFORE(seg_record, r);
-    enc_portal(b, p);
+    TR_BEFORE(chain_add, r);
+    enc_cx(b, cx);
+    put8(b, q);
+    put8(b, r1);
+    put16(b, y);
     enc_fs(b, r);
 }
 
-static void tr_after_seg_record(pt_render *r, const pt_portal *p)
+static void tr_after_chain_add(pt_render *r, pt_clip *cx, uint8_t q, uint8_t r1, uint16_t y)
 {
-    (void) p;
-    TR_AFTER(seg_record, r);
-    TR_DONE();
-}
-
-static void tr_before_inst_issue(pt_render *r, uint8_t pend)
-{
-    TR_BEFORE(inst_issue, r);
-    put8(b, pend);
-    enc_fs(b, r);
-}
-
-static void tr_after_inst_issue(pt_render *r, uint8_t pend)
-{
-    (void) pend;
-    TR_AFTER(inst_issue, r);
-    TR_DONE();
-}
-
-static void tr_before_child_portal(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t thead,
-                                   uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv, pt_portal *out)
-{
-    (void) out;
-    TR_BEFORE(child_portal, r);
-    put8(b, ei);
-    put8(b, xl);
-    put8(b, xr);
-    put8(b, thead);
-    put8(b, bhead);
-    put8(b, tmax);
-    put8(b, bmin);
-    enc_vv(b, pv);
-    enc_fs(b, r);
-}
-
-static void tr_after_child_portal(pt_render *r, uint8_t ei, uint8_t xl, uint8_t xr, uint8_t thead,
-                                  uint8_t bhead, uint8_t tmax, uint8_t bmin, pt_vv pv, pt_portal *out,
-                                  bool ret)
-{
-    (void) ei, (void) xl, (void) xr, (void) thead, (void) bhead, (void) tmax, (void) bmin, (void) pv;
-    TR_AFTER(child_portal, r);
-    put8(b, ret);
-    pt_portal none = {0};
-    enc_portal(b, ret ? out : &none);    // defined only when there is a child
-    TR_DONE();
-}
-
-static void tr_before_next_open(const pt_closedl *cl, uint8_t *c, uint8_t xb, uint8_t *ol, uint8_t *orr)
-{
-    (void) ol, (void) orr;
-    TR_BEFORE(next_open, &render_);    // no renderer of its own: the frame's, for the camera
-    enc_closed(b, cl);
-    put8(b, *c);
-    put8(b, xb);
-}
-
-static void tr_after_next_open(const pt_closedl *cl, uint8_t *c, uint8_t xb, uint8_t *ol, uint8_t *orr,
-                               bool ret)
-{
-    (void) cl, (void) xb;
-    TR_AFTER(next_open, &render_);
-    put8(b, ret);
-    put8(b, *c);
-    put8(b, ret ? *ol : 0);     // defined only when there is a range
-    put8(b, ret ? *orr : 0);
+    (void) q, (void) r1, (void) y;
+    TR_AFTER(chain_add, r);
+    enc_cx(b, cx);
     TR_DONE();
 }
 
@@ -750,21 +561,245 @@ static void tr_after_close_columns(pt_render *r, uint8_t head, uint8_t l, uint8_
     TR_DONE();
 }
 
-static void tr_before_process_edge(pt_render *r, pt_portal *p, pt_portal *child)
+static void tr_before_run_end(pt_render *r, pt_clip *cx)
 {
-    (void) child;
-    TR_BEFORE(process_edge, r);
-    enc_portal(b, p);
+    TR_BEFORE(run_end, r);
+    enc_cx(b, cx);
     enc_fs(b, r);
 }
 
-static void tr_after_process_edge(pt_render *r, pt_portal *p, pt_portal *child, bool ret)
+static void tr_after_run_end(pt_render *r, pt_clip *cx)
 {
+    TR_AFTER(run_end, r);
+    enc_cx(b, cx);
+    TR_DONE();
+}
+
+static void tr_before_merge(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1,
+                            uint8_t st, bool own, uint16_t yl, uint16_t yp)
+{
+    TR_BEFORE(merge, r);
+    enc_cx(b, cx);
+    enc_line(b, L);
+    put8(b, r0);
+    put8(b, r1);
+    put8(b, st);
+    put8(b, own);
+    put16(b, yl);
+    put16(b, yp);
+    enc_fs(b, r);
+}
+
+static void tr_after_merge(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t r0, uint8_t r1,
+                           uint8_t st, bool own, uint16_t yl, uint16_t yp)
+{
+    (void) L, (void) r0, (void) r1, (void) st, (void) own, (void) yl, (void) yp;
+    TR_AFTER(merge, r);
+    enc_cx(b, cx);
+    TR_DONE();
+}
+
+static void tr_before_flip(const pt_render *r, pt_clip *cx, const pt_line *L, uint8_t p, uint8_t c,
+                           uint8_t e, uint8_t st, bool in, uint16_t yl, uint16_t yp)
+{
+    TR_BEFORE(flip, r);
+    enc_cx(b, cx);
+    enc_line(b, L);
+    put8(b, p);
+    put8(b, c);
+    put8(b, e);
+    put8(b, st);
+    put8(b, in);
+    put16(b, yl);
+    put16(b, yp);
+    enc_fs(b, r);
+}
+
+static void tr_after_flip(const pt_render *r, pt_clip *cx, const pt_line *L, uint8_t p, uint8_t c,
+                          uint8_t e, uint8_t st, bool in, uint16_t yl, uint16_t yp, uint8_t ret)
+{
+    (void) L, (void) p, (void) c, (void) e, (void) st, (void) in, (void) yl, (void) yp;
+    TR_AFTER(flip, r);
+    enc_cx(b, cx);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_hide(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t c, uint8_t c1,
+                           uint8_t st, uint16_t yl, uint16_t yp)
+{
+    TR_BEFORE(hide, r);
+    enc_cx(b, cx);
+    enc_line(b, L);
+    put8(b, c);
+    put8(b, c1);
+    put8(b, st);
+    put16(b, yl);
+    put16(b, yp);
+    enc_fs(b, r);
+}
+
+static void tr_after_hide(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t c, uint8_t c1,
+                          uint8_t st, uint16_t yl, uint16_t yp, uint8_t ret)
+{
+    (void) L, (void) c, (void) c1, (void) st, (void) yl, (void) yp;
+    TR_AFTER(hide, r);
+    enc_cx(b, cx);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_meet(const pt_render *r, pt_clip *cx, const pt_line *L, uint8_t p, uint8_t c,
+                           uint8_t c1, uint8_t st, uint16_t yl, uint16_t yp)
+{
+    TR_BEFORE(meet, r);
+    enc_cx(b, cx);
+    enc_line(b, L);
+    put8(b, p);
+    put8(b, c);
+    put8(b, c1);
+    put8(b, st);
+    put16(b, yl);
+    put16(b, yp);
+    enc_fs(b, r);
+}
+
+static void tr_after_meet(const pt_render *r, pt_clip *cx, const pt_line *L, uint8_t p, uint8_t c,
+                          uint8_t c1, uint8_t st, uint16_t yl, uint16_t yp, uint8_t ret)
+{
+    (void) L, (void) p, (void) c, (void) c1, (void) st, (void) yl, (void) yp;
+    TR_AFTER(meet, r);
+    enc_cx(b, cx);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_clip_line(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t c, uint8_t c1)
+{
+    TR_BEFORE(clip_line, r);
+    enc_cx(b, cx);
+    enc_line(b, L);
+    put8(b, c);
+    put8(b, c1);
+    enc_fs(b, r);
+}
+
+static void tr_after_clip_line(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t c, uint8_t c1)
+{
+    (void) L, (void) c, (void) c1;
+    TR_AFTER(clip_line, r);
+    enc_cx(b, cx);
+    TR_DONE();
+}
+
+static void tr_before_merge_above(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t c, uint8_t c1)
+{
+    TR_BEFORE(merge_above, r);
+    enc_cx(b, cx);
+    enc_line(b, L);
+    put8(b, c);
+    put8(b, c1);
+    enc_fs(b, r);
+}
+
+static void tr_after_merge_above(pt_render *r, pt_clip *cx, const pt_line *L, uint8_t c, uint8_t c1)
+{
+    (void) L, (void) c, (void) c1;
+    TR_AFTER(merge_above, r);
+    enc_cx(b, cx);
+    TR_DONE();
+}
+
+static void tr_before_inst_new(pt_render *r, uint8_t cell)
+{
+    TR_BEFORE(inst_new, r);
+    put8(b, cell);
+    enc_fs(b, r);
+}
+
+static void tr_after_inst_new(pt_render *r, uint8_t cell, uint8_t ret)
+{
+    (void) cell;
+    TR_AFTER(inst_new, r);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_seg_record(pt_render *r, uint8_t vi)
+{
+    TR_BEFORE(seg_record, r);
+    put8(b, vi);
+    enc_fs(b, r);
+}
+
+static void tr_after_seg_record(pt_render *r, uint8_t vi)
+{
+    (void) vi;
+    TR_AFTER(seg_record, r);
+    TR_DONE();
+}
+
+static void tr_before_inst_issue(pt_render *r, uint8_t pend)
+{
+    TR_BEFORE(inst_issue, r);
+    put8(b, pend);
+    enc_fs(b, r);
+}
+
+static void tr_after_inst_issue(pt_render *r, uint8_t pend)
+{
+    (void) pend;
+    TR_AFTER(inst_issue, r);
+    TR_DONE();
+}
+
+static void tr_before_visit_of(pt_render *r, uint8_t cell)
+{
+    TR_BEFORE(visit_of, r);
+    put8(b, cell);
+    enc_fs(b, r);
+}
+
+static void tr_after_visit_of(pt_render *r, uint8_t cell, uint8_t ret)
+{
+    (void) cell;
+    TR_AFTER(visit_of, r);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_enter(pt_render *r, uint8_t vi, uint8_t ei, uint8_t xl, uint8_t xr, pt_vv pv)
+{
+    TR_BEFORE(enter, r);
+    put8(b, vi);
+    put8(b, ei);
+    put8(b, xl);
+    put8(b, xr);
+    enc_vv(b, pv);
+    enc_fs(b, r);
+}
+
+static void tr_after_enter(pt_render *r, uint8_t vi, uint8_t ei, uint8_t xl, uint8_t xr, pt_vv pv,
+                           uint8_t ret)
+{
+    (void) vi, (void) ei, (void) xl, (void) xr, (void) pv;
+    TR_AFTER(enter, r);
+    put8(b, ret);
+    TR_DONE();
+}
+
+static void tr_before_process_edge(pt_render *r, uint8_t vi)
+{
+    TR_BEFORE(process_edge, r);
+    put8(b, vi);
+    enc_fs(b, r);
+}
+
+static void tr_after_process_edge(pt_render *r, uint8_t vi, uint8_t ret)
+{
+    (void) vi;
     TR_AFTER(process_edge, r);
     put8(b, ret);
-    enc_portal(b, p);
-    pt_portal none = {0};
-    enc_portal(b, ret ? child : &none);
     TR_DONE();
 }
 
@@ -787,22 +822,24 @@ static void tr_after_make_line(pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col, pt
     TR_DONE();
 }
 
-static void tr_before_edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern col)
+static void tr_before_edge_line(const pt_render *r, pt_edgelines *el, uint8_t slot, pt_relh h,
+                                pt_pattern col)
 {
-    TR_BEFORE(edge_line, el->r);
+    TR_BEFORE(edge_line, r);
     enc_el(b, el);
     put8(b, slot);
     put8(b, h.m);
     put8(b, h.below);
     put8(b, col.e);
     put8(b, col.o);
-    enc_fs(b, el->r);
+    enc_fs(b, r);
 }
 
-static void tr_after_edge_line(pt_edgelines *el, uint8_t slot, pt_relh h, pt_pattern col, pt_line ret)
+static void tr_after_edge_line(const pt_render *r, pt_edgelines *el, uint8_t slot, pt_relh h,
+                               pt_pattern col, pt_line ret)
 {
     (void) slot, (void) h, (void) col;
-    TR_AFTER(edge_line, el->r);
+    TR_AFTER(edge_line, r);
     enc_el(b, el);
     enc_line(b, &ret);
     TR_DONE();
@@ -975,6 +1012,7 @@ static void synth_close(const char *dir, uint32_t seed, uint32_t count)
             uint32_t a = rc_random_next(&rng), c = rc_random_next(&rng);
             uint16_t mag = (a >> 8) % 4 == 0 ? 0 : (uint16_t)((a >> 10) % 0x800);
             r.pool[order[i]] = (pt_piece) {.x0 = cut[i], .x1 = cut[i + 1], .y0 = (uint8_t)(a % 65),
+                                           .yf = (uint8_t)(c >> 16),
                                            .g = pt_g_make(mag, (uint8_t)((a >> 9) & 1)),
                                            .ce = (uint8_t)c, .co = (uint8_t)(c >> 8),
                                            .next = i + 1 < n ? order[i + 1] : 0};
@@ -1026,107 +1064,28 @@ static bool replay_one(uint32_t fn, const uint8_t *rec, uint32_t len, tr_buf *go
     pt_render_init(&r, &map_);
     dec_cam(&q, &r);
 
-    tr_cx t;
-    pt_portal p, child = {0}, out = {0};
-    uint8_t cursor, ol = 0, orr = 0, c;
-    pt_closedl cl;
     got->n = 0;
     switch (fn) {
-    case TR_emit: {
-        dec_cx(&q, &r, &t);
+    case TR_own_piece: {
+        pt_clip cx = dec_cx(&q);
         pt_line L = dec_line(&q);
         uint8_t r0 = get8(&q), r1 = get8(&q), st = get8(&q);
+        uint16_t y = get16(&q);
         dec_fs(&q, &r);
-        emit__impl(&t.cx, &L, r0, r1, st);
+        uint8_t ret = own_piece__impl(&r, &cx, &L, r0, r1, st, y);
         enc_fs(got, &r);
-        enc_cx(got, &t.cx);
-        break;
-    }
-    case TR_resolve_block: {
-        dec_cx(&q, &r, &t);
-        pt_line L = dec_line(&q);
-        uint8_t c0 = get8(&q), e = get8(&q);
-        dec_fs(&q, &r);
-        resolve_block__impl(&t.cx, &L, c0, e);
-        enc_fs(got, &r);
-        enc_cx(got, &t.cx);
-        break;
-    }
-    case TR_clip_line: {
-        dec_cx(&q, &r, &t);
-        pt_line L = dec_line(&q);
-        uint8_t st = get8(&q);
-        dec_fs(&q, &r);
-        clip_line__impl(&t.cx, &L, st);
-        enc_fs(got, &r);
-        enc_cx(got, &t.cx);
-        break;
-    }
-    case TR_clip_edge_line: {
-        dec_cx(&q, &r, &t);
-        pt_line L = dec_line(&q);
-        pt_relh h;
-        h.m = get8(&q);
-        h.below = get8(&q);
-        uint8_t xa = get8(&q), xb = get8(&q);
-        dec_fs(&q, &r);
-        clip_edge_line__impl(&t.cx, L, h, xa, xb);
-        enc_fs(got, &r);
-        enc_cx(got, &t.cx);
-        break;
-    }
-    case TR_cut: {
-        cursor = get8(&q);
-        uint8_t xa = get8(&q), xb = get8(&q);
-        dec_fs(&q, &r);
-        uint8_t ret = cut__impl(&r, &cursor, xa, xb);
-        enc_fs(got, &r);
-        put8(got, ret);
-        put8(got, cursor);
-        break;
-    }
-    case TR_inst_new: {
-        uint8_t cell = get8(&q);
-        dec_fs(&q, &r);
-        uint8_t ret = inst_new__impl(&r, cell);
-        enc_fs(got, &r);
+        enc_cx(got, &cx);
         put8(got, ret);
         break;
     }
-    case TR_seg_record:
-        p = dec_portal(&q);
+    case TR_chain_add: {
+        pt_clip cx = dec_cx(&q);
+        uint8_t qq = get8(&q), r1 = get8(&q);
+        uint16_t y = get16(&q);
         dec_fs(&q, &r);
-        seg_record__impl(&r, &p);
+        chain_add__impl(&r, &cx, qq, r1, y);
         enc_fs(got, &r);
-        break;
-    case TR_inst_issue: {
-        uint8_t pend = get8(&q);
-        dec_fs(&q, &r);
-        inst_issue__impl(&r, pend);
-        enc_fs(got, &r);
-        break;
-    }
-    case TR_child_portal: {
-        uint8_t ei = get8(&q), xl = get8(&q), xr = get8(&q), th = get8(&q), bh = get8(&q);
-        uint8_t tmax = get8(&q), bmin = get8(&q);
-        pt_vv pv = dec_vv(&q);
-        dec_fs(&q, &r);
-        bool ret = child_portal__impl(&r, ei, xl, xr, th, bh, tmax, bmin, pv, &out);
-        enc_fs(got, &r);
-        put8(got, ret);
-        pt_portal none = {0};
-        enc_portal(got, ret ? &out : &none);
-        break;
-    }
-    case TR_next_open: {
-        cl = dec_closed(&q);
-        c = get8(&q);
-        uint8_t xb = get8(&q);
-        bool ret = next_open__impl(&cl, &c, xb, &ol, &orr);
-        put8(got, ret);
-        put8(got, c);
-        put8(got, ret ? ol : 0);
-        put8(got, ret ? orr : 0);
+        enc_cx(got, &cx);
         break;
     }
     case TR_close_columns: {
@@ -1139,15 +1098,128 @@ static bool replay_one(uint32_t fn, const uint8_t *rec, uint32_t len, tr_buf *go
         enc_fs(got, &r);
         break;
     }
-    case TR_process_edge: {
-        p = dec_portal(&q);
+    case TR_run_end: {
+        pt_clip cx = dec_cx(&q);
         dec_fs(&q, &r);
-        bool ret = process_edge__impl(&r, &p, &child);
+        run_end__impl(&r, &cx);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        break;
+    }
+    case TR_merge: {
+        pt_clip cx = dec_cx(&q);
+        pt_line L = dec_line(&q);
+        uint8_t r0 = get8(&q), r1 = get8(&q), st = get8(&q);
+        bool own = get8(&q);
+        uint16_t yl = get16(&q), yp = get16(&q);
+        dec_fs(&q, &r);
+        merge__impl(&r, &cx, &L, r0, r1, st, own, yl, yp);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        break;
+    }
+    case TR_flip: {
+        pt_clip cx = dec_cx(&q);
+        pt_line L = dec_line(&q);
+        uint8_t pp = get8(&q), c0 = get8(&q), e = get8(&q), st = get8(&q);
+        bool in = get8(&q);
+        uint16_t yl = get16(&q), yp = get16(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = flip__impl(&r, &cx, &L, pp, c0, e, st, in, yl, yp);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        put8(got, ret);
+        break;
+    }
+    case TR_hide: {
+        pt_clip cx = dec_cx(&q);
+        pt_line L = dec_line(&q);
+        uint8_t c0 = get8(&q), c1 = get8(&q), st = get8(&q);
+        uint16_t yl = get16(&q), yp = get16(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = hide__impl(&r, &cx, &L, c0, c1, st, yl, yp);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        put8(got, ret);
+        break;
+    }
+    case TR_meet: {
+        pt_clip cx = dec_cx(&q);
+        pt_line L = dec_line(&q);
+        uint8_t pp = get8(&q), c0 = get8(&q), c1 = get8(&q), st = get8(&q);
+        uint16_t yl = get16(&q), yp = get16(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = meet__impl(&r, &cx, &L, pp, c0, c1, st, yl, yp);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        put8(got, ret);
+        break;
+    }
+    case TR_clip_line: {
+        pt_clip cx = dec_cx(&q);
+        pt_line L = dec_line(&q);
+        uint8_t c0 = get8(&q), c1 = get8(&q);
+        dec_fs(&q, &r);
+        clip_line__impl(&r, &cx, &L, c0, c1);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        break;
+    }
+    case TR_merge_above: {
+        pt_clip cx = dec_cx(&q);
+        pt_line L = dec_line(&q);
+        uint8_t c0 = get8(&q), c1 = get8(&q);
+        dec_fs(&q, &r);
+        merge_above__impl(&r, &cx, &L, c0, c1);
+        enc_fs(got, &r);
+        enc_cx(got, &cx);
+        break;
+    }
+    case TR_inst_new: {
+        uint8_t cell = get8(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = inst_new__impl(&r, cell);
         enc_fs(got, &r);
         put8(got, ret);
-        enc_portal(got, &p);
-        pt_portal none = {0};
-        enc_portal(got, ret ? &child : &none);
+        break;
+    }
+    case TR_seg_record: {
+        uint8_t vi = get8(&q);
+        dec_fs(&q, &r);
+        seg_record__impl(&r, vi);
+        enc_fs(got, &r);
+        break;
+    }
+    case TR_inst_issue: {
+        uint8_t pend = get8(&q);
+        dec_fs(&q, &r);
+        inst_issue__impl(&r, pend);
+        enc_fs(got, &r);
+        break;
+    }
+    case TR_visit_of: {
+        uint8_t cell = get8(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = visit_of__impl(&r, cell);
+        enc_fs(got, &r);
+        put8(got, ret);
+        break;
+    }
+    case TR_enter: {
+        uint8_t vi = get8(&q), ei = get8(&q), xl = get8(&q), xr = get8(&q);
+        pt_vv pv = dec_vv(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = enter__impl(&r, vi, ei, xl, xr, pv);
+        enc_fs(got, &r);
+        put8(got, ret);
+        break;
+    }
+    case TR_process_edge: {
+        uint8_t vi = get8(&q);
+        dec_fs(&q, &r);
+        uint8_t ret = process_edge__impl(&r, vi);
+        enc_fs(got, &r);
+        put8(got, ret);
         break;
     }
     case TR_make_line: {
@@ -1163,7 +1235,7 @@ static bool replay_one(uint32_t fn, const uint8_t *rec, uint32_t len, tr_buf *go
         break;
     }
     case TR_edge_line: {
-        pt_edgelines el = dec_el(&q, &r);
+        pt_edgelines el = dec_el(&q);
         uint8_t slot = get8(&q);
         pt_relh h;
         h.m = get8(&q);
@@ -1172,7 +1244,7 @@ static bool replay_one(uint32_t fn, const uint8_t *rec, uint32_t len, tr_buf *go
         col.e = get8(&q);
         col.o = get8(&q);
         dec_fs(&q, &r);
-        pt_line L = edge_line__impl(&el, slot, h, col);
+        pt_line L = edge_line__impl(&r, &el, slot, h, col);
         enc_fs(got, &r);
         enc_el(got, &el);
         enc_line(got, &L);
@@ -1187,13 +1259,13 @@ static bool replay_one(uint32_t fn, const uint8_t *rec, uint32_t len, tr_buf *go
     }
     case TR_col_gt: {
         pt_vv v = dec_vv(&q);
-        c = get8(&q);
+        uint8_t c = get8(&q);
         put8(got, col_gt__impl(v, c));
         break;
     }
     case TR_col_ge: {
         pt_vv v = dec_vv(&q);
-        c = get8(&q);
+        uint8_t c = get8(&q);
         put8(got, col_ge__impl(v, c));
         break;
     }
@@ -1296,22 +1368,23 @@ static double tc_weight(uint32_t i)
     case TC_mulg: return 70;
     case TC_piece_y: return 25;            // beyond the mulg
     case TC_line_y: return 25;
+    case TC_line_step: return 20;          // a saturating add of the gradient
     case TC_process_edge: return 60;
     case TC_edge_work: return 250;
     case TC_make_line: return 120;
     case TC_near_clip: return 250;
     case TC_line_reuse: return 40;
-    case TC_clip_open: return 90;
-    case TC_clip_forced: return 120;
-    case TC_clip_fast: return 0;           // inside clip_open's figure
-    case TC_resolve_block: return 300;
+    case TC_clip_line: return 90;
+    case TC_clip_fast: return 0;           // inside clip_line's figure
+    case TC_flip: return 120;              // a stretch's compares, beyond its rows
     case TC_crossing: return 40;           // beyond its div_cols
-    case TC_emit_extend: return 60;
-    case TC_emit_visible: return 130;
-    case TC_emit_merge: return 140;
+    case TC_piece_extend: return 60;
+    case TC_piece_new: return 130;
+    case TC_merge: return 120;
+    case TC_twin: return 90;               // the twin's allocation, beyond its piece_y
+    case TC_chain_add: return 60;          // beyond its two piece_y
     case TC_pool_split: return 90;
-    case TC_cut: return 70;
-    case TC_child_portal: return 160;
+    case TC_enter: return 160;
     case TC_walk_entry: return 120;
     case TC_plot_pieces: return 110;       // colour test, set-up, cursor from the row tables
     case TC_plot_flat_pieces: return 90;

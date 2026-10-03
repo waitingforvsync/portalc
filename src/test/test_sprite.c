@@ -342,7 +342,7 @@ static int32_t bound_row(const pt_render *r, const uint8_t *list, uint8_t n, uin
     while (k + 1 < n && r->pool[list[k + 1]].x0 <= c)
         k++;
     const pt_piece *p = &r->pool[list[k]];
-    int32_t y = p->y0 * 256 + 128;
+    int32_t y = p->y0 * 256 + p->yf;
     int32_t d = (int32_t)pt_g_mag(p->g) * (c - p->x0);
     y = pt_g_isneg(p->g) ? y - d : y + d;
     int32_t row = y < 0 ? 0 : y >> 8;

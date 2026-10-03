@@ -11,8 +11,8 @@ RC_TEST(map, scene_valid)
     pt_scene_init(&m);
     RC_CHECK_TRUE(pt_map_validate(&m));
 
-    // 21 cells plus the reserved outside
-    RC_CHECK(m.num_cells, ==, (uint8_t)22);
+    // 27 cells plus the reserved outside
+    RC_CHECK(m.num_cells, ==, (uint8_t)28);
 
     // every ring stays within its cell's range and closes back on its first
     // edge; the edges partition the table between the cells

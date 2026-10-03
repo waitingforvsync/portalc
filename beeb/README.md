@@ -73,6 +73,7 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | `host/coverage.sh`, `host/uncovered.py`, `host/uncovered.txt` | the coverage gate |
 | `host/gonogo.py` | the frame-rate go/no-go: predicted frame times from measured costs |
 | `host/profile.py` | the sampling profiler: where whole frames' cycles go, by routine, label, 64-byte window and instruction; `bench` for the cycles alone |
+| `host/frame.py`, `host/emu6502.py` | one frame of the release on a 6502 of our own, no b2: exact cycles by stage, job and routine, the portal tree, the pieces and what made them, the row evaluations and who asked; `sweep` for all 256 angles, `check` for their images against the C |
 | `host/replay.py` | unit replay on the Beeb: records decoded, poked, called, compared (`REPLAY.md`) |
 | `REPLAY.md` | the unit-replay record format |
 

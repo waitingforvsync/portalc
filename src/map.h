@@ -14,8 +14,8 @@
 #include "sprite.h"
 
 #define PT_MAX_VERTS 64
-#define PT_MAX_CELLS 24
-#define PT_MAX_EDGES 96
+#define PT_MAX_CELLS 32
+#define PT_MAX_EDGES 128
 #define PT_MAX_CELL_EDGES 8
 #define PT_MAX_SPRITES 8
 #define PT_MAX_ARTS 4
@@ -92,8 +92,9 @@ static inline uint8_t pt_map_twin(const pt_map *m, uint8_t e)
 }
 
 // Build the demo scene: a pentagonal room with a depressed square in the
-// centre of its floor holding a boulder, and a corridor to a second, square
-// room with a thin pillar in its middle.
+// centre of its floor holding a boulder, a corridor to a second, square
+// room with a thin pillar in its middle, and stairs up to an end room with a
+// stepped pit.
 void pt_scene_init(pt_map *m);
 
 // Check every structural invariant (twins, convexity, winding, soft-edge

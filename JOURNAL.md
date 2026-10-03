@@ -1721,3 +1721,449 @@ byte-identical, and all 3,120 reproduce. The coverage gate has three new
 lines, branches that used to share a covered line: `div_t`'s 17th-bit
 saturation (rare), and `div_q8` at den 128 (dead) and at 256-257 (rare).
 34/34 tests.
+
+## 2026-10-03 — Room 3, and the capture rebuilt round it
+
+I drew the case that makes the clip earn its keep: a pit sunk in three
+steps, seen from across a room, where one step's lip hides most of the
+next. Room 3 (the end room) now has it, and the capture, line generation
+and clip have been rebuilt to my walkthrough of it. None of it is
+committed yet; this is where it stands.
+
+### The pit
+
+The room is a ring of four cells round a pit of three. The numbers are the
+floors, deeper as they go up; in the map, 10 is 448 and each step is 8 a
+unit, so 20 is 80 down.
+
+```
+  rc-------------kc-------------rd
+  |      10D      |      10C     |
+  |               qt             |
+  |             /    \           |
+  kd---------ql   20   qp        |
+  |            \     /   \       |
+  |             \ 14/  12  qr----kb
+  |              \ /      /      |
+  |   10A         qq     /  10B  |
+  |                 \   /        |
+  |                   qs         |
+  |                    \         |
+  rb-------es=====en----ka------ra
+             door
+```
+
+`qp` and `qq` sit exactly halfway along their sides, so 10C and 10A see one
+straight edge each. Cell 18 became 10A, so nothing else renumbers: 22 to
+24 are the rest of the ring, 25 to 27 the pit (20, 14, 12). The risers
+are lit like the walls, seen from below. That's 28 cells and 118 edges,
+so `PT_MAX_CELLS` goes 24 to 32 and `PT_MAX_EDGES` 96 to 128.
+`portalc_dump` gains `end_room_pit` (901, 817, angle 235, cell 18), from
+just inside the door.
+
+The pit comes out thin and low on the screen. With the eye 80 up, any
+floor nearer than 160 drops off the bottom, so it had to sit well back
+from the door. In my geometry line B is hidden behind A all the way
+across, not just mostly. The walk does the rest as drawn: 14 and 20 are
+visited twice, and on the second visit B, G and H come out of the visit
+cache and are extended, not projected again.
+
+The new map broke a test before any of the new code ran. With the eye
+1.4 units from `ql`, where four cells meet, rounding at depth 2 puts `ql`
+at column 64 instead of about 51, and 10A gets entered again from inside
+its own walk. The old renderer's `vs->xr <= xl` assert went off in
+`probe.walk_from_reachable_states`.
+
+### What went
+
+- `pt_portal`. A portal's span, chain cursors and extents now live in its
+  cell's visit. Visits of a cell never nest, so that's safe, and the walk
+  recurses on a visit index and nothing else.
+- `pt_chainb`. The child's chain heads and extents are built straight
+  into the child's visit; the tail is in `pt_clip`.
+- `pt_closedl` and `next_open` (closed columns are below).
+- `cut`. Nothing is split for ownership any more.
+- `clip_edge_line`, and every pointer in `pt_clip`.
+
+### The clip, a run at a time
+
+A line is clipped run by run. A run is as long as the line stays beyond
+one bound, or between both:
+
+- `flip` finds where the line changes side of one bound piece, a stretch
+  of the line at a time;
+- `hide` merges a hidden run into each bound piece it crosses;
+- `meet` finds where a visible run reaches a bound.
+
+So a bound piece is split only where a run ends inside it: split only to
+recolour, as promised. The screen pre-clip's cut-off columns are no
+longer a special case. They're just rows past the screen's edge, so they
+join whatever run is going on that side:
+
+```c
+if (c < l->x0 || c >= l->x1)
+    return l->below ? 0xFFFF : 0;
+```
+
+Hidden lines keep pieces too, uncoloured, so a later visit extends them
+rather than projecting them again (that's H). One snag: a bound-forming
+line can be uncoloured itself (the child's floor shade equal to the
+parent's), and then its hidden piece looked like a visible one. Growing it
+into the visible stretch made two chain pieces overlap. `pt_clip.own`
+remembers which kind the line's last piece was.
+
+### Exact rows
+
+The run-by-run clip found something the old block clip had been stepping
+round. A hidden run ends at its crossing and the bound is split there.
+But the split re-anchored the right-hand part to a whole row, which could
+put the line back on the hidden side. So the next run ended one column
+later, and so on:
+
+```
+piece 20: [103,104) row 51 g 0.46
+piece 21: [104,105) row 51 g 0.46
+piece 22: [105,106) row 51 g 0.46
+  ... and 22 more, all row 51
+```
+
+That's a line with gradient 0.46 gone flat across 25 columns, 11 rows out
+by the end.
+
+So a piece keeps its row's fraction too: `pt_piece.yf`, 9 bytes a piece.
+A split now never moves a row, and what's plotted is exactly what was
+clipped. The plotter starts its DDA at `yf` instead of 128, which costs
+nothing; the pool costs a ninth page on the Beeb.
+
+### Twins
+
+Where a bound-forming line is hidden, the child's bound used to borrow the
+parent's piece, relinked. That needed the piece cut out first even when
+there was no colour to merge (stairs under one ceiling), broke the
+parent's chain, and needed soft edges to hand cursors back up the walk.
+
+Now the child gets a twin: a new piece on the same rows exactly (thanks to
+`yf`), uncoloured until the child's own lines merge into it.
+
+```
+parent bound  ...---- P (recoloured only if there's colour) ----...
+child bound          [twin of P]---B---...
+```
+
+Chains only ever gain pieces, by splits. The parent's cursors stay good,
+soft edges just share the chain, and `walk` lost its hand-back. The twin
+is pixel-identical to relinking and costs about two pieces a frame.
+
+### Closed columns
+
+The child's ceiling ^ floor still has to go in wherever a line closes the
+child, or the colour below is wrong. It's folded into that line's merge.
+The open columns are tallied as runs, and the first run is the child.
+Openings are convex and the rows are exact now, so there should only ever
+be one run. If rounding in a crossing ever makes two, the later one is
+closed after the fact. None turned up in 67,568 frames, map 9's slot
+included.
+
+With the eye on a vertex, a cell already walked over the edge's columns
+isn't entered again. Its bounds are built into visit 0, which is spare,
+and its open run is closed instead.
+
+### How it compares
+
+I checked it against a floating-point ray cast (every pixel centre, a
+row's slack allowed at edges) over about 67,000 frames on maps 0, 7 and 9:
+
+| | old | new |
+|---|---|---|
+| map 0 frames closer to the cast | 2,046 | 4,771 |
+| map 9 frames closer to the cast | 1,059 | 2,584 |
+| worst regression | | 24 px |
+| mean pool, map 0 / map 9 | 26.4 / 35.6 | 23.0 / 25.8 |
+| peak pool, map 0 / 7 / 9 | 113 / over 256 / 132 | 102 / 109 / 105 |
+| splits that didn't recolour, map 0 | 97,490 | 4,609 |
+| splits that didn't recolour, map 9 | 218,956 | 53,242 |
+
+On map 7 the old renderer ran out of pool altogether. Map 9's leftover
+splits are mostly the corridor's walls: a different line per cell, each
+the same colour, merging over neighbouring columns. That's what clipping
+edge by edge does. The new renderer also loses a few old glitches, like a
+one-column streak at (1318, 1517, 119). The dump poses' pool high water
+goes 78 to 71.
+
+The ray-cast comparer lives in my scratch directory, not the repo. 34/34
+tests, debug and release. `test_map` counts 28 cells now, and the sprite
+test's reference reads `yf`.
+
+### The traced build
+
+`trace.py` and `trace_hooks.c` follow the new code. The units are
+`own_piece`, `chain_add`, `close_columns`, `run_end`, `merge`, `flip`,
+`hide`, `meet`, `clip_line`, `merge_above`, `visit_of`, `enter`,
+`process_edge` and the old ones that stayed. The records carry `yf`, the
+visit's portal fields and the pointer-free clip.
+
+The golden pose streams had been made on the old map, so `record` trapped
+until I made them again (a pose in the old end room named the wrong
+cell). After `make goldens` and `make record` it keeps 5,343 records, and
+every one reproduces itself. So do the 4,000 synthetic `close_columns`
+ones, remade with the same seed. The records of the units that went are
+gone from `build/golden/replay`. The new counters' weights (`flip`,
+`twin`, `chain_add`, `piece_new` and so on) are guesses.
+
+### Still to do, and caveats
+
+- **Mine to decide.** The `yf` byte; twins against relinking; 16-bit row
+  compares rather than whole 8-bit rows (whole rows can flip back and
+  forth near a crossing); the bigger map limits.
+- **The spec.** §6 and §7.8 to 7.10 still describe the old clip.
+- **The Beeb.** It's all out of step:
+  - the search streams want searching again (search0's one pose still
+    stands; 7 and 9 are empty), and the coverage gate's `uncovered.txt`
+    lists the old code's lines;
+  - `replay.py`, `b2.py`'s unit lists, `frame.py`'s categories and
+    `gonogo.py`'s measured weights name the old units and counters;
+  - the export now has 28 cells and 118 edges for tables sized for 24;
+  - `s5make` records keep only the row of a line's start, not its
+    fraction;
+  - the cost model's weights for the new routines are guesses (see the
+    entry after next for old against new).
+
+## 2026-10-03 — The capture, line generation and clip, as they are now
+
+The previous entry tells the story of the change; this is the whole thing
+as it now stands, top to bottom, for reference. The spec's §7 is still
+the old version.
+
+### What a frame keeps
+
+A **piece** (9 bytes) is a line over columns `[x0, x1)` with an exact
+start row, a gradient, a colour and a link:
+
+```
+x0 x1 | y0 yf | g (sign + u7.8) | ce co | next
+```
+
+`(y0, yf)` is the row at `x0` in u8.8, the rounding half already added in,
+so the plotted row at any column is the high byte of
+`(y0,yf) + g * (c - x0)`. Every piece of a line plots exactly the line's
+rows, wherever it was split.
+
+A **bound** is a chain of pieces, left to right. Chains only ever gain
+pieces, when one is split, so a cursor into one stays good forever.
+
+A **visit** is one per cell per frame. Visits of a cell run left to right
+and never nest, so the record holds the portal being walked as well as
+the cell's cursor:
+
+```
+cell k        the cell; its current edge
+x xr          where the next edge's span starts; the portal's right column
+tcur bcur     the top and bottom bounds' pieces, at or before x
+tmax bmin     the bounds' row extents, for the clip's fast path
+v0 v1         the current edge's two vertices, transformed
+inst          the cell's sprite instance
+active[4]     each of edge k's lines' last piece, visible or not
+```
+
+### The walk
+
+The root is the camera cell's visit over `[0, 128)`, starting on the edge
+where the left ray's sum goes from `<= 0` to `> 0`. Its bounds are two
+pieces: the top at row 0 in the cell's ceiling colour, the bottom at row
+64 with no colour.
+
+```
+walk(v):
+    loop:
+        record v's sprite clip segment
+        for each edge from v's cursor:
+            last = edge ends at or right of v.xr
+            c = process_edge(v)
+            if last:
+                if c: v = c, and round the loop again   (a tail call)
+                else: done
+            if c: walk(c) one deeper (past the cap, close its columns)
+            move v's cursor on
+    issue this call's sprites, innermost first
+```
+
+The recursion carries a visit index, nothing more.
+
+### One edge
+
+```
+process_edge(v):
+    span [xa, xb) = [max(start column, v.x), min(end column, v.xr))
+    if empty: no child
+    v.x = xb; walk v's cursors on to xa
+
+    soft edge:   the child shares v's bounds; enter it over [xa, xb)
+    solid wall:  clip CA^W at cA and W^FA at fA, merges only
+    portal:
+        lines forming no bound first: CA^W at cA if cB > cA,
+                                      W^FA at fA if fB < fA
+        F, the floor line (FB^FA at fA, or FB^W at fB if fB < fA):
+            built into the child's bottom bound against v's two;
+            where it's above v's top, it closes the child
+        C, the ceiling line (CA^CB at cA, or W^CB at cB if cB > cA):
+            over F's open run, built into the child's top bound against
+            v's top and the child's new bottom; where it's below that,
+            it closes the child. Over F's closed columns it just merges
+            into v's top
+        the child is C's open run: enter it there
+```
+
+A cell already walked over these columns can only be the eye on a vertex,
+rounding: it isn't entered again. Its bounds are built into visit 0 (a
+spare) and its open run is closed instead.
+
+**Entering** a child sets its `x` and `xr` and moves its cursor to the
+first edge whose end is right of `xl`. On a first walk that starts at the
+twin's ring successor, with `v0` the portal's start vertex already in
+hand, and projects the cell's sprite. A later walk resumes from wherever
+the last one stopped, with that edge's lines' pieces still in `active`.
+
+### Lines
+
+`edge_line` gives a slot's line on the current edge. If the slot has a
+piece already, that piece is the line: its `x0`, row and gradient, run on
+to the edge's end column. Nothing is projected. Otherwise the edge's
+endpoints are side-clipped (once for all its lines) and `make_line`
+projects them:
+
+- each endpoint's row at the line's height;
+- the gradient, rows per column;
+- the near clip at `x = 2h`, where the projection reaches the top or the
+  bottom of the screen.
+
+A line is on the screen over `[x0, x1)` and off it on its own side
+everywhere else, and `line_y` says so:
+
+```c
+if (c < l->x0 || c >= l->x1)
+    return l->below ? 0xFFFF : 0;
+return row_step(l->y, l->g, (uint8_t)(c - l->x0));
+```
+
+### The clip
+
+`clip_line` takes a line over a visit's columns `[c, c1)`. If its rows lie
+inside the bounds' extents (`tmax` to `bmin`) it's visible throughout.
+Otherwise it goes a run at a time:
+
+```
+at column c:
+    on or above the top     -> hide(top): merge into the top's pieces
+                               until the line comes back inside
+    on or below the bottom  -> hide(bottom), likewise
+    between                 -> visible up to where it first meets
+                               either bound (meet, for each)
+```
+
+`flip` does the finding: where the line, against one bound piece, changes
+side, a stretch of the line at a time. Over a stretch both are single
+lines, so their difference changes sign at most once, at
+
+```
+c + floor(d0 / |g_line - g_piece|) + 1
+```
+
+A hidden run is merged a bound piece at a time:
+
+- **The colour.** The line's colour goes into the bound piece over
+  exactly the run. The piece is split at the run's ends, and only if
+  there's any colour to merge.
+- **Closing.** If the run closes the child, the child's ceiling ^ floor
+  (its whole stack, telescoped) goes in too, and the open run ends.
+- **Building.** If the line forms the child's bound, the bound gets a
+  twin of the piece over the run: a new piece on the same rows,
+  uncoloured.
+- **The line itself.** It keeps an uncoloured piece of its own there, on
+  the screen, for later visits to extend.
+
+A visible run is the line's own piece, coloured, and in the child's bound
+if it forms one.
+
+A line's **own piece** grows if its last one ends right here in the same
+colour, keeping its anchor; else a new one starts at the line's exact row.
+For a bound-forming line the last piece must also be the same kind
+(visible or hidden), since a bound line can be uncoloured too.
+
+**Building** links each new bound piece after the last, and widens the
+child's extent: its bottom's smallest row, or its top's largest.
+
+**Open runs.** Columns a bound-forming line leaves open make up runs.
+Openings are convex, so there should only be one. The first is the
+child's, and any later one is closed after the fact (ceiling ^ floor into
+the child's bottom there).
+
+### After the walk
+
+`plot` draws every coloured piece, starting each piece's DDA at its `yf`.
+Then the sprite pass, using the bound pieces each visit recorded on entry,
+and the fill.
+
+## 2026-10-03 — Rows threaded through the clip, and old against new
+
+The first cut of the new clip asked for rows it already had: the status
+test worked out the line's and the bounds' rows at a run's start, and then
+`flip`, the twin, the line's own piece and `chain_add` all worked them out
+again. Measured over the comparer's 67,000 frames on map 0, 47% of the
+row evaluations repeated one made moments before.
+
+So the rows are passed down, the way a 6502 port keeps them in zero page:
+
+- each run starts from the rows its first column's test took: `hide` and
+  `meet` take them, and `flip` uses them for its first stretch;
+- `merge` gets the bound's row and the line's at the run's start (the
+  split there, the twin, the line's own piece);
+- `chain_add` only needs the end of a piece that's lowest (or highest),
+  which the gradient's sign picks, and half the time it's the start, in
+  hand;
+- the fast path works out the line's last row only if its first passes;
+- the clip keeps a one-entry line cursor: the last column and row worked
+  out. Asked again for that column it has the row; asked for the next, it
+  steps by the gradient, an add rather than a product.
+
+Nothing changes in the pictures: every framebuffer, piece and visit is
+byte-identical across all three maps' frames.
+
+Evaluations a frame, multiplying ones in brackets, over the comparer's
+frames on the new map:
+
+| | old clip | new, first cut | new, threaded |
+|---|---|---|---|
+| map 0 | 74 (47) | 134 (72) | 73 (50) |
+| map 9 | 66 (40) | 108 (45) | 62 (34) |
+
+### Old against new
+
+The cost model, both renderers on the old map and its goldens (the old one
+can't finish the new map: it runs out of pool), estimated 6502 cycles a
+frame:
+
+| map | | capture | plot | total | 90% | worst |
+|---|---|---|---|---|---|---|
+| 0 | old | 22,617 | 7,120 | 32,066 | 77,661 | 169,794 |
+| | new | 22,219 | 6,753 | 31,300 | 74,293 | 161,532 |
+| 7 | old | 27,498 | 8,642 | 43,729 | 100,009 | 176,226 |
+| | new | 27,258 | 8,235 | 43,083 | 94,982 | 168,828 |
+| 9 | old | 36,786 | 9,283 | 47,435 | 101,818 | 187,092 |
+| | new | 33,913 | 7,757 | 43,033 | 89,972 | 166,661 |
+
+Better everywhere, by 1.5 to 9% on average, and by more where it counts:
+the slowest tenth of frames gain 4 to 12%, the worst 4 to 11%. The capture
+loses `cut` and most of the splits, and the plot has 19 to 29% fewer
+pieces.
+
+Take it with some salt. The weights of the new routines (`flip`, `merge`,
+`twin`, `piece_new`, `chain_add`, `line_step`) are guesses; the old ones
+were too, partly. On the real 6502 the old capture splits roughly a third
+clipping and row evaluations, under a third making lines, a sixth
+transforms and a fifth the walk (`frame.py`, three busy views); only the
+first and the walk changed. And the walk's saving, one byte on the stack
+a level where the old 6502 saved a whole portal, isn't in the model at all.
+
+The traced build follows: `flip`, `hide`, `meet`, `merge`, `own_piece` and
+`chain_add` take their rows, the clip's record carries the line cursor, and
+there's a `line_step` counter. 5,348 records, all reproduce.

@@ -398,7 +398,6 @@ static void export_all(const char *dir)
     C(PT_SPRITE_NEAR);
     C(PT_POOL_SIZE);
     C(PT_MAX_DEPTH);
-    C(PT_MAX_CLOSED);
     C(PT_MAX_VISITS);
     C(PT_MAX_INSTS);
     C(PT_SEG_POOL);
@@ -1392,7 +1391,7 @@ static void s5make(uint32_t seed, uint32_t count, const char *out)
         rec[17] = col.o;
         rec[18] = L.x0;
         rec[19] = L.x1;
-        rec[20] = L.y0;
+        rec[20] = (uint8_t)(L.y >> 8);
         rec[21] = (uint8_t)L.g;
         rec[22] = (uint8_t)(L.g >> 8);
         rec[23] = L.ce;

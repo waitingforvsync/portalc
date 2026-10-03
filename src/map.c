@@ -321,6 +321,22 @@ void pt_scene_init(pt_map *m)
     uint8_t rc = add_vert(&b, 1260, 315);
     uint8_t rd = add_vert(&b, 1516, 763);
 
+    // The end room's pit, a quad sunk in three steps, and where its spokes
+    // meet the walls. Seen from the doorway its near edge is split at q
+    // (into the mid and shallow steps), and the deep step behind is cut off
+    // from the mid one by l-p; p and q sit exactly halfway along their
+    // edges, so the ring cells see one straight side each.
+    uint8_t ql = add_vert(&b, 1107, 602);
+    uint8_t qt = add_vert(&b, 1251, 623);
+    uint8_t qr = add_vert(&b, 1273, 787);
+    uint8_t qs = add_vert(&b, 1111, 776);
+    uint8_t qp = add_vert(&b, 1262, 705);    // halfway from qt to qr
+    uint8_t qq = add_vert(&b, 1109, 689);    // halfway from ql to qs
+    uint8_t ka = add_vert(&b, 964, 967);     // on the door wall
+    uint8_t kb = add_vert(&b, 1320, 875);    // on the north-east wall
+    uint8_t kc = add_vert(&b, 1388, 539);    // on the far wall
+    uint8_t kd = add_vert(&b, 1022, 451);    // on the south-west wall
+
     // Lighting: one fixed light shining from the north-north-east (x up the
     // page, y right; the toward-light direction is roughly (0.94, 0.34)).
     // Each visible wall face takes a shade whose brightness follows the dot
@@ -341,6 +357,9 @@ void pt_scene_init(pt_map *m)
     uint8_t corr_ceil = PT_SH_KKRR;
     uint8_t end_ceil = PT_SH_KKKR;
     uint8_t room2_floor = PT_SH_KKGG;
+    uint8_t pit1_floor = PT_SH_KKRR;    // the end room's pit, step by step down
+    uint8_t pit2_floor = PT_SH_KKKR;
+    uint8_t pit3_floor = PT_SH_KKKB;
 
     // walls by facing, darkest (away from the light) to brightest (toward):
     // edge colours, a shade + 1
@@ -497,16 +516,22 @@ void pt_scene_init(pt_map *m)
     add_edge(&b, es, none);       // the doorway, the corridor's full width
     add_edge(&b, en, blue50);     // north wall, in shadow
 
-    // Cell 18: the end room, back in the warm shades: level floor, loftier
-    // ceiling. The whole door wall is one red face: the pieces either side
-    // of the doorway and the lintel above it share the same solid red.
+    // Cell 18: the end room's near quarter, back in the warm shades: level
+    // floor, loftier ceiling. The room is a ring of four cells (18 and
+    // 22..24) round a pit of three (25..27). The whole door wall is one red
+    // face: the pieces either side of the doorway and the lintel above it
+    // share the same solid red. The pit's edges draw nothing from up here
+    // (the drop faces away); its risers are lit like the walls, seen from
+    // below.
     begin_cell(&b, 448, 288, main_floor, end_ceil);
-    add_edge(&b, rd, lintel2);    // north-east wall, faces away
-    add_edge(&b, ra, lit_ene);    // door wall, lit
+    add_edge(&b, rb, lit_n);      // south-west wall, fully lit
+    add_edge(&b, kd, PT_EDGE_SOFT);
+    add_edge(&b, ql, none);       // into the mid step
+    add_edge(&b, qq, none);       // into the shallow step
+    add_edge(&b, qs, PT_EDGE_SOFT);
+    add_edge(&b, ka, lit_ene);    // door wall, lit
     add_edge(&b, en, lit_ene);    // the doorway (lintel face)
     add_edge(&b, es, lit_ene);    // door wall, lit
-    add_edge(&b, rb, lit_n);      // south-west wall, fully lit
-    add_edge(&b, rc, PT_EDGE_COLOUR(room2_floor));    // far wall, dark green check
 
     // Cells 19..21: the rest of the second room round the pillar (east,
     // south and west quarters).
@@ -529,6 +554,46 @@ void pt_scene_init(pt_map *m)
     add_edge(&b, r0, PT_EDGE_SOFT);
     add_edge(&b, pnw, lit_w);        // pillar west face
     add_edge(&b, psw, PT_EDGE_SOFT);
+
+    // Cells 22..24: the rest of the end room's ring (east, far and west).
+    begin_cell(&b, 448, 288, main_floor, end_ceil);
+    add_edge(&b, qs, none);       // into the shallow step
+    add_edge(&b, qr, PT_EDGE_SOFT);
+    add_edge(&b, kb, lintel2);    // north-east wall, faces away
+    add_edge(&b, ra, lit_ene);    // door wall, lit
+    add_edge(&b, ka, PT_EDGE_SOFT);
+
+    begin_cell(&b, 448, 288, main_floor, end_ceil);
+    add_edge(&b, qt, PT_EDGE_SOFT);
+    add_edge(&b, kc, PT_EDGE_COLOUR(room2_floor));    // far wall, dark green check
+    add_edge(&b, rd, lintel2);
+    add_edge(&b, kb, PT_EDGE_SOFT);
+    add_edge(&b, qr, none);       // into the shallow step
+    add_edge(&b, qp, none);       // into the deep step
+
+    begin_cell(&b, 448, 288, main_floor, end_ceil);
+    add_edge(&b, kd, lit_n);
+    add_edge(&b, rc, PT_EDGE_COLOUR(room2_floor));
+    add_edge(&b, kc, PT_EDGE_SOFT);
+    add_edge(&b, qt, none);       // into the deep step
+    add_edge(&b, ql, PT_EDGE_SOFT);
+
+    // Cells 25..27: the pit, deep, mid and shallow steps, darker the deeper.
+    begin_cell(&b, 528, 288, pit3_floor, end_ceil);
+    add_edge(&b, ql, lit_se);     // up to the west quarter
+    add_edge(&b, qt, lit_shadow); // up to the far quarter, faces away
+    add_edge(&b, qp, lit_wnw);    // up to the mid step
+
+    begin_cell(&b, 480, 288, pit2_floor, end_ceil);
+    add_edge(&b, ql, none);       // down into the deep step
+    add_edge(&b, qp, lit_w);      // up to the shallow step
+    add_edge(&b, qq, lit_n);      // up to the near quarter, fully lit
+
+    begin_cell(&b, 464, 288, pit1_floor, end_ceil);
+    add_edge(&b, qq, none);       // down into the mid step
+    add_edge(&b, qp, lit_shadow); // up to the far quarter, faces away
+    add_edge(&b, qr, lit_w);      // up to the east quarter
+    add_edge(&b, qs, lit_n);      // up to the near quarter, fully lit
 
     end_map(&b);
 }

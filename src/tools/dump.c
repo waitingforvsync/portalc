@@ -63,7 +63,8 @@ int main(int argc, char **argv)
         {712, 1236, 192, 11, "stairs_up"},          // climbing the staircase
         {712, 1056, 224, 15, "upper_corridor"},     // into the first bend
         {742, 944, 213, 16, "second_bend"},         // toward the doorway
-        {1136, 683, 107, 18, "end_room"},           // looking back at the door
+        {1335, 709, 107, 23, "end_room"},           // looking back at the door
+        {901, 817, 235, 18, "end_room_pit"},        // in at the door, over the pit
     };
 
     char path[512];

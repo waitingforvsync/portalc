@@ -24,9 +24,9 @@ import re
 import sys
 
 # the unit-replay targets (PLAN.md 5.6)
-WRAP = ['emit', 'resolve_block', 'clip_line', 'clip_edge_line', 'cut', 'inst_new', 'seg_record',
-        'inst_issue', 'child_portal', 'next_open', 'close_columns', 'process_edge', 'make_line',
-        'edge_line', 'transform', 'col_gt', 'col_ge']
+WRAP = ['own_piece', 'chain_add', 'close_columns', 'run_end', 'merge', 'flip', 'hide', 'meet',
+        'clip_line', 'merge_above', 'inst_new', 'seg_record', 'inst_issue', 'visit_of', 'enter',
+        'process_edge', 'make_line', 'edge_line', 'transform', 'col_gt', 'col_ge']
 
 # The cost model's counters (host/trace_hooks.c weights them), in report
 # order. Each probe is (file, function, anchor, times, where, amount):
@@ -51,25 +51,24 @@ COUNTERS = [
     ('mulg',             [('arith.c', 'pt_mulg_u16', None, 1, None, None)]),
     ('piece_y',          [('render.c', 'piece_y', None, 1, None, None)]),
     ('line_y',           [('render.c', 'line_y', None, 1, None, None)]),
+    ('line_step',        [('render.c', 'line_at', r'^\s*y = step1\(cx->ly, l->g\);$', 1, 'before', None)]),
     ('process_edge',     [('render.c', 'process_edge', None, 1, None, None)]),
-    ('edge_work',        [('render.c', 'process_edge', r'^\s*p->x = xb;$', 1, 'after', None)]),
+    ('edge_work',        [('render.c', 'process_edge', r'^\s*vs->x = xb;$', 1, 'after', None)]),
     ('make_line',        [('render.c', 'make_line', None, 1, None, None)]),
     ('near_clip',        [('render.c', 'make_line', r'^\s*// exactly one endpoint too close', 1, 'after', None)]),
-    ('line_reuse',       [('render.c', 'edge_line', r'^\s*const pt_piece \*pp = &el->r->pool\[q\];$', 1, 'after', None)]),
-    ('clip_open',        [('render.c', 'clip_line', r'^\s*if \(st == ST_OPEN\) \{$', 1, 'after', None)]),
-    ('clip_forced',      [('render.c', 'clip_line', r'^\s*uint8_t c = L->x0;$', 1, 'after',
-                           '(st != ST_OPEN)')]),
-    ('clip_fast',        [('render.c', 'clip_line', r'^\s*emit\(cx, L, L->x0, L->x1, ST_VISIBLE\);$', 1,
-                           'before', None)]),
-    ('resolve_block',    [('render.c', 'resolve_block', None, 1, None, None)]),
+    ('line_reuse',       [('render.c', 'edge_line', r'^\s*const pt_piece \*pp = &r->pool\[q\];$', 1, 'after', None)]),
+    ('clip_line',        [('render.c', 'clip_line', None, 1, None, None)]),
+    ('clip_fast',        [('render.c', 'clip_line', r'^\s*visible\(r, cx, L, c, c1, yl\);$', 1, 'before', None)]),
+    ('flip',             [('render.c', 'flip', None, 1, None, None)]),
     ('crossing',         [('render.c', 'crossing', None, 1, None, None)]),
-    ('emit_extend',      [('render.c', 'emit', r'^\s*r->pool\[q\]\.x1 = r1;$', 1, 'before', None)]),
-    ('emit_visible',     [('render.c', 'emit', r'^\s*q = pool_alloc\(r, r0, r1,', 1, 'before', None)]),
-    ('emit_merge',       [('render.c', 'emit', r'^\s*uint8_t \*pp = \(st == ST_ABOVE\)', 1, 'before', None)]),
+    ('piece_extend',     [('render.c', 'own_piece', r'^\s*q->x1 = r1;$', 1, 'before', None)]),
+    ('piece_new',        [('render.c', 'own_piece', r'^\s*\*a = pool_alloc\(r, r0, r1,', 1, 'before', None)]),
+    ('merge',            [('render.c', 'merge', None, 1, None, None)]),
+    ('twin',             [('render.c', 'merge', r'^\s*chain_add\(r, cx, pool_alloc\(', 1, 'before', None)]),
+    ('chain_add',        [('render.c', 'chain_add', None, 1, None, None)]),
     ('pool_split',       [('render.c', 'pool_split', None, 1, None, None)]),
-    ('cut',              [('render.c', 'cut', None, 1, None, None)]),
-    ('child_portal',     [('render.c', 'child_portal', None, 1, None, None)]),
-    ('walk_entry',       [('render.c', 'walk', r'^\s*seg_record\(r, &p\);$', 1, 'before', None)]),
+    ('enter',            [('render.c', 'enter', None, 1, None, None)]),
+    ('walk_entry',       [('render.c', 'walk', r'^\s*seg_record\(r, vi\);$', 1, 'before', None)]),
     # plot
     ('plot_pieces',      [('render.c', 'plot', r'^\s*if \(pt_g_mag\(p->g\) < 0x100\)$', 1, 'before', None)]),
     ('plot_flat_pieces', [('render.c', 'plot_shallow', r'^\s*if \(gm == 0\) \{$', 1, 'after', None)]),

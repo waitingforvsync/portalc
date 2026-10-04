@@ -9,6 +9,11 @@
 // round the corner, so the camera deflects past a doorway jamb. A wall's
 // infinite line (spec 10.2) or an extended cap would instead wedge movement
 // aimed at the corner, since its slide direction is parallel to the wall.
+//
+// Which cell holds the camera is decided by angles alone: from where it
+// stands, a cell's ring vertices run clockwise round it. They're the vertex
+// cache's angles, which the frame's capture looks with too, so the camera's
+// cell and the capture's view of it can never disagree.
 
 #include "camera.h"
 
@@ -21,7 +26,9 @@
 #define HIT_EPS 2    // whole units: truncation slack for the approach test
 
 typedef struct cand {
-    uint8_t edge;
+    uint8_t cell;
+    uint8_t k;         // the side's ring position
+    uint16_t angle;    // its direction
     uint8_t capped;    // neighbour's wall: only hits in front, foot on segment
 } cand;
 
@@ -35,84 +42,58 @@ static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
     posts[(*np)++] = v;
 }
 
-// Every wall interaction happens in the edge's own frame, in whole world
-// units: rotating Q - V0 by the edge angle (the renderer's own primitive)
-// gives the foot position along the edge as x and the interior-positive
-// distance as y in one operation. The sub-unit position fraction exists only
-// so the move vector can accumulate diagonal steps; against a radius of
-// PT_CAM_RADIUS units the truncated unit is noise.
-static pt_xy edge_frame(const pt_map *m, uint8_t e, uint16_t x, uint16_t y)
+// A side's direction: its edge's angle byte, in the quadrant its own
+// vertices' signs give.
+static uint16_t side_angle(const pt_map *m, const pt_cell *c, uint8_t k)
 {
-    const pt_edge *ed = &m->edges[e];
-    int16_t rx = (int16_t)(x - m->verts[ed->v0].x);
-    int16_t ry = (int16_t)(y - m->verts[ed->v0].y);
-    return pt_rot(rx, ry, ed->angle);
+    const pt_side *sd = pt_map_side(m, c, k);
+    pt_vertex a = m->verts[sd->v];
+    pt_vertex b = m->verts[pt_map_side_v1(m, c, k)];
+    uint8_t q = pt_quadrant((int16_t)(b.x - a.x), (int16_t)(b.y - a.y));
+    return (uint16_t)(q << 8 | m->edges[sd->edge].angle);
+}
+
+// Every wall interaction happens in the side's own frame, in whole world
+// units: Q - V0 dotted with the side's direction a gives the foot's place
+// along the side, and dotted with the direction a quarter turn on, towards
+// the cell's inside, the interior-positive distance from its line. Two
+// sine-table products each; the distance comes first, as most sides are
+// out of range. The sub-unit position fraction exists only so the move
+// vector can accumulate diagonal steps; against a radius of PT_CAM_RADIUS
+// units the truncated unit is noise.
+static int16_t side_across(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t a,
+                           uint16_t x, uint16_t y)
+{
+    pt_vertex v = m->verts[pt_map_side(m, c, k)->v];
+    return pt_dot_dir((int16_t)(x - v.x), (int16_t)(y - v.y), (uint16_t)(a + 256));
+}
+
+static int16_t side_along(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t a, uint16_t x,
+                          uint16_t y)
+{
+    pt_vertex v = m->verts[pt_map_side(m, c, k)->v];
+    return pt_dot_dir((int16_t)(x - v.x), (int16_t)(y - v.y), a);
 }
 
 // The foot of the perpendicular lies on the segment (capped a few units
 // short at the far end: the endpoint regions belong to the posts).
-static bool foot_in_range(const pt_map *m, uint8_t e, int16_t t)
+static bool foot_in_range(const pt_map *m, const pt_cell *c, uint8_t k, int16_t t)
 {
-    return t >= 0 && t <= (int16_t)((uint16_t)m->edges[e].len8 << 3);
+    return t >= 0 && t <= (int16_t)((uint16_t)m->edges[pt_map_side(m, c, k)->edge].len8 << 3);
 }
 
-// |a| * |b| mod 2^16: three lookups, the high partial dropped. Exact by
-// wraparound whenever the accumulated result is known to fit s16.
-static uint16_t mul16_lo(uint16_t a, uint16_t b)
+// Has the point crossed the side at position k of cell ci, into adj? Seen
+// from the point (pv: the cache's polar forms), the side's vertices run
+// clockwise from inside the cell: the angle from its start to its end is
+// under a half turn. Exactly a half turn (the point on the side) or none
+// (on its line, beyond), the lower-numbered cell keeps it, so both cells
+// always give the same answer.
+static bool side_crossed(const pt_polar *pv, const pt_cell *c, uint8_t k, uint8_t ci, uint8_t adj)
 {
-    uint16_t lo = pt_mulu8((uint8_t)a, (uint8_t)b);
-    uint16_t mid = (uint16_t)(pt_mulu8((uint8_t)a, (uint8_t)(b >> 8))
-                              + pt_mulu8((uint8_t)(a >> 8), (uint8_t)b));
-    return (uint16_t)(lo + (uint16_t)(mid << 8));
-}
-
-// The side of Q against the exact line through the edge's two vertices (the
-// same sign convention as the frame distance), valid only within a few units
-// of the line: there the true cross product (dx qy - dy qx, perpendicular
-// distance times edge length) fits s16, so every product can be kept mod
-// 2^16 and the wraparound is exact. The twin's value is the exact negation
-// about the same two vertices, so both cells always agree where the boundary
-// lies.
-static int16_t edge_cross_band(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x,
-                               uint16_t y)
-{
-    const pt_edge *ed = &m->edges[e];
-    pt_vertex a = m->verts[ed->v0];
-    pt_vertex b = m->verts[m->edges[pt_map_ring_next(c, e)].v0];
-    int16_t dx = (int16_t)(b.x - a.x);
-    int16_t dy = (int16_t)(b.y - a.y);
-    int16_t qx = (int16_t)(x - a.x);
-    int16_t qy = (int16_t)(y - a.y);
-
-    uint16_t p1 = mul16_lo((uint16_t)(dx < 0 ? -dx : dx), (uint16_t)(qy < 0 ? -qy : qy));
-    uint16_t p2 = mul16_lo((uint16_t)(dy < 0 ? -dy : dy), (uint16_t)(qx < 0 ? -qx : qx));
-    bool n1 = (dx < 0) != (qy < 0);
-    bool n2 = !((dy < 0) != (qx < 0));    // subtracted: its sign enters flipped
-    if (n1 != n2)
-        return n1 ? (int16_t)(p2 - p1) : (int16_t)(p1 - p2);
-    uint16_t m2 = (uint16_t)(p1 + p2);
-    return n1 ? (int16_t)-m2 : (int16_t)m2;
-}
-
-// Has the centre crossed this portal? Away from the line the frame distance
-// is decisive: the margin covers its rounding plus the quantised angle's
-// tilt about V0, which grows with the distance |t| along the line in BOTH
-// directions (t/64 dominates the tilt's pi/256 per unit) - on the backward
-// extension as much as on the edge, or a pose out there could hop, or fail
-// to hop, against the exact truth. Within the band the exact vertex-line
-// side decides, identically from both cells, so every point has a definite
-// owner and the hop walk can neither cycle nor stick; fan lines concur
-// exactly at their shared vertex for the same reason.
-static bool portal_crossed(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y)
-{
-    pt_xy f = edge_frame(m, e, x, y);
-    int16_t ax = f.x < 0 ? (int16_t)-f.x : f.x;
-    int16_t margin = (int16_t)(2 + (ax >> 6));
-    if (f.y >= margin)
-        return false;
-    if (f.y < -margin)
-        return true;
-    return edge_cross_band(m, c, e, x, y) < 0;
+    uint16_t d = (uint16_t)((pv[pt_map_ring_next(c, k)].angle - pv[k].angle) & 1023);
+    if (d == 0 || d == 512)
+        return adj < ci;
+    return d > 512;
 }
 
 // a * b mod 2^16 for a byte b: two lookups, the high partial's own high
@@ -201,6 +182,7 @@ void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8
         .angle = angle,
         .cell = cell,
     };
+    pt_vcache_reset(&c->vc, x, y);
 }
 
 void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
@@ -211,6 +193,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         c->angle = (uint8_t)(c->angle + PT_CAM_TURN_SPEED);
 
     const pt_cell *cc = &m->cells[c->cell];
+    uint16_t px = (uint16_t)(c->x >> 8);
+    uint16_t py = (uint16_t)(c->y >> 8);
 
     // 0. candidate walls (ours, plus every overlapped neighbour's) and the
     // corner vertices at their endpoints, collected while the ring (and so
@@ -219,24 +203,24 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     uint8_t nc = 0;
     uint8_t posts[MAX_CAND];
     uint8_t np = 0;
-    for (uint8_t k = 0; k < cc->num_edges; k++) {
-        uint8_t ei = (uint8_t)(cc->first_edge + k);
-        const pt_edge *ed = &m->edges[ei];
-        if (ed->adj == 0) {
+    for (uint8_t k = 0; k <= cc->num; k++) {
+        const pt_side *sd = pt_map_side(m, cc, k);
+        uint16_t a = side_angle(m, cc, k);
+        if (sd->adj == 0) {
             RC_ASSERT(nc < MAX_CAND);
-            cands[nc++] = (cand) {.edge = ei, .capped = 0};
-            add_post(posts, &np, ed->v0);
-            add_post(posts, &np, m->edges[pt_map_ring_next(cc, ei)].v0);
-        } else if (edge_frame(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)).y
-                   < PT_CAM_RADIUS) {
-            const pt_cell *nb = &m->cells[ed->adj];
-            for (uint8_t j = 0; j < nb->num_edges; j++) {
-                uint8_t nj = (uint8_t)(nb->first_edge + j);
-                if (m->edges[nj].adj == 0) {
+            cands[nc++] = (cand) {.cell = c->cell, .k = k, .angle = a, .capped = 0};
+            add_post(posts, &np, sd->v);
+            add_post(posts, &np, pt_map_side_v1(m, cc, k));
+        } else if (side_across(m, cc, k, a, px, py) < PT_CAM_RADIUS) {
+            const pt_cell *nb = &m->cells[sd->adj];
+            for (uint8_t j = 0; j <= nb->num; j++) {
+                const pt_side *nd = pt_map_side(m, nb, j);
+                if (nd->adj == 0) {
                     RC_ASSERT(nc < MAX_CAND);
-                    cands[nc++] = (cand) {.edge = nj, .capped = 1};
-                    add_post(posts, &np, m->edges[nj].v0);
-                    add_post(posts, &np, m->edges[pt_map_ring_next(nb, nj)].v0);
+                    cands[nc++] = (cand) {
+                        .cell = sd->adj, .k = j, .angle = side_angle(m, nb, j), .capped = 1};
+                    add_post(posts, &np, nd->v);
+                    add_post(posts, &np, pt_map_side_v1(m, nb, j));
                 }
             }
         }
@@ -246,25 +230,27 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     // close; neighbour walls and posts count too, or a corner shared with
     // the next cell wedges the slide before its own resolve can see it
     for (uint8_t i = 0; i < nc; i++) {
-        uint8_t ei = cands[i].edge;
-        const pt_edge *ed = &m->edges[ei];
-        pt_xy f = edge_frame(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
-        if (f.y >= PT_CAM_RADIUS)
+        const pt_cell *wc = &m->cells[cands[i].cell];
+        uint8_t k = cands[i].k;
+        uint16_t a = cands[i].angle;
+        int16_t across = side_across(m, wc, k, a, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
+        if (across >= PT_CAM_RADIUS)
             continue;
-        if (cands[i].capped && f.y < 0)
+        if (cands[i].capped && across < 0)
             continue;
-        if (!foot_in_range(m, ei, f.x))
+        if (!foot_in_range(m, wc, k,
+                           side_along(m, wc, k, a, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))))
             continue;
-        // the push is a positive byte stepped along the inward normal: the
-        // direction a quarter turn on from the edge
-        RC_ASSERT(PT_CAM_RADIUS - f.y <= 127);
-        pt_xy pv = pt_dir8((uint8_t)(PT_CAM_RADIUS - f.y), (uint8_t)(ed->angle + 64));
+        // the push: whole units shifted to s.8 along the inward normal, the
+        // direction a quarter turn on from the side's
+        RC_ASSERT(PT_CAM_RADIUS - across <= 127);
+        pt_xy pv = pt_dir((int16_t)((PT_CAM_RADIUS - across) << 8), (uint16_t)(a + 256));
         c->x = apply(c->x, pv.x);
         c->y = apply(c->y, pv.y);
     }
-    // desired displacement from the input: the facing step, one exact 8-bit
-    // product per component
-    pt_xy f = pt_dir8(PT_CAM_MOVE_SPEED, c->angle);
+    // desired displacement from the input: the facing step, exact (a whole
+    // number of units along the camera's angle, four 1024ths a step)
+    pt_xy f = pt_dir((int16_t)(PT_CAM_MOVE_SPEED << 8), (uint16_t)(c->angle << 2));
     int16_t fx = f.x;
     int16_t fy = f.y;
     int16_t mx = 0;    // s.8, under 12 units in any direction
@@ -278,7 +264,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         my = (int16_t)(my - fy);
     }
     if (input & PT_IN_RIGHT) {
-        // right of facing is the direction at angle + 64: (-sin, cos)
+        // right of facing is the direction a quarter turn on: (-sin, cos)
         mx = (int16_t)(mx - fy);
         my = (int16_t)(my + fx);
     }
@@ -305,34 +291,33 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         uint16_t qx = (uint16_t)(apply(c->x, mx) >> 8);
         uint16_t qy = (uint16_t)(apply(c->y, my) >> 8);
         int16_t worst = PT_CAM_RADIUS;
-        uint8_t hit = 0;
+        uint16_t hit = 0;
         bool have_hit = false;
         for (uint8_t i = 0; i < nc; i++) {
-            uint8_t ei = cands[i].edge;
-            pt_xy f = edge_frame(m, ei, qx, qy);
-            if (cands[i].capped && f.y < 0)
+            const pt_cell *wc = &m->cells[cands[i].cell];
+            uint8_t k = cands[i].k;
+            uint16_t a = cands[i].angle;
+            int16_t across = side_across(m, wc, k, a, qx, qy);
+            if (cands[i].capped && across < 0)
                 continue;
-            if (!foot_in_range(m, ei, f.x))
+            if (across >= worst)
                 continue;
-            if (f.y >= worst)
+            if (!foot_in_range(m, wc, k, side_along(m, wc, k, a, qx, qy)))
                 continue;
             if (cur_y[i] == INT16_MIN)
-                cur_y[i] = edge_frame(m, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8)).y;
-            if (f.y + HIT_EPS >= cur_y[i])
+                cur_y[i] = side_across(m, wc, k, a, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
+            if (across + HIT_EPS >= cur_y[i])
                 continue;
-            worst = f.y;
-            hit = ei;
+            worst = across;
+            hit = a;
             have_hit = true;
         }
         if (have_hit) {
             blocked = true;
 
-            // slide: the move in the wall's frame keeps only its along
-            // component, rotated back out (the reverse angle)
-            const pt_edge *ed = &m->edges[hit];
-            RC_ASSERT(mx > INT16_MIN && my > INT16_MIN);
-            int16_t along = pt_rot(mx, my, ed->angle).x;
-            pt_xy mv = pt_rot(along, 0, (uint8_t)-ed->angle);
+            // slide: the move keeps only its component along the wall
+            int16_t along = pt_dot_dir(mx, my, hit);
+            pt_xy mv = pt_dir(along, hit);
             mx = mv.x;
             my = mv.y;
             continue;
@@ -351,19 +336,20 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     c->x = apply(c->x, mx);
     c->y = apply(c->y, my);
 
-    // 3. transition: the centre has crossed a portal line. The walk hops
-    // through any violated portal and repeats; a move skimming a fan vertex
-    // may cross several cells, and can legally walk the long way round the
-    // fan, so the cap allows a full ring of hops.
+    // 3. transition: the centre has crossed a portal side, judged by the
+    // angles of the vertices from its new place. The walk hops through any
+    // crossed portal and repeats; a move skimming a fan vertex may cross
+    // several cells, and can legally walk the long way round the fan, so
+    // the cap allows a full ring of hops.
+    pt_vcache_move(&c->vc, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
     for (uint8_t pass = 0; pass < 8; pass++) {
         const pt_cell *cur = &m->cells[c->cell];
+        const pt_polar *pv = pt_vcache_cell(&c->vc, m, c->cell);
         bool crossed = false;
-        for (uint8_t k = 0; k < cur->num_edges; k++) {
-            uint8_t ei = (uint8_t)(cur->first_edge + k);
-            if (m->edges[ei].adj == 0)
-                continue;
-            if (portal_crossed(m, cur, ei, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))) {
-                c->cell = m->edges[ei].adj;
+        for (uint8_t k = 0; k <= cur->num; k++) {
+            uint8_t adj = pt_map_side(m, cur, k)->adj;
+            if (adj != 0 && side_crossed(pv, cur, k, c->cell, adj)) {
+                c->cell = adj;
                 crossed = true;
                 break;
             }

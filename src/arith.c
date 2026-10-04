@@ -259,15 +259,24 @@ uint16_t pt_exp2(uint16_t l)
     return (uint16_t)(((m >> (7 - n)) + 1) >> 1);
 }
 
+uint8_t pt_quadrant(int16_t dx, int16_t dy)
+{
+    // the signs, as LDA dy+1 : ASL A : EOR dx+1 : ROL A : PHP : ROL A :
+    // AND #3 has them (bit 1 dy's, bit 0 dx's EOR dy's), except that a zero
+    // counts as negative where that puts an axis at its quadrant's start: dx
+    // when dy is positive, dy when dx is negative (a zero test each)
+    bool nx = dx < 0 || (dx == 0 && dy > 0);
+    bool ny = dy < 0 || (dy == 0 && dx < 0);
+    return (uint8_t)(ny << 1 | (nx != ny));
+}
+
 pt_polar pt_polar_of(int16_t dx, int16_t dy)
 {
     RC_ASSERT(inited_);
     RC_ASSERT((dx != 0 || dy != 0) && dx != INT16_MIN && dy != INT16_MIN);
 
-    // the quadrant from the signs, as LDA dy+1 : ASL A : EOR dx+1 : ROL A :
-    // PHP : ROL A : AND #3 has it: bit 1 dy's sign, bit 0 dx's EOR dy's
-    bool odd = (dx < 0) != (dy < 0);
-    uint8_t q = (uint8_t)((dy < 0) << 1 | odd);
+    uint8_t q = pt_quadrant(dx, dy);
+    bool odd = q & 1;
     uint16_t ux = (uint16_t)(dx < 0 ? -dx : dx);
     uint16_t uy = (uint16_t)(dy < 0 ? -dy : dy);
 
@@ -304,6 +313,53 @@ uint8_t pt_view_col(int8_t v)
 {
     RC_ASSERT(inited_);
     return a2c_[(uint8_t)v ^ 0x80];
+}
+
+// ---- directions ----
+
+static uint16_t mulu16_frac_round(uint16_t a, uint8_t f);
+
+// The sine of a 10-bit angle at scale 256, as a magnitude (0..256) and a
+// sign. The quadrant picks the index, j or (where the sine runs down from
+// 1, in quadrants 1 and 3) 256 - j, and a sign for the lower half turn.
+// The indices that are 1.0 are compared, never looked up.
+static uint16_t sin_mag(uint16_t a, bool *neg)
+{
+    uint8_t q = (uint8_t)((a >> 8) & 3);
+    uint8_t j = (uint8_t)a;
+    *neg = q >= 2;
+    if (q & 1) {
+        if (j < 256 - PT_SIN_ONE + 1)
+            return 256;
+        return sinq_[(uint8_t)(~j + 1)];    // (j EOR $FF) + 1 = 256 - j
+    }
+    return j >= PT_SIN_ONE ? 256 : sinq_[j];
+}
+
+int16_t pt_mul_sin(int16_t v, uint16_t a)
+{
+    RC_ASSERT(inited_);
+    RC_ASSERT(v != INT16_MIN);
+    bool neg;
+    uint16_t s = sin_mag(a, &neg);
+    uint16_t uv = (uint16_t)(v < 0 ? -v : v);
+    uint16_t p = s == 256 ? uv : s == 0 ? 0 : mulu16_frac_round(uv, (uint8_t)s);
+    return (v < 0) != neg ? (int16_t)-p : (int16_t)p;
+}
+
+int16_t pt_mul_cos(int16_t v, uint16_t a)
+{
+    return pt_mul_sin(v, (uint16_t)(a + 256));
+}
+
+int16_t pt_dot_dir(int16_t ux, int16_t uy, uint16_t a)
+{
+    return (int16_t)(pt_mul_cos(ux, a) + pt_mul_sin(uy, a));
+}
+
+pt_xy pt_dir(int16_t mag, uint16_t a)
+{
+    return (pt_xy) {.x = pt_mul_cos(mag, a), .y = pt_mul_sin(mag, a)};
 }
 
 uint16_t pt_mulu8(uint8_t a, uint8_t b)
@@ -421,30 +477,6 @@ void pt_ray_basis(uint8_t angle, int16_t *k1, int16_t *k2)
     int16_t c = sin256((uint8_t)(angle + 64));
     *k1 = (int16_t)(c - s);
     *k2 = (int16_t)(c + s);
-}
-
-// One direction component: mag times the sine at index i, exact (an 8-bit
-// product lands on the s8.8 scale directly), with the half turn's sign.
-static int16_t dir_term(uint8_t mag, uint8_t i, uint8_t v, bool neg)
-{
-    if (i == 0)
-        return 0;
-    uint16_t p = v == 0 ? (uint16_t)((uint16_t)mag << 8) : pt_mulu8(mag, v);
-    return neg ? (int16_t)-p : (int16_t)p;
-}
-
-pt_xy pt_dir8(uint8_t mag, uint8_t angle)
-{
-    RC_ASSERT(inited_);
-    RC_ASSERT(mag <= 127);
-
-    uint8_t si = (uint8_t)(angle & 0x7F);
-    uint8_t ca = (uint8_t)(angle + 64);
-    uint8_t ci = (uint8_t)(ca & 0x7F);
-    return (pt_xy) {
-        .x = dir_term(mag, ci, sin_[ci], (ca & 0x80) != 0),
-        .y = dir_term(mag, si, sin_[si], (angle & 0x80) != 0),
-    };
 }
 
 int16_t pt_lerp16(int16_t a, int16_t b, uint8_t t)

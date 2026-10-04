@@ -19,12 +19,12 @@ static pt_map map_;
 // Exact distance from a point to the edge's segment.
 static double seg_dist(const pt_map *m, const pt_cell *c, uint8_t e, double x, double y)
 {
-    const pt_edge *ed = &m->edges[e];
+    const pt_half *ed = &m->halves[e];
     double ax = m->verts[ed->v0].x;
     double ay = m->verts[ed->v0].y;
-    uint8_t n = pt_map_ring_next(c, e);
-    double bx = m->verts[m->edges[n].v0].x;
-    double by = m->verts[m->edges[n].v0].y;
+    uint8_t n = pt_map_half_next(c, e);
+    double bx = m->verts[m->halves[n].v0].x;
+    double by = m->verts[m->halves[n].v0].y;
     double dx = bx - ax;
     double dy = by - ay;
     double t = ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy);
@@ -62,18 +62,18 @@ RC_TEST(probe, collision_distance)
         double x = cam.x / 256.0;
         double y = cam.y / 256.0;
         const pt_cell *cc = &m->cells[cam.cell];
-        for (uint8_t k = 0; k < cc->num_edges; k++) {
-            uint8_t ei = (uint8_t)(cc->first_edge + k);
-            const pt_edge *ed = &m->edges[ei];
+        for (uint8_t k = 0; k < (cc->num + 1); k++) {
+            uint8_t ei = (uint8_t)(cc->first + k);
+            const pt_half *ed = &m->halves[ei];
             if (ed->adj == 0) {
                 double d = seg_dist(m, cc, ei, x, y);
                 if (d < worst)
                     worst = d;
             } else {
                 const pt_cell *nb = &m->cells[ed->adj];
-                for (uint8_t j = 0; j < nb->num_edges; j++) {
-                    uint8_t nj = (uint8_t)(nb->first_edge + j);
-                    if (m->edges[nj].adj != 0)
+                for (uint8_t j = 0; j < (nb->num + 1); j++) {
+                    uint8_t nj = (uint8_t)(nb->first + j);
+                    if (m->halves[nj].adj != 0)
                         continue;
                     double d = seg_dist(m, nb, nj, x, y);
                     if (d < worst)

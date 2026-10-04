@@ -3,6 +3,7 @@
 #include "arith.h"
 
 #include <math.h>
+#include <stdlib.h>
 
 #include "mode5.h"
 #include "richc/test.h"
@@ -103,17 +104,36 @@ RC_TEST_STEP(arith, lerp16, fix)
             }
 }
 
-RC_TEST_STEP(arith, dir8, fix)
+// Directions in 1024ths: every angle's sine and cosine products against
+// floating point, the facing step exactly, and a frame's two dot products.
+RC_TEST_STEP(arith, directions, fix)
 {
     (void)fix;
-    static const uint8_t mags[] = {0, 1, 8, 100, 127};
-    for (uint32_t i = 0; i < sizeof(mags) / sizeof(mags[0]); i++)
-        for (uint32_t t = 0; t < 256; t++) {
-            pt_xy f = pt_dir8(mags[i], (uint8_t)t);
-            // exact: the 8-bit product is the s8.8 component
-            RC_CHECK(f.x, ==, (int16_t)(mags[i] * ref_sin(t + 64)));
-            RC_CHECK(f.y, ==, (int16_t)(mags[i] * ref_sin(t)));
+    static const int16_t vs[] = {-30000, -2048, -257, -1, 0, 1, 255, 256, 3000, 30000};
+    for (uint32_t i = 0; i < sizeof(vs) / sizeof(vs[0]); i++)
+        for (uint32_t a = 0; a < 1024; a++) {
+            double th = a * (2 * 3.14159265358979323846 / 1024.0);
+            double s = lround(sin(th) * 256.0) / 256.0;    // the table's sine
+            double c = lround(cos(th) * 256.0) / 256.0;
+            RC_CHECK(fabs(pt_mul_sin(vs[i], (uint16_t)a) - vs[i] * s), <=, 0.5);
+            RC_CHECK(fabs(pt_mul_cos(vs[i], (uint16_t)a) - vs[i] * c), <=, 0.5);
         }
+
+    // a whole number of units along a camera angle is exact in s.8
+    for (uint32_t t = 0; t < 256; t++)
+        for (int16_t mag = 0; mag < 128; mag += 7) {
+            pt_xy f = pt_dir((int16_t)(mag << 8), (uint16_t)(t << 2));
+            RC_CHECK(f.x, ==, (int16_t)(mag * ref_sin(t + 64)));
+            RC_CHECK(f.y, ==, (int16_t)(mag * ref_sin(t)));
+        }
+
+    // the frame: a vector along a direction dots to its length along it,
+    // and to nothing across it
+    for (uint32_t a = 0; a < 1024; a += 3) {
+        pt_xy v = pt_dir(1000, (uint16_t)a);
+        RC_CHECK(abs(pt_dot_dir(v.x, v.y, (uint16_t)a) - 1000), <=, 8);
+        RC_CHECK(abs(pt_dot_dir(v.x, v.y, (uint16_t)(a + 256))), <=, 2);
+    }
 }
 
 RC_TEST_STEP(arith, div_t_bounds, fix)
@@ -341,14 +361,21 @@ RC_TEST_STEP(arith, polar, fix)
     polar_check(2000, 3, 7, 1.4, 2.5);
     polar_check(40, 1, 1, 1.4, 2.5);
 
-    // the axes and diagonals: the quadrant's start, or the step below the
-    // next (atan_ floors, so a true 256 is the top of step 255)
+    // the axes start their quadrants, and the diagonals are their middles
+    // (atan_ floors, so 255 - phi is the step below a quadrant's end)
     RC_CHECK(pt_polar_of(100, 0).angle, ==, 0);
-    RC_CHECK(pt_polar_of(0, 100).angle, ==, 255);
-    RC_CHECK(pt_polar_of(-100, 0).angle, ==, 511);
+    RC_CHECK(pt_polar_of(0, 100).angle, ==, 256);
+    RC_CHECK(pt_polar_of(-100, 0).angle, ==, 512);
     RC_CHECK(pt_polar_of(0, -100).angle, ==, 768);
     RC_CHECK(pt_polar_of(100, 100).angle, ==, 128);
     RC_CHECK(pt_polar_of(-100, 100).angle, ==, 256 + 127);
     RC_CHECK(pt_polar_of(-100, -100).angle, ==, 512 + 128);
     RC_CHECK(pt_polar_of(100, -100).angle, ==, 768 + 127);
+
+    // a direction and its reverse are two quadrants apart, axes included
+    for (int32_t dx = -3; dx <= 3; dx++)
+        for (int32_t dy = -3; dy <= 3; dy++)
+            if (dx != 0 || dy != 0)
+                RC_CHECK((pt_quadrant((int16_t)dx, (int16_t)dy) + 2) & 3, ==,
+                         pt_quadrant((int16_t)-dx, (int16_t)-dy));
 }

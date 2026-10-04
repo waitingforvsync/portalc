@@ -1,6 +1,7 @@
-// map.c - map builder (the stand-in for the editor: twin matching, collision
-// precompute, validation may use full-width signed arithmetic) and the demo
-// scene. Only the stored data obeys the engine's unsigned formats.
+// map.c - map builder (the stand-in for the editor: matching sides into
+// shared edges, the angle bytes, collision precompute; validation may use
+// full-width signed arithmetic and floats) and the demo scene. Only the
+// stored data obeys the engine's unsigned formats.
 
 #include "map.h"
 
@@ -43,8 +44,8 @@ static uint8_t begin_cell(builder *b, uint16_t floor_z, uint16_t ceil_z, uint8_t
 
     b->cur_cell = m->num_cells++;
     m->cells[b->cur_cell] = (pt_cell) {
-        .first_edge = m->num_edges,
-        .num_edges = 0,
+        .first = m->num_sides,
+        .num = 0xFF,    // no sides yet: -1
         .floor_z = (uint8_t)(floor_z >> 3),
         .ceil_z = (uint8_t)(ceil_z >> 3),
         .floor = floor,
@@ -71,85 +72,140 @@ static void add_sprite(builder *b, uint16_t x, uint16_t y, uint16_t size, uint8_
     m->cells[b->cur_cell].sprite = m->num_sprites++;
 }
 
+// The current cell's next side, clockwise, from vertex v to the next side's
+// start, in the wall colour its cell sees. The sides are held as halves
+// until end_map makes the edges.
 static void add_edge(builder *b, uint8_t v, uint8_t colour)
 {
     pt_map *m = b->m;
-    RC_PANIC(m->num_edges < PT_MAX_EDGES);
+    RC_PANIC(m->num_sides < PT_MAX_SIDES);
     RC_ASSERT(b->cur_cell != 0);
 
     pt_cell *c = &m->cells[b->cur_cell];
-    RC_ASSERT(c->num_edges < PT_MAX_CELL_EDGES);
+    RC_ASSERT((uint8_t)(c->num + 1) < PT_MAX_RING);
 
-    m->edges[m->num_edges++] = (pt_edge) {
+    m->halves[m->num_sides++] = (pt_half) {
         .v0 = v,
         .colour = colour,
     };
-    c->num_edges++;
+    c->num++;
 }
 
-// The end vertex of an edge of cell c: the next ring edge's start.
-static uint8_t edge_v1(const pt_map *m, const pt_cell *c, uint8_t e)
+// The end vertex of a half of cell c: the next ring half's start.
+static uint8_t half_v1(const pt_map *m, const pt_cell *c, uint8_t i)
 {
-    return m->edges[pt_map_ring_next(c, e)].v0;
+    return m->halves[pt_map_half_next(c, i)].v0;
 }
 
-// Twin matching and collision precompute; editor work, so floats are fine.
-// Edges do not record their cell, so every pass walks the cells' rings.
+// The ring position of cell c's half i: the same range, reversed.
+static uint8_t half_pos(const pt_cell *c, uint8_t i)
+{
+    return (uint8_t)(c->num - (i - c->first));
+}
+
+// Does a half show a face to its own cell: a solid wall, or a lintel (the
+// cell across has a lower ceiling) or a riser (a higher floor)?
+static bool shows_face(const pt_map *m, uint8_t ci, const pt_half *h)
+{
+    if (h->adj == 0)
+        return true;
+    const pt_cell *a = &m->cells[ci];
+    const pt_cell *b = &m->cells[h->adj];
+    return b->ceil_z > a->ceil_z || b->floor_z < a->floor_z;
+}
+
+// The in-quadrant byte of a direction: the quadrant's start turned to +x,
+// then the angle from there, floored to its 1024th (so an axis is 0).
+static uint8_t angle_byte(int32_t dx, int32_t dy)
+{
+    for (uint8_t q = pt_quadrant((int16_t)dx, (int16_t)dy); q != 0; q--) {
+        int32_t t = dx;    // a quarter turn back: (x, y) -> (y, -x)
+        dx = dy;
+        dy = -t;
+    }
+    RC_ASSERT(dx > 0 && dy >= 0);
+    double a = atan2((double)dy, (double)dx) * (512.0 / 3.14159265358979323846);
+    return (uint8_t)floor(a);
+}
+
+// Matching sides into edges, the halves' twins, and each edge's angle,
+// colour and length; editor work, so floats are fine.
 static void end_map(builder *b)
 {
     pt_map *m = b->m;
 
-    // match twins: the edge running v1 -> v0 in another cell
+    // match twins: the half running v1 -> v0 in another cell
     for (uint8_t ci = 1; ci < m->num_cells; ci++) {
         const pt_cell *c = &m->cells[ci];
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            uint8_t i = (uint8_t)(c->first_edge + k);
-            pt_edge *e = &m->edges[i];
-            uint8_t v1 = edge_v1(m, c, i);
+        for (uint8_t k = 0; k <= c->num; k++) {
+            uint8_t i = (uint8_t)(c->first + k);
+            pt_half *h = &m->halves[i];
+            uint8_t v1 = half_v1(m, c, i);
             for (uint8_t cj = 1; cj < m->num_cells; cj++) {
                 if (cj == ci)
                     continue;
                 const pt_cell *d = &m->cells[cj];
-                for (uint8_t l = 0; l < d->num_edges; l++) {
-                    uint8_t j = (uint8_t)(d->first_edge + l);
-                    if (m->edges[j].v0 == v1 && edge_v1(m, d, j) == e->v0) {
-                        RC_ASSERT(e->adj == 0);    // exactly one neighbour per edge
-                        e->adj = cj;
-                        e->twin = j;
+                for (uint8_t l = 0; l <= d->num; l++) {
+                    uint8_t j = (uint8_t)(d->first + l);
+                    if (m->halves[j].v0 == v1 && half_v1(m, d, j) == h->v0) {
+                        RC_ASSERT(h->adj == 0);    // exactly one neighbour per side
+                        h->adj = cj;
+                        h->twin = j;
                     }
                 }
             }
-            RC_ASSERT(e->colour != PT_EDGE_SOFT || e->adj != 0);
+            RC_ASSERT(h->colour != PT_EDGE_SOFT || h->adj != 0);
         }
     }
 
+    // an edge for each wall, and for each portal the first time a cell
+    // names it, in the colour of whichever side shows a face (both sides
+    // showing must agree); then the sides, reversing each cell's halves
+    uint8_t edge_of[PT_MAX_SIDES];
     for (uint8_t ci = 1; ci < m->num_cells; ci++) {
         const pt_cell *c = &m->cells[ci];
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            uint8_t i = (uint8_t)(c->first_edge + k);
-            pt_edge *e = &m->edges[i];
-
-            // collision data: the edge direction as an angle (the camera
-            // works in the edge's frame through pt_rot), and the length
-            pt_vertex a = m->verts[e->v0];
-            pt_vertex q = m->verts[edge_v1(m, c, i)];
-            double dx = (double)q.x - a.x;
-            double dy = (double)q.y - a.y;
-            double len = sqrt(dx * dx + dy * dy);
-            // the upper bound keeps the transition band's cross product in
-            // s16 with the quantised angle's tilt included
-            RC_ASSERT(len >= 1.0 && len < 896.0);
-
-            e->angle = (uint8_t)lround(atan2(dy, dx) * (128.0 / 3.14159265358979323846));
-            e->len8 = (uint8_t)((uint32_t)len / 8);
-
-            // a twin's angle is exactly the reverse of its partner's, never
-            // its own independent rounding, so both sides of a portal work
-            // against one line; twins in earlier cells are already final
-            if (e->adj != 0 && e->adj < ci) {
-                uint8_t t = pt_map_twin(m, i);
-                e->angle = (uint8_t)(m->edges[t].angle + 128);
+        for (uint8_t k = 0; k <= c->num; k++) {
+            uint8_t i = (uint8_t)(c->first + k);
+            const pt_half *h = &m->halves[i];
+            if (h->adj != 0 && h->adj < ci) {
+                edge_of[i] = edge_of[h->twin];
+                continue;
             }
+            RC_PANIC(m->num_edges < PT_MAX_EDGES);
+            uint8_t e = m->num_edges++;
+            pt_vertex a = m->verts[h->v0];
+            pt_vertex q = m->verts[half_v1(m, c, i)];
+            double len = hypot((double)q.x - a.x, (double)q.y - a.y);
+            RC_ASSERT(len >= 1.0 && len < 2048.0);
+            uint8_t colour = h->colour;
+            if (h->adj != 0) {
+                const pt_half *t = &m->halves[h->twin];
+                bool here = shows_face(m, ci, h);
+                bool there = shows_face(m, h->adj, t);
+                RC_PANIC((colour == PT_EDGE_SOFT) == (t->colour == PT_EDGE_SOFT));
+                RC_PANIC(!(here && there) || t->colour == colour);
+                if (there && !here)
+                    colour = t->colour;
+            }
+            m->edges[e] = (pt_edge) {
+                .angle = angle_byte((int32_t)q.x - a.x, (int32_t)q.y - a.y),
+                .colour = colour,
+                .len8 = (uint8_t)((uint32_t)len / 8),
+            };
+            edge_of[i] = e;
+        }
+    }
+    for (uint8_t ci = 1; ci < m->num_cells; ci++) {
+        const pt_cell *c = &m->cells[ci];
+        for (uint8_t k = 0; k <= c->num; k++) {
+            uint8_t i = (uint8_t)(c->first + k);
+            const pt_half *h = &m->halves[i];
+            m->sides[c->first + half_pos(c, i)] = (pt_side) {
+                .v = h->v0,
+                .edge = edge_of[i],
+                .adj = h->adj,
+                .twin = h->adj == 0 ? 0 : half_pos(&m->cells[h->adj], h->twin),
+            };
         }
     }
 
@@ -158,43 +214,97 @@ static void end_map(builder *b)
 
 // ---- validation ----
 
-bool pt_map_validate(const pt_map *m)
+// The cells' rings: each closes up, every portal side's twin is the same
+// edge the other way round, every edge is named once a side, and the old
+// view agrees.
+static bool rings_valid(const pt_map *m)
 {
+    uint8_t named[PT_MAX_EDGES] = {0};    // sides naming each edge
+    bool wall[PT_MAX_EDGES] = {0};
     for (uint8_t ci = 1; ci < m->num_cells; ci++) {
         const pt_cell *c = &m->cells[ci];
-        if (c->num_edges < 3)
+        for (uint8_t k = 0; k <= c->num; k++) {
+            const pt_side *sd = pt_map_side(m, c, k);
+            if (sd->edge >= m->num_edges)
+                return false;
+            named[sd->edge]++;
+            wall[sd->edge] = sd->adj == 0;
+            if (sd->adj != 0) {
+                const pt_cell *d = &m->cells[sd->adj];
+                if (sd->twin > d->num)
+                    return false;
+                const pt_side *t = pt_map_side(m, d, sd->twin);
+                if (t->edge != sd->edge || t->adj != ci || t->v != pt_map_side_v1(m, c, k)
+                    || pt_map_side_v1(m, d, sd->twin) != sd->v)
+                    return false;
+            }
+
+            // the old view agrees (its ranges run the other way round)
+            const pt_half *h = &m->halves[c->first + c->num - k];
+            if (h->v0 != sd->v || h->adj != sd->adj)
+                return false;
+            if (h->adj != 0 && half_pos(&m->cells[h->adj], h->twin) != sd->twin)
+                return false;
+        }
+    }
+    for (uint8_t e = 0; e < m->num_edges; e++)
+        if (named[e] != (wall[e] ? 1 : 2))
+            return false;
+    return true;
+}
+
+// A side's direction against its edge's angle byte: with the quadrant from
+// the direction's signs, the byte is the true angle's 1024th.
+static bool angle_valid(const pt_map *m, const pt_cell *c, uint8_t k)
+{
+    pt_vertex a = m->verts[pt_map_side(m, c, k)->v];
+    pt_vertex b = m->verts[pt_map_side_v1(m, c, k)];
+    int32_t dx = (int32_t)b.x - a.x;
+    int32_t dy = (int32_t)b.y - a.y;
+    uint16_t q = pt_quadrant((int16_t)dx, (int16_t)dy);
+    double t = atan2((double)dy, (double)dx) * (512.0 / 3.14159265358979323846);
+    if (t < 0)
+        t += 1024.0;
+    double d = (q << 8 | m->edges[pt_map_side(m, c, k)->edge].angle) - t;
+    if (d > 512.0)
+        d -= 1024.0;
+    return d >= -1.0 - 1e-9 && d <= 1e-9;
+}
+
+bool pt_map_validate(const pt_map *m)
+{
+    if (!rings_valid(m))
+        return false;
+
+    for (uint8_t ci = 1; ci < m->num_cells; ci++) {
+        const pt_cell *c = &m->cells[ci];
+        if (c->num < 2)
             return false;
 
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            uint8_t ei = (uint8_t)(c->first_edge + k);
-            const pt_edge *e = &m->edges[ei];
-            uint8_t en = pt_map_ring_next(c, ei);
+        for (uint8_t k = 0; k <= c->num; k++) {
+            const pt_side *sd = pt_map_side(m, c, k);
+            const pt_edge *e = &m->edges[sd->edge];
+            uint8_t kn = pt_map_ring_next(c, k);
+            if (!angle_valid(m, c, k))
+                return false;
+            if (sd->adj == 0 && e->colour == PT_EDGE_SOFT)
+                return false;    // a solid wall draws
 
             // clockwise, convex ring (collinear split points allowed)
-            pt_vertex v0 = m->verts[e->v0];
-            pt_vertex v1 = m->verts[m->edges[en].v0];
-            pt_vertex v2 = m->verts[edge_v1(m, c, en)];
+            pt_vertex v0 = m->verts[sd->v];
+            pt_vertex v1 = m->verts[pt_map_side(m, c, kn)->v];
+            pt_vertex v2 = m->verts[pt_map_side_v1(m, c, kn)];
             int32_t cross = ((int32_t)v1.x - v0.x) * ((int32_t)v2.y - v1.y)
                           - ((int32_t)v1.y - v0.y) * ((int32_t)v2.x - v1.x);
             if (cross < 0)
                 return false;
 
-            // twin symmetry and soft-edge attribute equality
-            if (e->adj != 0) {
-                const pt_cell *b = &m->cells[e->adj];
-                uint8_t ti = pt_map_twin(m, ei);
-                if (ti < b->first_edge || ti >= b->first_edge + b->num_edges)
+            // a soft edge joins cells alike
+            if (e->colour == PT_EDGE_SOFT) {
+                const pt_cell *b = &m->cells[sd->adj];
+                if (c->floor_z != b->floor_z || c->ceil_z != b->ceil_z || c->floor != b->floor
+                    || c->ceil != b->ceil)
                     return false;
-                const pt_edge *t = &m->edges[ti];
-                if (t->adj != ci || pt_map_twin(m, ti) != ei)
-                    return false;
-                if (t->v0 != edge_v1(m, c, ei) || edge_v1(m, b, ti) != e->v0)
-                    return false;
-                if (e->colour == PT_EDGE_SOFT) {
-                    if (t->colour != PT_EDGE_SOFT || c->floor_z != b->floor_z
-                        || c->ceil_z != b->ceil_z || c->floor != b->floor || c->ceil != b->ceil)
-                        return false;
-                }
             }
 
             // a sprite stands inside its cell: its base centre at least half
@@ -207,10 +317,9 @@ bool pt_map_validate(const pt_map *m)
                     return false;
                 const pt_sprite_art *a = &m->arts[sp->art];
                 double half = 0.5 * sp->size * pt_sprite_width(a) / pt_sprite_height(a);
-                pt_vertex ea = m->verts[e->v0];
-                double len = sqrt(((double)v1.x - ea.x) * ((double)v1.x - ea.x)
-                                  + ((double)v1.y - ea.y) * ((double)v1.y - ea.y));
-                if (pt_map_edge_side(m, c, ei, sp->x, sp->y) < half * len)
+                double len = sqrt(((double)v1.x - v0.x) * ((double)v1.x - v0.x)
+                                  + ((double)v1.y - v0.y) * ((double)v1.y - v0.y));
+                if (pt_map_edge_side(m, c, k, sp->x, sp->y) < half * len)
                     return false;
                 if (sp->size > 8 * (c->floor_z - c->ceil_z))
                     return false;
@@ -219,13 +328,13 @@ bool pt_map_validate(const pt_map *m)
             // the inward normal must point at the cell's centroid
             int64_t cx = 0;
             int64_t cy = 0;
-            for (uint8_t j = 0; j < c->num_edges; j++) {
-                cx += m->verts[m->edges[c->first_edge + j].v0].x;
-                cy += m->verts[m->edges[c->first_edge + j].v0].y;
+            for (uint8_t j = 0; j <= c->num; j++) {
+                cx += m->verts[pt_map_side(m, c, j)->v].x;
+                cy += m->verts[pt_map_side(m, c, j)->v].y;
             }
-            cx /= c->num_edges;
-            cy /= c->num_edges;
-            if (pt_map_edge_side(m, c, ei, (uint16_t)cx, (uint16_t)cy) <= 0)
+            cx /= c->num + 1;
+            cy /= c->num + 1;
+            if (pt_map_edge_side(m, c, k, (uint16_t)cx, (uint16_t)cy) <= 0)
                 return false;
         }
     }
@@ -234,14 +343,13 @@ bool pt_map_validate(const pt_map *m)
 
 // ---- queries ----
 
-int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y)
+int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t x, uint16_t y)
 {
-    // the exact cross product against the line through the edge's vertices:
-    // the same geometry the camera's transition band test decides by, so
-    // point location and transitions can never disagree
-    const pt_edge *ed = &m->edges[e];
-    pt_vertex a = m->verts[ed->v0];
-    pt_vertex b = m->verts[m->edges[pt_map_ring_next(c, e)].v0];
+    // the exact cross product against the line through the side's vertices
+    // (the camera decides its cell by angles instead, which can differ from
+    // this within a unit or so of a portal's line)
+    pt_vertex a = m->verts[pt_map_side(m, c, k)->v];
+    pt_vertex b = m->verts[pt_map_side_v1(m, c, k)];
     return (int32_t)((int16_t)(b.x - a.x)) * (int16_t)(y - a.y)
          - (int32_t)((int16_t)(b.y - a.y)) * (int16_t)(x - a.x);
 }
@@ -249,8 +357,8 @@ int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t 
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y)
 {
     const pt_cell *c = &m->cells[cell];
-    for (uint8_t k = 0; k < c->num_edges; k++)
-        if (pt_map_edge_side(m, c, (uint8_t)(c->first_edge + k), x, y) < 0)
+    for (uint8_t k = 0; k <= c->num; k++)
+        if (pt_map_edge_side(m, c, k, x, y) < 0)
             return false;
     return true;
 }

@@ -181,10 +181,10 @@ static double ray_enter(const pt_map *m, uint8_t cell, double px, double py, dou
     const pt_cell *c = &m->cells[cell];
     double t0 = 0;
     double t1 = 1e9;
-    for (uint8_t k = 0; k < c->num_edges; k++) {
-        uint8_t e = (uint8_t)(c->first_edge + k);
-        pt_vertex a = m->verts[m->edges[e].v0];
-        pt_vertex b = m->verts[m->edges[pt_map_ring_next(c, e)].v0];
+    for (uint8_t k = 0; k < (c->num + 1); k++) {
+        uint8_t e = (uint8_t)(c->first + k);
+        pt_vertex a = m->verts[m->halves[e].v0];
+        pt_vertex b = m->verts[m->halves[pt_map_half_next(c, e)].v0];
         double ex = (double)b.x - a.x;
         double ey = (double)b.y - a.y;
         // side(p) = ex * (p.y - a.y) - ey * (p.x - a.x), positive inside
@@ -297,12 +297,12 @@ RC_TEST(sprite, segments_and_order)
         const pt_cell *c = &map_.cells[cell];
         uint32_t sx = 0;
         uint32_t sy = 0;
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            sx += map_.verts[map_.edges[c->first_edge + k].v0].x;
-            sy += map_.verts[map_.edges[c->first_edge + k].v0].y;
+        for (uint8_t k = 0; k < (c->num + 1); k++) {
+            sx += map_.verts[map_.halves[c->first + k].v0].x;
+            sy += map_.verts[map_.halves[c->first + k].v0].y;
         }
-        uint16_t x = (uint16_t)(sx / c->num_edges);
-        uint16_t y = (uint16_t)(sy / c->num_edges);
+        uint16_t x = (uint16_t)(sx / (c->num + 1));
+        uint16_t y = (uint16_t)(sy / (c->num + 1));
         for (uint32_t a = 0; a < 256; a += 4) {
             pt_render_frame(&render_, x, y, (uint8_t)a, cell);
             check_frame(&map_, &render_, x, y, (uint8_t)a);
@@ -422,12 +422,12 @@ static void reference_poses(void)
         const pt_cell *c = &map_.cells[cell];
         uint32_t sx = 0;
         uint32_t sy = 0;
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            sx += map_.verts[map_.edges[c->first_edge + k].v0].x;
-            sy += map_.verts[map_.edges[c->first_edge + k].v0].y;
+        for (uint8_t k = 0; k < (c->num + 1); k++) {
+            sx += map_.verts[map_.halves[c->first + k].v0].x;
+            sy += map_.verts[map_.halves[c->first + k].v0].y;
         }
         for (uint32_t a = 0; a < 256; a += 4)
-            check_against_reference((uint16_t)(sx / c->num_edges), (uint16_t)(sy / c->num_edges),
+            check_against_reference((uint16_t)(sx / (c->num + 1)), (uint16_t)(sy / (c->num + 1)),
                                     (uint8_t)a, cell);
     }
     pt_camera cam;

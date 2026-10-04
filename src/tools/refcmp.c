@@ -35,17 +35,19 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
                     double lz)
 {
     double t = 0;
-    int entry = -1;
+    int entry = -1;    // the edge the ray came in by
     for (int steps = 0; steps < 64; steps++) {
         const pt_cell *c = &map.cells[cell];
         double best = 1e30;
-        int exit = -1;
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            uint8_t e = (uint8_t)(c->first_edge + k);
-            if (e == entry)
+        int exit = -1;     // the side the ray leaves by
+        int exit_e = -1;   // and its edge: an exact tie (the ray through a
+                           // vertex) goes to the lower, whatever the ring order
+        for (uint8_t k = 0; k <= c->num; k++) {
+            const pt_side *sd = pt_map_side(&map, c, k);
+            if (sd->edge == entry)
                 continue;
-            pt_vertex a = map.verts[map.edges[e].v0];
-            pt_vertex b = map.verts[map.edges[pt_map_ring_next(c, e)].v0];
+            pt_vertex a = map.verts[sd->v];
+            pt_vertex b = map.verts[pt_map_side_v1(&map, c, k)];
             double ex = (double)b.x - a.x;
             double ey = (double)b.y - a.y;
             double den = dx * ey - dy * ex;
@@ -55,9 +57,12 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
             double ay = a.y - py;
             double tt = (ax * ey - ay * ex) / den;
             double u = (ax * dy - ay * dx) / den;
-            if (tt > t + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9 && tt < best) {
+            int e = sd->edge;
+            if (tt > t + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9
+                && (tt < best || (tt == best && e < exit_e))) {
                 best = tt;
-                exit = e;
+                exit = k;
+                exit_e = e;
             }
         }
         if (exit < 0)
@@ -69,15 +74,17 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
             return (uint8_t)(c->floor + 1);
         if (lz < 0 && z < 8.0 * c->ceil_z)
             return (uint8_t)(c->ceil + 1);
-        const pt_edge *ed = &map.edges[exit];
-        if (ed->adj == 0)
-            return ed->colour;
-        const pt_cell *n = &map.cells[ed->adj];
+        const pt_side *sd = pt_map_side(&map, c, (uint8_t)exit);
+        uint8_t colour = map.edges[sd->edge].colour;
+        uint8_t adj = sd->adj;
+        if (adj == 0)
+            return colour;
+        const pt_cell *n = &map.cells[adj];
         if (z > 8.0 * n->floor_z || z < 8.0 * n->ceil_z)
-            return ed->colour;
+            return colour;
         t = best;
-        entry = ed->twin;
-        cell = ed->adj;
+        entry = sd->edge;
+        cell = adj;
     }
     return 0;
 }
@@ -166,13 +173,13 @@ static void all_poses(int which)
     for (uint8_t c = 1; c < map.num_cells; c++) {
         const pt_cell *cl = &map.cells[c];
         uint32_t sx = 0, sy = 0;
-        for (uint8_t k = 0; k < cl->num_edges; k++) {
-            pt_vertex v = map.verts[map.edges[cl->first_edge + k].v0];
+        for (uint8_t k = 0; k <= cl->num; k++) {
+            pt_vertex v = map.verts[pt_map_side(&map, cl, k)->v];
             sx += v.x;
             sy += v.y;
         }
-        uint16_t x = (uint16_t)(sx / cl->num_edges);
-        uint16_t y = (uint16_t)(sy / cl->num_edges);
+        uint16_t x = (uint16_t)(sx / (cl->num + 1));
+        uint16_t y = (uint16_t)(sy / (cl->num + 1));
         for (unsigned a = 0; a < 256; a += 4)
             frame(x, y, (uint8_t)a, c);
     }

@@ -1,7 +1,7 @@
-// map.h - the world: convex cells with clockwise vertex rings (viewed from
-// above with x up the page, y right, z downwards), twin-linked edges, and the
-// per-edge collision data the editor precomputes. All coordinates are
-// unsigned: the scene is authored directly in positive space.
+// map.h - the world: convex cells with clockwise rings of sides (viewed from
+// above with x up the page, y right, z downwards), each side running along
+// an edge that the cells either side share. All coordinates are unsigned:
+// the scene is authored directly in positive space.
 
 #ifndef PT_MAP_H_
 #define PT_MAP_H_
@@ -16,7 +16,8 @@
 #define PT_MAX_VERTS 64
 #define PT_MAX_CELLS 32
 #define PT_MAX_EDGES 128
-#define PT_MAX_CELL_EDGES 8
+#define PT_MAX_SIDES 255       // every cell's ring, end to end, a byte indexes it
+#define PT_MAX_RING 8          // sides a cell
 #define PT_MAX_SPRITES 8
 #define PT_MAX_ARTS 4
 
@@ -30,24 +31,47 @@ typedef struct pt_vertex {
 #define PT_EDGE_SOFT 0
 #define PT_EDGE_COLOUR(shade) ((uint8_t)((shade) + 1))
 
-// An edge does not know its owning cell: edges are only ever reached through
-// a cell's [first_edge, first_edge + num_edges) ring, so every walker already
-// holds the cell and threads it into the ring functions below.
+// An edge: what the two sides of a wall share. Where it runs, and between
+// which cells, belongs to the rings.
 typedef struct pt_edge {
-    uint8_t v0;          // start vertex; the end is the next ring edge's v0
-    uint8_t adj;         // adjacent cell, 0 = solid wall
-    uint8_t twin;        // the adjacent cell's edge running this one the
-                         // other way (a portal's twin; unused for walls)
-    uint8_t colour;      // wall shade + 1 (walls, risers and lintels); 0 = soft
-    uint8_t angle;       // direction V0 -> V1 in 256ths of a turn; a twin is
-                         // exactly this + 128, so both sides share one line
-    uint8_t len8;        // floor(len / 8): the foot cap in 8-unit steps (the
-                         // last few units of a wall belong to its post)
+    uint8_t angle;       // its direction within the quadrant, in 1024ths of a
+                         // turn: either way round, the quadrant comes from the
+                         // direction's signs (pt_quadrant), so the byte serves
+                         // both sides
+    uint8_t colour;      // the shade + 1 of its faces (wall, riser or
+                         // lintel, from whichever side shows them); 0 = soft
+    uint8_t len8;        // floor(len / 8): collision's foot cap, in 8-unit
+                         // steps (a wall's last few units belong to its post)
 } pt_edge;
 
+// A cell's side, one place in its ring: from its start vertex to the next
+// side's, clockwise, along an edge.
+typedef struct pt_side {
+    uint8_t v;           // the start vertex
+    uint8_t edge;
+    uint8_t adj;         // the cell across it, 0 = solid wall
+    uint8_t twin;        // the edge's position in adj's ring, 0..num: the
+                         // child's walk starts from there
+} pt_side;
+
+// The old renderer's view of a side, kept until phase 3 rewrites it. A
+// cell's halves fill the same range as its sides, clockwise where its
+// sides are counter-clockwise. Derived by the builder.
+typedef struct pt_half {
+    uint8_t v0;          // start vertex; the end is the next ring half's v0
+    uint8_t adj;         // adjacent cell, 0 = solid wall
+    uint8_t twin;        // the adjacent cell's half running this one the
+                         // other way (a portal's twin; unused for walls)
+    uint8_t colour;      // wall shade + 1 (walls, risers and lintels); 0 = soft
+} pt_half;
+
 typedef struct pt_cell {
-    uint8_t first_edge;
-    uint8_t num_edges;
+    uint8_t first;       // its ring's base: sides[first + k] is position k
+    uint8_t num;         // the ring's count LESS ONE: its last position. The
+                         // ring is stored counter-clockwise, so the 6502
+                         // walks it clockwise from a base pointer at sides +
+                         // first, counting positions down from num and
+                         // reloading it below 0
     uint8_t floor_z;     // z in 8-unit steps, increasing downwards: floor_z > ceil_z
     uint8_t ceil_z;
     uint8_t floor;       // catalogue shade indices
@@ -68,27 +92,50 @@ typedef struct pt_map {
     pt_vertex verts[PT_MAX_VERTS];
     pt_cell cells[PT_MAX_CELLS];    // cell 0 is the "outside" and never used
     pt_edge edges[PT_MAX_EDGES];
+    pt_side sides[PT_MAX_SIDES];    // the cells' rings
+    pt_half halves[PT_MAX_SIDES];   // the old view: each cell's range of
+                                    // sides[], but clockwise
     pt_sprite sprites[PT_MAX_SPRITES];    // sprite 0 is unused ("none")
     pt_sprite_art arts[PT_MAX_ARTS];
     uint8_t num_verts;
     uint8_t num_cells;
     uint8_t num_edges;
+    uint8_t num_sides;
     uint8_t num_sprites;
     uint8_t num_arts;
 } pt_map;
 
-// The ring successor of an edge of cell c (wraps within the cell).
-static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t e)
+// The side at position k (0..num) of cell c's ring.
+static inline const pt_side *pt_map_side(const pt_map *m, const pt_cell *c, uint8_t k)
 {
-    uint8_t k = (uint8_t)(e - c->first_edge + 1);
-    return (uint8_t)(c->first_edge + (k == c->num_edges ? 0 : k));
+    return &m->sides[c->first + k];
 }
 
-// The twin of a portal edge: the adjacent cell's edge running the shared
-// wall the other way (it starts at our end vertex), stored by the builder.
-static inline uint8_t pt_map_twin(const pt_map *m, uint8_t e)
+// The next position clockwise from k: one down, wrapping round to num.
+static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t k)
 {
-    return m->edges[e].twin;
+    return k == 0 ? c->num : (uint8_t)(k - 1);
+}
+
+// Position k's end vertex: the next side's start.
+static inline uint8_t pt_map_side_v1(const pt_map *m, const pt_cell *c, uint8_t k)
+{
+    return pt_map_side(m, c, pt_map_ring_next(c, k))->v;
+}
+
+// The old view's next half clockwise from half i (an index into halves[]):
+// the one after it.
+static inline uint8_t pt_map_half_next(const pt_cell *c, uint8_t i)
+{
+    uint8_t k = (uint8_t)(i - c->first + 1);
+    return (uint8_t)(c->first + (k > c->num ? 0 : k));
+}
+
+// The twin of a portal half: the adjacent cell's half running the shared
+// wall the other way (the old view's).
+static inline uint8_t pt_map_twin(const pt_map *m, uint8_t i)
+{
+    return m->halves[i].twin;
 }
 
 // Build the demo scene: a pentagonal room with a depressed square in the
@@ -107,9 +154,9 @@ void pt_stress_scene_init(pt_map *m);
 // assert on failure in debug, returns false in release.
 bool pt_map_validate(const pt_map *m);
 
-// The signed distance of a point from an edge's line, s16.8: positive on the
-// cell's interior side.
-int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t e, uint16_t x, uint16_t y);
+// The signed distance of a point from the line of the side at position k
+// of cell c, s16.8: positive on the cell's interior side.
+int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t x, uint16_t y);
 
 // True when the point lies inside the cell (boundary included).
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y);

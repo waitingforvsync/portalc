@@ -9,10 +9,13 @@ tried and kept or tried and dropped.
 
 - **Phase 0, done.** The branch, and the ray-cast comparer in `src/tools`
   (below).
-- **Phase 1, done (awaiting commit).** The tables, built the way the 6502
-  will build them, and the polar front end's primitives in `arith.c`.
-- **Next, phase 2.** The map in the new format (shared edges) and collision
-  on the new angles.
+- **Phase 1, done.** The tables, built the way the 6502 will build them,
+  and the polar front end's primitives in `arith.c`.
+- **Phase 2a, done.** The map in the new format: shared edges, and rings
+  of sides stored backwards.
+- **Phase 2b, done (awaiting commit).** Collision on the new map: the
+  cell tracked by angles, through the vertex cache.
+- **Next, phase 3.** The capture.
 
 The phases are at the end.
 
@@ -103,6 +106,15 @@ From my old beebdoom prototype:
 
 Quadrant 0 is +x +y, 1 is -x +y, 2 is -x -y, 3 is +x -y.
 
+**On an axis.** For one byte to serve both sides of an edge, a direction
+and its reverse must always be two quadrants apart. Signs alone break that
+on the axes: +y has a zero dx, which counts as positive, so it lands in
+quadrant 0 at the very end, while -y lands at the start of quadrant 3. So
+`pt_quadrant` has a direction along an axis start its quadrant (+x 0, +y 1,
+-x 2, -y 3): a zero dx counts as negative when dy is positive, a zero dy
+when dx is negative. Two zero tests on top of the seven instructions.
+Axis-aligned walls are common, so this matters.
+
 ### Steps, and their middles
 
 Within a quadrant, the angle is atan(minor / major), from whichever axis is
@@ -179,11 +191,19 @@ high byte is 0 to 7, so normalising for the log is a lookup and at most
 two shifts.
 
 **Turning is free.** A vertex's world angle and log length depend only on
-where the camera stands, not which way it faces. Cache them per vertex
-while the camera stays put, and a frame that only turns does no polar work
-at all: its cached angle less the camera's, and a column lookup, about 25
-cycles a vertex. The cache also stops a vertex being worked out twice in a
-frame. About 4 bytes a vertex. Planned for phase 3.
+where the camera stands, not which way it faces. Keep them while the
+camera stays put, and a frame that only turns does no polar work at all:
+the cached angle less the camera's, and a column lookup, about 25 cycles a
+vertex.
+
+The cache goes cell by cell, like the visit cache: an entry made the first
+time a cell is needed, holding its ring's vertices in ring order. So its
+size follows the cells a frame touches, not the map's size. A vertex in
+several cells gets worked out once for each, but a child's entry can copy
+the portal's two vertices from its parent's. Collision fills it first: the
+move is tested from the new position, which is where the frame's capture
+then looks from, so the two share the angles. Designed with collision, in
+phase 2b.
 
 ### No column-to-angle
 
@@ -275,13 +295,141 @@ Axis-aligned walls make both shortcuts common.
 collision are untouched: every record the comparer writes is identical.
 The old helpers go as their users do:
 
-- **Phase 2:** `pt_dir8`, `pt_div_q8`, and the builder's and collision's
-  `pt_rot`.
+- **Phase 2, done:** `pt_dir8`, and the builder's and collision's
+  `pt_rot`. `pt_div_q8` stays for now: the posts' deflection divides by
+  it.
 - **Phase 3:** `sin_`, `pt_rot`, `pt_ray_basis`, `recipf`, `sbyte`, and the
   reciprocal, division, gradient and projection helpers.
 
 `nrm` and `k8` stay, for normalising logs. `pt_mulg_u16` may stay too: a
 line restarting partway along wants an exact gradient times columns.
+
+## The map
+
+### Edges and sides
+
+An edge holds only what its two sides share. Where it runs, and between
+which cells, belongs to the rings:
+
+```
+edge   angle    the direction's byte within its quadrant
+       colour   the shade + 1 of its faces, 0 for soft
+side   v        the start vertex; the end is the next side's
+       edge
+       adj      the cell across, 0 for a solid wall
+       twin     the edge's position in adj's ring, 0..num
+```
+
+The angle byte needs no direction: either way round, the quadrant comes from
+the side's own vertices (`pt_quadrant`), and the byte is the same. `twin`
+is mine: it saves searching the child's ring for the way back in, every
+time the walk enters a cell, for a byte a side. An edge's length comes back
+if collision wants it.
+
+### Rings stored backwards
+
+A cell keeps `first`, its ring's base in the sides, and `num`, which holds
+its count LESS ONE. The ring is stored counter-clockwise, and still walked
+clockwise: a base pointer at `sides + first`, and positions counting down
+from `num`, which is the cheap way round on the 6502:
+
+```
+    DEY : BPL ok
+    LDY num                 ; below 0: round to the last position
+.ok
+```
+
+Everything that names a side by ring, like a side's `twin`, uses these
+positions, 0 to `num`, not indices into the sides.
+
+### One colour an edge
+
+A riser shows only to the cell below it, and a lintel only to the cell
+under it, so nearly every edge has one visible face. In the demo scene,
+one portal edge shows faces both ways, and its two colours agree. The
+sides that show nothing still carry colours in the scene source (19 in
+the demo scene, 3 in the stress map), like `none` looking down into the
+pit. So the builder keeps the authoring call (a colour for each side, as
+its cell sees it) and takes the colour of the side that shows a face. It
+stops if two showing sides ever disagree, or if one side is soft and the
+other isn't.
+
+### The old view
+
+The old renderer reads the old per-side records, now `pt_half`: start
+vertex, cell across, twin and colour. The builder derives them exactly as
+before, in each cell's range of `sides[]` but clockwise, until phase 3
+rewrites it. So `main`'s pictures are byte-identical: the sweep's framebuffers
+match, and so does every comparer record but the reference's own changes
+(below).
+
+The Beeb port's host tools follow `main`'s map, so on `polar` they're off
+unless `PORTALC_BEEB_HOST` asks for them.
+
+## Collision
+
+### How beebdoom did it
+
+Which cell: find the edge the move heads for (the one whose vertices'
+angles, from the old position, bracket the move's angle), then look at its
+two vertices from the new position. If their order has swapped, the point
+is across: into the next cell, and again. Walls: for each edge the move
+faces, the distance from the new point to its line by a dot product with
+its normal (two sine-table multiplies); inside the radius, a portal adds
+the cell beyond to the edges checked, and a wall, unless the point is past
+either end, pushes the point back out along its normal, leaving the slide.
+
+### What I did
+
+`camera.c` keeps its old shape (candidate walls and posts, resolve, three
+slide iterations, the hop walk) with new pieces:
+
+- **The cell, by angles from the new position only.** A point is inside a
+  cell when every side's vertices run clockwise as seen from it: the
+  angle from a side's start to its end is under a half turn. A portal side
+  that fails is crossed, so hop and look again. No old position's angles
+  needed, and they're exactly the angles the frame's capture will look
+  with, so the camera's cell and the capture's view can never disagree.
+  On `main` that took an exact cross product near each line, and
+  `root_exact`'s retry.
+- **Ties to the lower cell.** Exactly a half turn apart (the point on the
+  side) or level (on its line, past an end), the lower-numbered cell keeps
+  the point. Both cells give the same answer, so the hop walk can't
+  ping-pong.
+- **The vertex cache,** cell by cell, like the visits: an entry the first
+  time a cell is needed, the ring's polar forms from where the camera
+  stands. The camera owns it, and fills it after each move; the capture
+  will read it. A move that doesn't change the whole-unit position keeps
+  it, so turning on the spot costs nothing.
+- **Dot products for walls.** A side's frame is two dot products against
+  its direction (the edge's byte, the quadrant from the side's own
+  vertices): across it first, along it only when close. Two sine-table
+  multiplies each, against four through `pt_rot` before. If collision ever
+  needs to be cheaper: the cache already holds each vertex's angle and log
+  length, so the distance across a side is r sin(angle off the side), one
+  log sine lookup and an exp, no multiplies at all. The catch is that
+  log sine near zero is steep, exactly where collision wants it accurate.
+- **The edge's length** joins the edge, for the foot cap.
+- **The posts stay.** They're cheap, and they keep the radius off wall
+  ends, which keeps the eye off vertices.
+
+The facing step comes from the quarter sine table, four 1024ths a camera
+step: the same values as before.
+
+### How it comes out
+
+Over the 40,000-tick walk the collision probe takes, the closest the camera
+came to a wall was 29.04 units (radius 40; it was 29.17). The cell it
+tracks differed from exact point location in 79 ticks, by at most 0.28 of a
+unit. The fan probe now allows exactly that: a point d from a side's line
+sees its vertices d (1/r0 + 1/r1) radians off a half turn apart, and each
+angle is within 1.82 steps, so the point may lie up to 3.64 steps' worth
+beyond.
+
+Until phase 3, the old renderer still wants the cell that holds the eye
+exactly (its root search can find no edge to start from with the eye past
+its cell's line). So it checks, and looks the cell up when the camera's
+doesn't hold the eye.
 
 ## The clip: bounds per column
 
@@ -471,27 +619,33 @@ src/tools/refcmp.py OLD NEW                 # two runs against each other
 ```
 
 The poses are every cell's centroid at 64 angles, 20,000 at random, and the
-eye 1 and 6 units off every vertex; about a minute a map. `main`'s
-baseline:
+eye 1 and 6 units off every vertex; about a minute a map. The baselines,
+`main`'s engine against the reference on the new map format
+(`build/refcmp/base_0.bin` and `base_9.bin`):
 
 | map | frames | pixels wrong |
 |---|---|---|
 | 0 | 22,768 | 1,892,314 |
-| 9 | 22,032 | 8,152,722 |
+| 9 | 22,032 | 8,360,458 |
 
 Map 9's is high because of the R1 shelf, where the eye is above its
-ceiling. The reference walks today's per-cell edges and twins, so it moves
-to the new map format with phase 2.
+ceiling. The new format moved it from 8,152,722, all in 346 frames with the
+eye in R1: from above a ceiling the reference sees faces from behind, and
+it now colours them with the edge's one colour. With the old per-side
+colours put back, it matches `main`'s records exactly.
+
+A ray exactly through a vertex ties two edges, so the reference breaks
+exact ties by the lower edge number, whatever order the ring is stored in.
 
 ## The phases
 
 0. **The branch and the comparer.** Done.
 1. **Tables.** Done: built as the 6502 will, with tests against floating
    point, and `main`'s renderer unchanged.
-2. **Map and collision.** Edges as their own array, shared by both cells
-   (vertices, the angle byte, each side's cell and colour); cells as rings
-   of edge indices with a direction bit; the builder, the checks and
-   `camera.c` on the new angles. The comparer follows.
+2. **Map and collision.** Done: edges holding angle, colour and length,
+   rings of sides stored backwards, the builder and checks, the comparer's
+   reference; collision on dot products, the cell by angles, and the
+   vertex cache.
 3. **Capture and lines.** Each vertex's polar form, column and log depth,
    with the vertex cache. The walk; `top` and `bot`; the ceiling strip; lines
    clamped and toggled into T as they're made, with the fast path; closing;

@@ -1,6 +1,7 @@
 // camera.h - camera state, movement and sliding collision (spec section 10).
 // The camera is a circle of radius PT_CAM_RADIUS at an unsigned u16.8 world
-// position, always assigned to the cell containing its centre.
+// position, always assigned to the cell containing its centre, as the
+// angles of the cells' vertices from there tell it.
 
 #ifndef PT_CAMERA_H_
 #define PT_CAMERA_H_
@@ -8,6 +9,7 @@
 #include <stdint.h>
 
 #include "map.h"
+#include "vcache.h"
 
 #define PT_CAM_RADIUS 40
 #define PT_CAM_MOVE_SPEED 8    // whole units per tick
@@ -33,6 +35,7 @@ typedef struct pt_camera {
     uint32_t y;       // u16.8
     uint8_t angle;    // 256ths of a turn; 0 faces world +x
     uint8_t cell;
+    pt_vcache vc;     // the vertices' polar forms from where it stands
 } pt_camera;
 
 // Place the camera; the position must lie inside some cell.

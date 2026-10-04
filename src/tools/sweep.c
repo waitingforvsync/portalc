@@ -34,13 +34,13 @@ int main(int argc, char **argv)
         const pt_cell *c = &map.cells[cell];
         uint32_t sx = 0;
         uint32_t sy = 0;
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            sx += map.verts[map.edges[c->first_edge + k].v0].x;
-            sy += map.verts[map.edges[c->first_edge + k].v0].y;
+        for (uint8_t k = 0; k < (c->num + 1); k++) {
+            sx += map.verts[map.halves[c->first + k].v0].x;
+            sy += map.verts[map.halves[c->first + k].v0].y;
         }
         for (uint32_t a = 0; a < 256; a += 8) {
-            pt_render_frame(&render, (uint16_t)(sx / c->num_edges),
-                            (uint16_t)(sy / c->num_edges), (uint8_t)a, cell);
+            pt_render_frame(&render, (uint16_t)(sx / (c->num + 1)),
+                            (uint16_t)(sy / (c->num + 1)), (uint8_t)a, cell);
             fwrite(render.fb, 1, PT_FB_BYTES, fp);
         }
     }

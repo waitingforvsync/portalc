@@ -10,6 +10,7 @@ add_library(portal STATIC
     palette.c
     render.c
     sprite.c
+    vcache.c
     arith.h
     camera.h
     map.h
@@ -17,6 +18,7 @@ add_library(portal STATIC
     palette.h
     render.h
     sprite.h
+    vcache.h
 )
 
 target_link_libraries(portal PUBLIC richc)

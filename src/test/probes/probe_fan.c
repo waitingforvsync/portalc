@@ -1,10 +1,12 @@
 // probe_fan.c - ground truth for portal transitions. Drive the camera across
 // every portal-only fan vertex (one the centre can legally pass over) from
 // all 256 directions, and after every tick check its cell assignment against
-// exact point location. The camera may disagree with pt_map_find_cell only
-// when the centre sits exactly on a boundary line - a benign tie, either
-// side is legitimate - so the exact penetration into a wrongly-claimed
-// cell's interior must always be zero.
+// exact point location. The camera's cell comes from the angles of the
+// vertices as seen from it, so near a portal's line it may disagree: but
+// only by as far as those angles' error reaches. A point d from a side's
+// line sees its two vertices d (1/r0 + 1/r1) radians off a half turn apart,
+// r0 and r1 its distances from them, and each angle is within 1.82 steps
+// of the truth, so it may lie up to 3.64 steps' worth beyond the side.
 
 #include <math.h>
 
@@ -29,12 +31,12 @@ RC_TEST(probe, fan_crossings)
         bool used = false;
         for (uint8_t c = 1; c < m->num_cells; c++) {
             const pt_cell *cc = &m->cells[c];
-            for (uint8_t k = 0; k < cc->num_edges; k++) {
-                uint8_t e = (uint8_t)(cc->first_edge + k);
-                uint8_t v1 = m->edges[pt_map_ring_next(cc, e)].v0;
-                if (m->edges[e].v0 == v || v1 == v) {
+            for (uint8_t k = 0; k < (cc->num + 1); k++) {
+                uint8_t e = (uint8_t)(cc->first + k);
+                uint8_t v1 = m->halves[pt_map_half_next(cc, e)].v0;
+                if (m->halves[e].v0 == v || v1 == v) {
                     used = true;
-                    if (m->edges[e].adj == 0)
+                    if (m->halves[e].adj == 0)
                         solid = true;
                 }
             }
@@ -63,18 +65,23 @@ RC_TEST(probe, fan_crossings)
                                                 (uint16_t)(cam.y >> 8));
                 if (want == 0 || want == cam.cell)
                     continue;
-                // a mismatch: the centre must lie exactly on the claimed
-                // cell's boundary, never strictly inside another cell
+                // a mismatch: the centre may lie outside the claimed cell
+                // only within the angles' reach of the side it's beyond
                 const pt_cell *cc = &m->cells[cam.cell];
-                int32_t minside = INT32_MAX;
-                for (uint8_t k = 0; k < cc->num_edges; k++) {
-                    int32_t side = pt_map_edge_side(m, cc, (uint8_t)(cc->first_edge + k),
-                                                    (uint16_t)(cam.x >> 8),
-                                                    (uint16_t)(cam.y >> 8));
-                    if (side < minside)
-                        minside = side;
+                double px = (double)(cam.x >> 8);
+                double py = (double)(cam.y >> 8);
+                for (uint8_t k = 0; k <= cc->num; k++) {
+                    pt_vertex a = m->verts[pt_map_side(m, cc, k)->v];
+                    pt_vertex b = m->verts[pt_map_side_v1(m, cc, k)];
+                    double len = hypot((double)b.x - a.x, (double)b.y - a.y);
+                    double d = pt_map_edge_side(m, cc, k, (uint16_t)px, (uint16_t)py) / len;
+                    if (d >= 0)
+                        continue;
+                    double r0 = hypot(a.x - px, a.y - py);
+                    double r1 = hypot(b.x - px, b.y - py);
+                    double reach = 3.64 * (2 * 3.14159265358979323846 / 1024) * r0 * r1 / (r0 + r1);
+                    RC_CHECK(-d, <=, reach);
                 }
-                RC_CHECK(minside, ==, (int32_t)0);
             }
         }
     }

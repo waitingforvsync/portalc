@@ -97,7 +97,7 @@ enum {
 // contiguous seam extends its piece. The walk recurses on the index alone.
 typedef struct pt_visit {
     uint8_t cell;         // back-reference, to clear the cell's index at frame end
-    uint8_t k;            // the current edge, as a ring index 0..num_edges-1
+    uint8_t k;            // the current edge, as a ring index 0..num
     uint8_t x;            // where the next edge's span starts: the end of the
                           // last one (the portal's left column to begin with)
     uint8_t xr;           // the portal's right column; 0 until first walked

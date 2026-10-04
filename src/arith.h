@@ -31,11 +31,6 @@ typedef struct pt_xy {
 // (pt_mulu8_neg).
 pt_xy pt_rot(int16_t x, int16_t y, uint8_t angle);
 
-// The world direction of an angle scaled by a whole-unit magnitude:
-// (mag cos, mag sin) in s8.8, one exact 8-bit product per component (the
-// camera's facing step).
-pt_xy pt_dir8(uint8_t mag, uint8_t angle);
-
 // The angle's ray basis for exact frustum-side tests: k1 = C - S and
 // k2 = C + S, where C and S are the angle's cosine and sine at scale 256 --
 // exactly the signed values pt_rot's terms round. The ray sums of a vertex
@@ -71,6 +66,13 @@ uint16_t pt_log2(uint16_t x);
 // 2^(l / 256), rounded, saturating at 0xFFFF: pt_log2's inverse, within ~0.2%.
 uint16_t pt_exp2(uint16_t l);
 
+// The quadrant of a direction other than (0, 0), from its signs: 0 for +x
+// +y, 1 for -x +y, 2 for -x -y, 3 for +x -y. A direction exactly along an
+// axis starts its quadrant (+x 0, +y 1, -x 2, -y 3), so a direction and its
+// reverse always differ by exactly 2, and an edge's angle byte serves both
+// its sides.
+uint8_t pt_quadrant(int16_t dx, int16_t dy);
+
 // A world offset in polar form.
 typedef struct pt_polar {
     uint16_t angle;    // the world angle (the step it lies in)
@@ -91,6 +93,23 @@ uint8_t pt_lsec(int8_t v);
 // The screen column of view angle v's middle, 0..128: the first column whose
 // centre lies right of it.
 uint8_t pt_view_col(int8_t v);
+
+// ---- directions ----
+// Multiplies by the sine and cosine of a world angle in 1024ths, each
+// product rounded to nearest, from the quarter table (its 1.0 compared,
+// never looked up). An edge's frame is two dot products: along its
+// direction a, and across it at a + 256, towards its cell's inside.
+
+// v sin a and v cos a, in v's own fixed point.
+int16_t pt_mul_sin(int16_t v, uint16_t a);
+int16_t pt_mul_cos(int16_t v, uint16_t a);
+
+// The component of (ux, uy) along direction a: ux cos a + uy sin a.
+int16_t pt_dot_dir(int16_t ux, int16_t uy, uint16_t a);
+
+// mag along direction a: (mag cos a, mag sin a). A whole number of units
+// shifted up 8 comes back as an exact s.8 step.
+pt_xy pt_dir(int16_t mag, uint16_t a);
 
 // ---- unsigned multiplies ----
 

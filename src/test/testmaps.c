@@ -9,13 +9,13 @@ bool pt_testmaps_add_sprites(pt_map *m)
         const pt_cell *c = &m->cells[cells[i]];
         uint32_t sx = 0;
         uint32_t sy = 0;
-        for (uint8_t k = 0; k < c->num_edges; k++) {
-            sx += m->verts[m->edges[c->first_edge + k].v0].x;
-            sy += m->verts[m->edges[c->first_edge + k].v0].y;
+        for (uint8_t k = 0; k < (c->num + 1); k++) {
+            sx += m->verts[m->halves[c->first + k].v0].x;
+            sy += m->verts[m->halves[c->first + k].v0].y;
         }
         m->sprites[m->num_sprites] = (pt_sprite) {
-            .x = (uint16_t)(sx / c->num_edges),
-            .y = (uint16_t)(sy / c->num_edges),
+            .x = (uint16_t)(sx / (c->num + 1)),
+            .y = (uint16_t)(sy / (c->num + 1)),
             .size = 64,
             .art = 0,
         };

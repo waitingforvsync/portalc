@@ -801,13 +801,13 @@ static pt_ep clip_right(uint16_t x0, uint16_t b0, pt_vv v1)
 // The ring successor of ring index k.
 static uint8_t ring_k_next(const pt_cell *c, uint8_t k)
 {
-    return (uint8_t)(k + 1 == c->num_edges ? 0 : k + 1);
+    return (uint8_t)(k + 1 == (c->num + 1) ? 0 : k + 1);
 }
 
 // The start vertex of the cell's edge at ring index k.
 static pt_vertex ring_vertex(const pt_map *m, const pt_cell *c, uint8_t k)
 {
-    return m->verts[m->edges[c->first_edge + k].v0];
+    return m->verts[m->halves[c->first + k].v0];
 }
 
 // ---- sprite instances (spec 9.2 - 9.4) ----
@@ -1004,11 +1004,11 @@ static uint8_t enter(pt_render *r, uint8_t vi, uint8_t ei, uint8_t xl, uint8_t x
     const pt_cell *c = &m->cells[vs->cell];
     bool first = vs->xr == 0;
     if (first) {
-        vs->k = ring_k_next(c, (uint8_t)(pt_map_twin(m, ei) - c->first_edge));
+        vs->k = ring_k_next(c, (uint8_t)(pt_map_twin(m, ei) - c->first));
         vs->v0 = pv;
         vs->v1 = transform(r, ring_vertex(m, c, ring_k_next(c, vs->k)));
     }
-    uint8_t guard = c->num_edges;
+    uint8_t guard = (c->num + 1);
     while (!col_gt(vs->v1, xl)) {
         if (guard-- == 0) {
             RC_ASSERT(0);
@@ -1100,8 +1100,8 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     const pt_map *m = r->map;
     pt_visit *vs = &r->visits[vi];
     const pt_cell *ca = &m->cells[vs->cell];
-    uint8_t ei = (uint8_t)(ca->first_edge + vs->k);
-    const pt_edge *e = &m->edges[ei];
+    uint8_t ei = (uint8_t)(ca->first + vs->k);
+    const pt_half *e = &m->halves[ei];
     pt_vv v0 = vs->v0;
     pt_vv v1 = vs->v1;
 
@@ -1291,15 +1291,15 @@ static uint8_t root_exact(const pt_render *r, const pt_cell *c)
     int32_t prev = 0;
     uint8_t zero = 0xFF;
     uint8_t root = 0xFF;
-    for (uint8_t k = 0; k <= c->num_edges; k++) {
-        uint8_t n = (uint8_t)(c->first_edge + (k == c->num_edges ? 0 : k));
-        int16_t rx = (int16_t)(m->verts[m->edges[n].v0].x - r->cam_x);
-        int16_t ry = (int16_t)(m->verts[m->edges[n].v0].y - r->cam_y);
+    for (uint8_t k = 0; k <= (c->num + 1); k++) {
+        uint8_t n = (uint8_t)(c->first + (k == (c->num + 1) ? 0 : k));
+        int16_t rx = (int16_t)(m->verts[m->halves[n].v0].x - r->cam_x);
+        int16_t ry = (int16_t)(m->verts[m->halves[n].v0].y - r->cam_y);
         int32_t a = (int32_t)rx * k1 + (int32_t)ry * k2;
         if (a == 0)
             zero = n;
         if (k > 0 && prev < 0 && a >= 0)
-            root = (uint8_t)(c->first_edge + k - 1);
+            root = (uint8_t)(c->first + k - 1);
         prev = a;
     }
     if (root != 0xFF)
@@ -1319,20 +1319,20 @@ static uint8_t root_visit(pt_render *r, uint8_t roott, uint8_t rootb)
     const pt_map *m = r->map;
     const pt_cell *c = &m->cells[r->cam_cell];
 
-    uint8_t n = c->first_edge;
-    pt_vv v = transform(r, m->verts[m->edges[n].v0]);
+    uint8_t n = c->first;
+    pt_vv v = transform(r, m->verts[m->halves[n].v0]);
     pt_vv w;    // the root edge's end vertex, handed to the frame
-    uint8_t guard = c->num_edges;
+    uint8_t guard = (c->num + 1);
     while (!(v.flags & (PT_VF_ANEG | PT_VF_AZERO))) {    // a > 0
         if (guard-- == 0)
             goto exact;
-        n = pt_map_ring_next(c, n);
-        v = transform(r, m->verts[m->edges[n].v0]);
+        n = pt_map_half_next(c, n);
+        v = transform(r, m->verts[m->halves[n].v0]);
     }
-    guard = c->num_edges;
+    guard = (c->num + 1);
     for (;;) {
-        uint8_t nn = pt_map_ring_next(c, n);
-        w = transform(r, m->verts[m->edges[nn].v0]);
+        uint8_t nn = pt_map_half_next(c, n);
+        w = transform(r, m->verts[m->halves[nn].v0]);
         if (!(w.flags & (PT_VF_ANEG | PT_VF_AZERO)))    // a > 0
             goto rooted;
         n = nn;
@@ -1342,15 +1342,15 @@ static uint8_t root_visit(pt_render *r, uint8_t roott, uint8_t rootb)
     }
 exact:
     n = root_exact(r, c);
-    v = transform(r, m->verts[m->edges[n].v0]);
-    w = transform(r, m->verts[m->edges[pt_map_ring_next(c, n)].v0]);
+    v = transform(r, m->verts[m->halves[n].v0]);
+    w = transform(r, m->verts[m->halves[pt_map_half_next(c, n)].v0]);
 rooted:;
 
     // the camera's cell is never revisited (every ray starts in it), so its
     // visit is simply begun here, already started on the root edge
     uint8_t vi = visit_of(r, r->cam_cell);
     pt_visit *vs = &r->visits[vi];
-    vs->k = (uint8_t)(n - c->first_edge);
+    vs->k = (uint8_t)(n - c->first);
     vs->x = 0;
     vs->xr = 128;
     vs->tcur = roott;
@@ -1402,7 +1402,7 @@ static void walk(pt_render *r, uint8_t vi, uint8_t depth)
         pt_visit *vs = &r->visits[vi];
         const pt_cell *c = &m->cells[vs->cell];
         seg_record(r, vi);
-        uint8_t steps = (uint8_t)(c->num_edges + 1);
+        uint8_t steps = (uint8_t)((c->num + 1) + 1);
         for (;;) {
             if (steps-- == 0)
                 goto done;
@@ -1971,6 +1971,16 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
 {
     const pt_map *m = r->map;
     RC_ASSERT(cell >= 1 && cell < m->num_cells);
+
+    // until the new capture replaces this one (phase 3): the camera's cell
+    // comes from the angles of its vertices, which can put the eye a unit
+    // or so past the cell's line, while this walk wants the cell that holds
+    // the eye exactly
+    if (!pt_map_cell_contains(m, cell, cam_x, cam_y)) {
+        uint8_t exact = pt_map_find_cell(m, cam_x, cam_y);
+        if (exact != 0)
+            cell = exact;
+    }
 
     r->cam_x = cam_x;
     r->cam_y = cam_y;

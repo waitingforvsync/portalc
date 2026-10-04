@@ -1764,15 +1764,153 @@ just inside the door.
 The pit comes out thin and low on the screen. With the eye 80 up, any
 floor nearer than 160 drops off the bottom, so it had to sit well back
 from the door. In my geometry line B is hidden behind A all the way
-across, not just mostly. The walk does the rest as drawn: 14 and 20 are
-visited twice, and on the second visit B, G and H come out of the visit
-cache and are extended, not projected again.
+across, not just mostly. The walk does the rest as drawn (below): 14 and
+20 are visited twice, and on the second visit B, G and H come out of the
+visit cache and are extended, not projected again.
 
 The new map broke a test before any of the new code ran. With the eye
 1.4 units from `ql`, where four cells meet, rounding at depth 2 puts `ql`
 at column 64 instead of about 51, and 10A gets entered again from inside
 its own walk. The old renderer's `vs->xr <= xl` assert went off in
 `probe.walk_from_reachable_states`.
+
+### The walkthrough
+
+I did a dry run of this on paper before writing any of the code. Here it
+is again as the code does it now, traced from the `end_room_pit` pose with
+a printf'd copy of render.c: the real columns, and pieces by pool number.
+
+![Room 3 from above](docs/pit-plan.svg)
+
+The room has one ceiling height throughout, so every ceiling side is level
+and makes no line. The top bound is the root's, #1, all the way down: this
+really is floors only.
+
+The lines, by edge:
+
+```
+  A   ql-qq   10A to 14, a step down
+  B   ql-qp   14 to 20, a step down
+  D   qq-qs   10A to 12, a step down
+  E   qq-qp   12 to 14, a step down
+  F           the part of D right of where E comes out
+  G   ql-qt   20 to 10D, a step up: the riser's top...
+  H           ...and its bottom
+  J   qt-qp   20 to 10C, the riser's top...
+  K           ...and its bottom
+  L   qp-qr   12 to 10C, the riser's top...
+  M           ...and its bottom
+  N   qs-qr   10B to 12, a step down
+  W   rc-kc   10D's back wall
+```
+
+The letters are the ones from my dry run. There's no C, which was the part
+of A right of where B came out: in the room as built, B never does.
+
+![The pit on the screen](docs/pit-screen.svg)
+
+The walk, an edge or a visit to a line:
+
+```
+10A                                   the root
+  rb-kd   wall                        [0,6)
+  kd-ql   soft                        [6,45)
+    10D                               its walls; W runs on to 64
+  ql-qq   A visible                   [45,62)
+    14
+      ql-qp   B hidden under A
+        20
+          ql-qt   H hidden, G visible
+            10D again                 W grows
+  qq-qs   D visible                   [62,85)
+    12
+      qq-qp   E hidden to 68, then visible        [62,77)
+        14 again
+          ql-qp   B hidden, visible 65 to 70, hidden
+            20 again
+              ql-qt   H hidden, G visible         [62,64)
+                10D third             W ends
+              qt-qp   K hidden, J visible         [64,77)
+                10C                   its back wall
+      qp-qr   M and L visible                     [77,85)
+        10C again                     back wall grows
+  qs-ka   soft                        [85,128)
+    10B
+      qs-qr   N visible                           [85,93)
+        12 again
+          qp-qr   M visible to 91, L visible
+            10C third                 back wall ends
+      qr-kb   soft                                [93,112)
+        10C fourth                    on to the north-east wall
+      kb-ra   wall                                [112,128)
+```
+
+**Down through A.** A is visible all the way, so the fast path takes it
+whole: #9, 14's bottom bound. In 14, B is hidden under A over every one of
+14's columns. So A takes B's colour with no split at all, and 20's bottom
+is A' (#10), A's twin. B keeps a hidden piece, #11.
+
+A and B both start at 45, the clip's first column, so neither row there
+costs a multiply.
+
+In 20, the riser up to 10D makes H and G. H forms no bound, so it goes
+first. It's under A' all the way, so its colour goes into A', and it keeps
+a hidden piece, #12, from 52: left of that it's below the screen. G is
+visible: #13, 10D's bottom.
+
+10D's first visit, through the soft edge, stopped on W, which runs on to
+64. So this visit picks W up where that one left it, and its two lines grow
+from their pieces, #7 and #8. Nothing is projected.
+
+**Down through D.** D goes in whole too: #14, 12's bottom. In 12, E is
+hidden under D as far as 68, so D splits there: D takes E's colour over
+[62,68), and F (#15) keeps 10A ^ 12 out to 85. 14's bottom is D' -> E:
+D's twin (#16) to 68, then E's visible piece, #18.
+
+14 picks up its edge to 20 again, and B comes out of the visit cache. Its
+hidden piece #11 ends at 62, just where this visit starts, so it grows.
+Against D' -> E, B goes:
+
+```
+  [62,65)  hidden under D'   D' splits at 65, takes B's colour; twin #20
+  [65,70)  visible           #21, the only bit of B anyone sees
+  [70,77)  hidden under E    E splits at 70, takes B's colour; twin #23
+```
+
+So 20's bottom this time is D'' -> B -> E'. D'' (#20) is a twin of D',
+itself a twin of D, and all three sit on D's rows. Twins all the way down.
+
+20 picks up the riser to 10D, which ends at 64. H grows from #12, and its
+colour goes into D'', split at 64. G grows from #13, and 10D's third visit
+takes W to its end. Then the riser to 10C: K is hidden under the last
+column of D'', then B, then E'. Its colour goes into all three with no
+splits, as their ends are its runs' ends. J is visible: #27, 10C's bottom.
+10C's first visit projects its back wall.
+
+Back in 12, both lines of the riser to 10C are visible, M (#30) and L
+(#31), and 10C's second visit grows its back wall.
+
+**Round through 10B.** 10A's last edge is the soft one into 10B, whose edge
+to 12 makes N, #32. That's 12's bottom on its second visit, and 12 picks up
+its riser to 10C. M grows from #30 as far as 91, then hides under N, which
+splits there to take M's colour. L grows from #31, and 10C's third visit
+takes its back wall to its end, 93. The fourth, through 10B's soft edge,
+moves on to the north-east wall.
+
+**The tally.** 15 visits to 7 cells: 10C has four, 10D three, and 12, 14
+and 20 two each. 23 lines are projected and 13 come from the visit cache.
+29 of the 36 clips take the fast path. The 38 pieces:
+
+```
+   2  the root's bounds
+  21  visible pieces of lines
+   6  hidden pieces, colour 0
+   5  splits, every one to recolour
+   4  twins
+```
+
+Two of the hidden pieces, B's first and H's, are read back by a later
+visit. The other four (E's, B's second, K's and M's) never are.
 
 ### What went
 

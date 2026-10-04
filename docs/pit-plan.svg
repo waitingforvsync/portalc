@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 902" width="850" height="902" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
+<rect width="850" height="902" fill="#ffffff"/>
+<clipPath id="room"><polygon points="343.0,808.0 191.0,542.0 55.0,304.0 279.0,176.0 503.0,48.0 615.0,244.0 791.0,552.0 707.0,600.0 616.0,652.0 518.0,708.0"/></clipPath>
+<polygon points="343.0,808.0 191.0,542.0 342.0,457.0 429.0,455.0 516.0,453.0 707.0,600.0 616.0,652.0 518.0,708.0" fill="#f3efe6" stroke="none"/>
+<polygon points="516.0,453.0 527.0,291.0 615.0,244.0 791.0,552.0 707.0,600.0" fill="#f3efe6" stroke="none"/>
+<polygon points="363.0,313.0 279.0,176.0 503.0,48.0 615.0,244.0 527.0,291.0 445.0,302.0" fill="#f3efe6" stroke="none"/>
+<polygon points="191.0,542.0 55.0,304.0 279.0,176.0 363.0,313.0 342.0,457.0" fill="#f3efe6" stroke="none"/>
+<polygon points="342.0,457.0 363.0,313.0 445.0,302.0" fill="#a8987a" stroke="none"/>
+<polygon points="342.0,457.0 445.0,302.0 429.0,455.0" fill="#cdbfa3" stroke="none"/>
+<polygon points="429.0,455.0 445.0,302.0 527.0,291.0 516.0,453.0" fill="#e2d9c6" stroke="none"/>
+<g clip-path="url(#room)"><polygon points="557.0,663.0 -792.3,289.6 -271.1,-798.7 930.4,-686.3" fill="#2563eb" fill-opacity="0.07"/>
+<line x1="557.0" y1="663.0" x2="-792.3" y2="289.6" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="6 4"/>
+<line x1="557.0" y1="663.0" x2="930.4" y2="-686.3" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="6 4"/>
+</g>
+<line x1="343.0" y1="808.0" x2="191.0" y2="542.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="191.0" y1="542.0" x2="55.0" y2="304.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="55.0" y1="304.0" x2="279.0" y2="176.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="279.0" y1="176.0" x2="503.0" y2="48.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="503.0" y1="48.0" x2="615.0" y2="244.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="615.0" y1="244.0" x2="791.0" y2="552.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="791.0" y1="552.0" x2="707.0" y2="600.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="707.0" y1="600.0" x2="616.0" y2="652.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="518.0" y1="708.0" x2="343.0" y2="808.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="191.0" y1="542.0" x2="342.0" y2="457.0" stroke="#8a8478" stroke-width="1.2" stroke-dasharray="3 4"/>
+<line x1="516.0" y1="453.0" x2="707.0" y2="600.0" stroke="#8a8478" stroke-width="1.2" stroke-dasharray="3 4"/>
+<line x1="527.0" y1="291.0" x2="615.0" y2="244.0" stroke="#8a8478" stroke-width="1.2" stroke-dasharray="3 4"/>
+<line x1="363.0" y1="313.0" x2="279.0" y2="176.0" stroke="#8a8478" stroke-width="1.2" stroke-dasharray="3 4"/>
+<line x1="616.0" y1="652.0" x2="518.0" y2="708.0" stroke="#8a8478" stroke-width="1.2" stroke-dasharray="3 4"/>
+<line x1="342.0" y1="457.0" x2="429.0" y2="455.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="342.0" y1="457.0" x2="445.0" y2="302.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="429.0" y1="455.0" x2="516.0" y2="453.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="429.0" y1="455.0" x2="445.0" y2="302.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="342.0" y1="457.0" x2="363.0" y2="313.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="363.0" y1="313.0" x2="445.0" y2="302.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="445.0" y1="302.0" x2="527.0" y2="291.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="516.0" y1="453.0" x2="527.0" y2="291.0" stroke="#c2410c" stroke-width="2.4" stroke-linecap="round"/>
+<text x="381.5" y="477.0" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">A</text>
+<text x="407.5" y="388.5" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">B</text>
+<text x="480.5" y="475.0" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">D</text>
+<text x="451.0" y="387.5" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">E</text>
+<text x="326.5" y="386.0" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">G H</text>
+<text x="406.0" y="296.5" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">J K</text>
+<text x="492.0" y="285.5" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">L M</text>
+<text x="535.5" y="377.0" font-size="15" text-anchor="middle" fill="#c2410c" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">N</text>
+<text x="169.0" y="230.0" font-size="15" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">W</text>
+<text x="397.8" y="624.4" font-size="18" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">10A</text>
+<text x="681.2" y="452.0" font-size="18" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">10B</text>
+<text x="495.3" y="199.0" font-size="18" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">10C</text>
+<text x="196.0" y="318.4" font-size="18" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">10D</text>
+<text x="385.3" y="355.3" font-size="15" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">20</text>
+<text x="411.3" y="438.7" font-size="15" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">14</text>
+<text x="485.2" y="381.2" font-size="15" text-anchor="middle" fill="#1d1b18" font-weight="bold" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">12</text>
+<circle cx="342.0" cy="457.0" r="2.6" fill="#1d1b18"/>
+<text x="334.0" y="463.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">ql 45</text>
+<circle cx="363.0" cy="313.0" r="2.6" fill="#1d1b18"/>
+<text x="363.0" y="304.0" font-size="11" text-anchor="middle" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">qt 64</text>
+<circle cx="527.0" cy="291.0" r="2.6" fill="#1d1b18"/>
+<text x="536.0" y="295.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">qr 93</text>
+<circle cx="516.0" cy="453.0" r="2.6" fill="#1d1b18"/>
+<text x="516.0" y="470.0" font-size="11" text-anchor="middle" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">qs 85</text>
+<circle cx="445.0" cy="302.0" r="2.6" fill="#1d1b18"/>
+<text x="454.0" y="298.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">qp 77</text>
+<circle cx="429.0" cy="455.0" r="2.6" fill="#1d1b18"/>
+<text x="421.0" y="467.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">qq 62</text>
+<circle cx="707.0" cy="600.0" r="2.6" fill="#1d1b18"/>
+<text x="716.0" y="612.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">ka</text>
+<circle cx="615.0" cy="244.0" r="2.6" fill="#1d1b18"/>
+<text x="624.0" y="248.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">kb 112</text>
+<circle cx="279.0" cy="176.0" r="2.6" fill="#1d1b18"/>
+<text x="279.0" y="166.0" font-size="11" text-anchor="middle" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">kc 64</text>
+<circle cx="191.0" cy="542.0" r="2.6" fill="#1d1b18"/>
+<text x="183.0" y="536.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">kd 6</text>
+<circle cx="791.0" cy="552.0" r="2.6" fill="#1d1b18"/>
+<text x="799.0" y="566.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">ra</text>
+<circle cx="343.0" cy="808.0" r="2.6" fill="#1d1b18"/>
+<text x="335.0" y="820.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">rb</text>
+<circle cx="55.0" cy="304.0" r="2.6" fill="#1d1b18"/>
+<text x="47.0" y="298.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">rc 35</text>
+<circle cx="503.0" cy="48.0" r="2.6" fill="#1d1b18"/>
+<text x="511.0" y="42.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">rd 93</text>
+<circle cx="616.0" cy="652.0" r="2.6" fill="#1d1b18"/>
+<text x="625.0" y="664.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">en</text>
+<circle cx="518.0" cy="708.0" r="2.6" fill="#1d1b18"/>
+<text x="510.0" y="720.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">es</text>
+<line x1="557.0" y1="663.0" x2="522.5" y2="602.1" stroke="#2563eb" stroke-width="2"/>
+<circle cx="557.0" cy="663.0" r="5" fill="#2563eb"/>
+<text x="567.0" y="679.0" font-size="11" text-anchor="start" fill="#2563eb" font-weight="normal" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">eye</text>
+<text x="618.0" y="680.0" font-size="11" text-anchor="middle" fill="#8a8478" font-weight="normal" font-style="italic" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">door</text>
+<line x1="40" y1="880" x2="66" y2="880" stroke="#1d1b18" stroke-width="3"/>
+<text x="72.0" y="884.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal">wall</text>
+<line x1="120" y1="880" x2="146" y2="880" stroke="#8a8478" stroke-width="1.2" stroke-dasharray="3 4"/>
+<text x="152.0" y="884.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal">soft edge</text>
+<line x1="230" y1="880" x2="256" y2="880" stroke="#c2410c" stroke-width="2.4"/>
+<text x="262.0" y="884.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal">step, and its lines</text>
+<line x1="410" y1="880" x2="436" y2="880" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="442.0" y="884.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal">view cone, 90°</text>
+<text x="568.0" y="884.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal">ql 45: vertex, screen column</text>
+<text x="20.0" y="24.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal">Room 3 from above: x up the page, y right.</text>
+<text x="20.0" y="42.0" font-size="11" text-anchor="start" fill="#8a8478" font-weight="normal">The names are floor depths; the cells are</text>
+<text x="20.0" y="58.0" font-size="11" text-anchor="start" fill="#8a8478" font-weight="normal">10A 18, 10B 22, 10C 23, 10D 24, 20 25, 14 26, 12 27.</text>
+</svg>

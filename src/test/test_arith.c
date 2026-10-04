@@ -258,3 +258,97 @@ RC_TEST_STEP(arith, div_cols, fix)
             RC_CHECK(err >= -2 && err <= 2, ==, true);
         }
 }
+
+// ---- angles and logs ----
+
+#define PI 3.14159265358979323846
+
+// The packed tables, through their accessors, against the formulas their
+// bits were packed from: unpacking is the 6502's loop, so this checks the
+// packing and the loop together.
+RC_TEST_STEP(arith, packed_tables, fix)
+{
+    (void)fix;
+    for (uint32_t j = 0; j < 256; j++) {
+        uint16_t want = (uint16_t)lround(256.0 * sin(j * (PI / 512.0)));
+        RC_CHECK(pt_sinq((uint8_t)j), ==, want);
+        RC_CHECK(want == 256, ==, j >= PT_SIN_ONE);    // where the sine reaches 1
+    }
+    for (int32_t v = -128; v < 128; v++) {
+        double mid = v < 0 ? -v - 0.5 : v + 0.5;
+        RC_CHECK(pt_lsec((int8_t)v), ==, (uint8_t)lround(-256.0 * log2(cos(mid * (PI / 512.0)))));
+        RC_CHECK(pt_view_col((int8_t)v), ==,
+                 (uint8_t)lround(64.0 + 64.0 * tan((v + 0.5) * (PI / 512.0))));
+    }
+}
+
+RC_TEST_STEP(arith, log2_exhaustive, fix)
+{
+    (void)fix;
+    double worst = 0;
+    for (uint32_t x = 1; x < 65536; x++) {
+        double e = fabs(pt_log2((uint16_t)x) - 256.0 * log2(x));
+        worst = e > worst ? e : worst;
+    }
+    RC_CHECK(worst, <, 1.2);    // a 9-bit mantissa's rounding, and the table's
+    RC_CHECK(pt_log2(1), ==, 0);
+    RC_CHECK(pt_log2(256), ==, 8 * 256);
+    RC_CHECK(pt_log2(65535), ==, 16 * 256);    // rounds into the next octave
+}
+
+RC_TEST_STEP(arith, exp2, fix)
+{
+    (void)fix;
+    double worst = 0;
+    for (uint32_t l = 0; l < 4096; l++) {
+        double t = exp2(l / 256.0);
+        if (t >= 512)
+            worst = fmax(worst, fabs(pt_exp2((uint16_t)l) - t) / t);
+        RC_CHECK(fabs(pt_exp2((uint16_t)l) - t), <=, 0.5 + t * 0.0025);    // rounding to a whole number too
+    }
+    RC_CHECK(worst, <, 0.0025);
+    RC_CHECK(pt_exp2(0), ==, 1);
+    RC_CHECK(pt_exp2(8 * 256), ==, 256);
+    RC_CHECK(pt_exp2(16 * 256), ==, 0xFFFF);
+    // a round trip lands within its errors
+    for (uint32_t x = 512; x < 65536; x += 97)
+        RC_CHECK(fabs((double)pt_exp2(pt_log2((uint16_t)x)) - x), <=, x * 0.005);
+}
+
+// The angle's step middle against atan2, and the length's log against
+// hypot, over a grid out to the map's size and close round the eye.
+static void polar_check(int32_t lim, int32_t sx, int32_t sy, double max_angle, double max_lr)
+{
+    double wa = 0;
+    double wl = 0;
+    for (int32_t dx = -lim; dx <= lim; dx += sx)
+        for (int32_t dy = -lim; dy <= lim; dy += sy) {
+            if (dx == 0 && dy == 0)
+                continue;
+            pt_polar p = pt_polar_of((int16_t)dx, (int16_t)dy);
+            double t = atan2(dy, dx) * (512.0 / PI);
+            double e = fmod(p.angle + 0.5 - t + 1024.0 + 512.0, 1024.0) - 512.0;
+            wa = fmax(wa, fabs(e));
+            wl = fmax(wl, fabs(p.lr - 256.0 * log2(hypot(dx, dy))));
+        }
+    RC_CHECK(wa, <, max_angle);
+    RC_CHECK(wl, <, max_lr);
+}
+
+RC_TEST_STEP(arith, polar, fix)
+{
+    (void)fix;
+    polar_check(2000, 3, 7, 1.4, 2.5);
+    polar_check(40, 1, 1, 1.4, 2.5);
+
+    // the axes and diagonals: the quadrant's start, or the step below the
+    // next (atan_ floors, so a true 256 is the top of step 255)
+    RC_CHECK(pt_polar_of(100, 0).angle, ==, 0);
+    RC_CHECK(pt_polar_of(0, 100).angle, ==, 255);
+    RC_CHECK(pt_polar_of(-100, 0).angle, ==, 511);
+    RC_CHECK(pt_polar_of(0, -100).angle, ==, 768);
+    RC_CHECK(pt_polar_of(100, 100).angle, ==, 128);
+    RC_CHECK(pt_polar_of(-100, 100).angle, ==, 256 + 127);
+    RC_CHECK(pt_polar_of(-100, -100).angle, ==, 512 + 128);
+    RC_CHECK(pt_polar_of(100, -100).angle, ==, 768 + 127);
+}

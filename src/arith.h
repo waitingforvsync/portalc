@@ -1,6 +1,6 @@
-// arith.h - 6502-friendly fixed-point arithmetic: every multiply and divide in
-// the engine goes through these helpers, which use only the quarter-square,
-// reciprocal and sine tables plus shifts and adds (as the BBC build would).
+// arith.h - 6502-friendly fixed-point arithmetic: every multiply, divide,
+// angle and log in the engine goes through these helpers, which use only
+// tables plus shifts and adds (as the BBC build would).
 // Values that are only added or subtracted are ordinary two's complement;
 // a multiply or divide works on unsigned magnitudes, with the sign held in a
 // condition that picks between two paths (or a negated-product lookup).
@@ -44,6 +44,53 @@ pt_xy pt_dir8(uint8_t mag, uint8_t angle);
 // so their signs are exact. Used only by push_root's retry when the rounded
 // winding search fails, never in per-vertex code.
 void pt_ray_basis(uint8_t angle, int16_t *k1, int16_t *k2);
+
+// ---- angles and logs ----
+// A world angle is 1024ths of a turn from +x towards +y, in 10 bits: the top
+// two are the quadrant, which the offset's signs give, and the low byte the
+// angle within it, so an edge needs only the byte (its other side differs
+// by a half turn). A computed angle is the step the true one lies in: its
+// middle is angle + 0.5. The camera's 256ths are four steps each. A view
+// angle is a world angle less the camera's, and in view when it's in
+// [-128, 128): 45 degrees either side. Logs are 256 * log2, in 16 bits.
+
+// sin of j 256ths of a right angle at scale 256: 0..256. From PT_SIN_ONE on
+// the sine is 256, so a multiply by it compares the index first and skips
+// the table and the multiply; below that, only index 0 reads 0:
+//   CPX #PT_SIN_ONE : BCS one : LDA sinq,X : BEQ zero : ...
+// A cosine is sin(256 - a): 256 for a <= 256 - PT_SIN_ONE, and otherwise
+// never 0, read one entry on at index a EOR $FF:
+//   CPX #256 - PT_SIN_ONE + 1 : BCC one : TXA : EOR #$FF : TAY : LDA sinq + 1,Y
+#define PT_SIN_ONE 246
+uint16_t pt_sinq(uint8_t j);
+
+// 256 * log2(x) for x >= 1, within ~0.2% of x plus the table's half step:
+// the 8 bits under x's leading one, rounded, index a fraction table.
+uint16_t pt_log2(uint16_t x);
+
+// 2^(l / 256), rounded, saturating at 0xFFFF: pt_log2's inverse, within ~0.2%.
+uint16_t pt_exp2(uint16_t l);
+
+// A world offset in polar form.
+typedef struct pt_polar {
+    uint16_t angle;    // the world angle (the step it lies in)
+    uint16_t lr;       // 256 * log2 of the length
+} pt_polar;
+
+// The polar form of a world offset other than (0, 0), with no multiply or
+// divide: the minor component over the major, a byte from the difference
+// of their logs, indexes the angle and the length's factor over the major,
+// which the major's log takes. The angle is within 1.4 steps of the true
+// one's middle (0.38 on average), the length's log within 2.5 units (0.7%).
+pt_polar pt_polar_of(int16_t dx, int16_t dy);
+
+// -256 * log2 cos of view angle v at its step's middle: a length's log less
+// this is the depth's.
+uint8_t pt_lsec(int8_t v);
+
+// The screen column of view angle v's middle, 0..128: the first column whose
+// centre lies right of it.
+uint8_t pt_view_col(int8_t v);
 
 // ---- unsigned multiplies ----
 

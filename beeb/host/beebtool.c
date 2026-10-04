@@ -32,7 +32,8 @@
 //   beebtool record DIR               (the trace build) unit-replay records
 //                                     from the golden poses, to DIR/replay
 //   beebtool synthclose DIR SEED N    (the trace build) N synthetic close_columns
-//                                     records (rare splits), to DIR/replay
+//                                     records (rare splits) and N run_end ones (a
+//                                     later open run, closed), to DIR/replay
 //   beebtool replaycheck DIR          (the trace build) replay every record
 //                                     on the host: each must reproduce itself
 //   beebtool cost DIR                 (the trace build) the frame-cost model
@@ -1210,23 +1211,26 @@ static void s3(int op, const char *in, const char *pats_path, const char *out)
 // ---- check S4: the plotters (PLAN.md 5.7) ----
 //
 // A record is a pool as test/s4.6502 unpacks it - a piece count n, then
-// the pieces' x0, x1, y0, gradient low and high bytes, ce and co, n bytes
-// each - followed by two CRC-16s of the image plot() leaves in a zeroed
-// buffer: over its junk row above, the buffer and its junk row below (as
-// buffer A is checked), and without the junk row below (B's is the ROM).
+// the pieces' x0, x1, y0, yf, gradient low and high bytes, ce and co, n
+// bytes each - followed by two CRC-16s of the image plot() leaves in a
+// zeroed buffer: over its junk row above, the buffer and its junk row
+// below (as buffer A is checked), and without the junk row below (B's is
+// the ROM).
+
+#define S4_FIELDS 8
 
 static void s4_record(FILE *f)
 {
     uint8_t n = (uint8_t)(render_.pool_num - 1);
-    uint8_t rec[1 + 7 * 255];
+    uint8_t rec[1 + S4_FIELDS * 255];
     rec[0] = n;
     for (uint8_t i = 1; i <= n && i != 0; i++) {
         const pt_piece *p = &render_.pool[i];
-        uint8_t v[7] = {p->x0, p->x1, p->y0, (uint8_t)p->g, (uint8_t)(p->g >> 8), p->ce, p->co};
-        for (int k = 0; k < 7; k++)
+        uint8_t v[S4_FIELDS] = {p->x0, p->x1, p->y0, p->yf, (uint8_t)p->g, (uint8_t)(p->g >> 8), p->ce, p->co};
+        for (int k = 0; k < S4_FIELDS; k++)
             rec[1 + k * n + (i - 1)] = v[k];
     }
-    fwrite(rec, 1, 1 + 7u * n, f);
+    fwrite(rec, 1, 1 + (uint32_t)S4_FIELDS * n, f);
     memset(render_.fbmem, 0, sizeof(render_.fbmem));
     plot(&render_);
     uint16_t a = crc16(render_.fbmem, sizeof(render_.fbmem));
@@ -1285,6 +1289,7 @@ static void s4_random(uint32_t seed, uint32_t count, uint32_t pieces, const char
             p->x0 = x0;
             p->x1 = (uint8_t)(x0 + len);
             p->y0 = y0;
+            p->yf = (s >> 18) % 4 == 0 ? 128 : (uint8_t)(s >> 20);    // a whole row's middle, or anywhere
             p->g = pt_g_make((uint16_t)mag, y1 < y0);
             uint32_t c = rc_random_next(&rng);
             p->ce = (uint8_t)c;
@@ -1341,7 +1346,7 @@ static void s5t(int which, const char *poses, const char *out)
 // column rounding left of the near endpoint's, or the start row
 // overflowing u8.8 (host/uncovered.txt): random endpoint pairs, often one
 // near and one far, cover them. A record is make_line's arguments as
-// REPLAY.md's ARGS (18 bytes), then its LINE (7).
+// REPLAY.md's ARGS (18 bytes), then its LINE (9).
 
 // An endpoint: a depth (half the time within twice the clip depth d) and a
 // lateral position inside the frustum, its column projected as transform's.
@@ -1382,7 +1387,7 @@ static void s5make(uint32_t seed, uint32_t count, const char *out)
         pt_ep e1 = a.sx < b.sx ? b : a;
         pt_pattern col = {.e = (uint8_t)(r >> 16), .o = (uint8_t)(r >> 24)};
         pt_line L = make_line(e0, e1, h, col);
-        uint8_t rec[25];
+        uint8_t rec[27];
         put_ep(rec, &e0);
         put_ep(rec + 7, &e1);
         rec[14] = h.m;
@@ -1391,11 +1396,13 @@ static void s5make(uint32_t seed, uint32_t count, const char *out)
         rec[17] = col.o;
         rec[18] = L.x0;
         rec[19] = L.x1;
-        rec[20] = (uint8_t)(L.y >> 8);
-        rec[21] = (uint8_t)L.g;
-        rec[22] = (uint8_t)(L.g >> 8);
-        rec[23] = L.ce;
-        rec[24] = L.co;
+        rec[20] = (uint8_t)L.y;
+        rec[21] = (uint8_t)(L.y >> 8);
+        rec[22] = (uint8_t)L.g;
+        rec[23] = (uint8_t)(L.g >> 8);
+        rec[24] = L.below;
+        rec[25] = L.ce;
+        rec[26] = L.co;
         fwrite(rec, 1, sizeof rec, f);
         k++;
     }
@@ -1417,12 +1424,12 @@ static void s4_crc(const char *in, const char *out)
         render_.pool_num = (uint16_t)(np + 1);
         for (uint8_t k = 0; k < np; k++) {
             const uint8_t *v = &p[i + 1 + k];
-            render_.pool[k + 1] = (pt_piece) {.x0 = v[0], .x1 = v[np], .y0 = v[2 * np],
-                                              .g = (uint16_t)(v[3 * np] | v[4 * np] << 8),
-                                              .ce = v[5 * np], .co = v[6 * np]};
+            render_.pool[k + 1] = (pt_piece) {.x0 = v[0], .x1 = v[np], .y0 = v[2 * np], .yf = v[3 * np],
+                                              .g = (uint16_t)(v[4 * np] | v[5 * np] << 8),
+                                              .ce = v[6 * np], .co = v[7 * np]};
         }
         s4_record(f);
-        i += 1 + 7u * np;
+        i += 1 + (uint32_t)S4_FIELDS * np;
     }
     fclose(f);
     free(p);
@@ -1431,13 +1438,18 @@ static void s4_crc(const char *in, const char *out)
 // ---- checks S6 and S7: whole captures and frames (PLAN.md 5.7) ----
 //
 // Per pose, what test/s6.6502 forms: a CRC-16 of the capture - the pieces
-// 1.. as the Beeb's pages hold them (x0 x1 y0 g ce co next), the visits
-// 1.. (cell k xr, v0, v1, inst, active[4]), the instances 1.. (sprite cx0
-// cx1 seg seg_tail prev next, scale, left and top in 24 bits), the order's
-// head and tail, seg_num (a byte: 256 is 0) and the segments 1.., num_pend
-// - and two of the image, as S4's. The sprites on (S7) or off (S6). A
-// record is the pose (6), then those three CRCs, pool_last and num_visits:
-// 14 bytes.
+// 1.. as the Beeb's pages hold them (x0 x1 y0 yf g ce co next), the visits
+// 1.. (cell k x xr tcur bcur tmax bmin, v0, v1, inst, active[4]), the
+// instances 1.. (sprite cx0 cx1 seg seg_tail prev next, scale, left and top
+// in 24 bits), the order's head and tail, seg_num (a byte: 256 is 0) and
+// the segments 1.., num_pend - and two of the image, as S4's. A visit never
+// entered (xr 0) has no cursor, columns, vertices or instance yet (the
+// Beeb sets them when it enters it, the C zeroes them when it makes it):
+// those count as 0. The sprites on (S7) or off (S6). A record is the pose
+// (6), then those three CRCs, pool_last and num_visits: 14 bytes.
+
+#define S6_PIECE 9    // a piece's bytes in the state
+#define S6_VISIT 29   // a visit's
 
 // The capture as s6.6502 CRCs it, into out; its length.
 static size_t s6_state(uint8_t *out)
@@ -1445,27 +1457,29 @@ static size_t s6_state(uint8_t *out)
     size_t n = 0;
     for (uint32_t i = 1; i < render_.pool_num; i++) {
         const pt_piece *p = &render_.pool[i];
-        uint8_t v[8] = {p->x0, p->x1, p->y0, (uint8_t)p->g, (uint8_t)(p->g >> 8), p->ce, p->co, p->next};
-        memcpy(out + n, v, 8);
-        n += 8;
+        uint8_t v[S6_PIECE] = {p->x0, p->x1, p->y0, p->yf, (uint8_t)p->g, (uint8_t)(p->g >> 8), p->ce, p->co, p->next};
+        memcpy(out + n, v, S6_PIECE);
+        n += S6_PIECE;
     }
     for (uint32_t i = 1; i < render_.num_visits; i++) {
         const pt_visit *vs = &render_.visits[i];
+        bool entered = vs->xr != 0;
         const pt_vv *vv[2] = {&vs->v0, &vs->v1};
         out[n++] = vs->cell;
-        out[n++] = vs->k;
+        out[n++] = entered ? vs->k : 0;
+        out[n++] = entered ? vs->x : 0;
         out[n++] = vs->xr;
+        out[n++] = vs->tcur;
+        out[n++] = vs->bcur;
+        out[n++] = vs->tmax;
+        out[n++] = vs->bmin;
         for (int k = 0; k < 2; k++) {
-            out[n++] = (uint8_t)vv[k]->x;
-            out[n++] = (uint8_t)((uint16_t)vv[k]->x >> 8);
-            out[n++] = (uint8_t)vv[k]->y;
-            out[n++] = (uint8_t)((uint16_t)vv[k]->y >> 8);
-            out[n++] = vv[k]->sx;
-            out[n++] = vv[k]->flags;
-            out[n++] = vv[k]->rx.f;
-            out[n++] = vv[k]->rx.e;
+            uint8_t v[8] = {(uint8_t)vv[k]->x, (uint8_t)((uint16_t)vv[k]->x >> 8), (uint8_t)vv[k]->y,
+                            (uint8_t)((uint16_t)vv[k]->y >> 8), vv[k]->sx, vv[k]->flags, vv[k]->rx.f, vv[k]->rx.e};
+            for (int b = 0; b < 8; b++)
+                out[n++] = entered ? v[b] : 0;
         }
-        out[n++] = vs->inst;
+        out[n++] = entered ? vs->inst : 0;
         for (int s = 0; s < PT_NUM_SLOTS; s++)
             out[n++] = vs->active[s];
     }
@@ -1498,7 +1512,7 @@ static void s6(int which, const char *poses, const char *out, long dump, const c
     size_t n;
     uint8_t *p = read_file(poses, &n);
     FILE *f = open_out(NULL, out);
-    static uint8_t state[8 * 256 + 24 * PT_MAX_VISITS + 15 * PT_MAX_INSTS + PT_SEG_POOL + 8];
+    static uint8_t state[S6_PIECE * 256 + S6_VISIT * PT_MAX_VISITS + 15 * PT_MAX_INSTS + PT_SEG_POOL + 8];
     for (size_t i = 0; i + 6 <= n; i += 6) {
         memset(render_.fbmem, 0, sizeof(render_.fbmem));
         pt_render_frame(&render_, (uint16_t)(p[i] | p[i + 1] << 8),
@@ -1540,6 +1554,7 @@ int main(int argc, char **argv)
     }
     if (argc >= 5 && !strcmp(argv[1], "synthclose")) {
         synth_close(argv[2], (uint32_t)strtoul(argv[3], NULL, 0), (uint32_t)strtoul(argv[4], NULL, 0));
+        synth_run_end(argv[2], (uint32_t)strtoul(argv[3], NULL, 0), (uint32_t)strtoul(argv[4], NULL, 0));
         return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "replaycheck")) {

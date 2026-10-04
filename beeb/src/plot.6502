@@ -16,10 +16,11 @@
 \   steep (|g| >= 1)   a pixel pair a column, then the gradient's whole rows
 \                      and the fraction's carry
 \
-\ Rows round to nearest: a fraction starts at 128. A rising line keeps 255
-\ minus its fraction, so its borrows are carries, and it runs the falling
-\ line's code moving up instead of down. Between steps C is always clear:
-\ nothing re-clears it inside a loop.
+\ Rows round to nearest: a piece's fraction (p_yf) has the half in it
+\ already, and the clip compared exactly these rows. A rising line keeps
+\ 255 minus its fraction, so its borrows are carries, and it runs the
+\ falling line's code moving up instead of down. Between steps C is always
+\ clear: nothing re-clears it inside a loop.
 
 ZA_AUTO1 pool_last              ; the pool's last piece, 0 = empty (the C's pool_num - 1)
 
@@ -213,6 +214,7 @@ ENDMACRO
     LDA p_ghi,X : STA gh : BMI place    ; rising: always plotted
     LDA p_y0,X : CMP #64 : BCS next     ; on the bottom edge, not rising: all below
 .place
+    LDA p_yf,X : STA f          ; the row's fraction, as the clip had it
     LDA p_glo,X : STA gm
     LDA p_x1,X : STA x1
     LDA p_x0,X : STA x0
@@ -242,11 +244,10 @@ ENDMACRO
     BIT gh : BPL fshallow
     JMP sshallow                ; (out of branch range)
 .fshallow
-    LDA #128 : STA f
     SHALLOW 1
     JMP next
 .sshallow
-    LDA #127 : STA f            ; 255 - 128: the borrows as carries
+    LDA f : EOR #&FF : STA f    ; 255 - f: the borrows as carries
     SHALLOW 0
     JMP next
 
@@ -255,11 +256,10 @@ ENDMACRO
     LDA x1 : SEC : SBC x0 : STA n   ; columns
     CLC
     BIT gh : BMI ssteep
-    LDA #128 : STA f
     STEEP 1
     JMP next
 .ssteep
-    LDA #127 : STA f            ; 255 - 128: the borrows as carries
+    LDA f : EOR #&FF : STA f    ; 255 - f: the borrows as carries
     STEEP 0
     JMP next
 

@@ -20,9 +20,10 @@
 \   &7000        buffer B (4K)
 \   &8000        B's junk row below is the paged ROM: stores go nowhere
 \
-\ The junk rows are scratch for what the capture alone uses (the visits,
-\ the pending stack, the active pieces, the closed list, cell_visit): only
-\ the plotters write them, and by then the capture's done with it (D13).
+\ The junk rows are scratch for what the capture alone uses (most of the
+\ visits' tables, and the pool's p_next): only the plotters write them,
+\ and by then the capture's done with it (D13). The rest of it shares BSS
+\ with the sprite pass's own state, which only starts after the plot.
 \
 \ Both buffers start on a multiple of &800, so the CRTC's start address
 \ (the address DIV 8) has a low byte of 0: R13 stays 0 and a swap only

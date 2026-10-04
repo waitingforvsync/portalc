@@ -960,89 +960,166 @@ static void record(const char *dir)
 // ---- synthetic records ----
 //
 // close_columns splits a piece at l or at rr only for a pinch whose open
-// range starts or ends inside a bottom-chain piece, which no golden pose
-// reaches (host/uncovered.txt: rare). So: random bottom chains over the
-// whole screen, a piece order shuffled as the pool's real ones are, and a
-// column range landing inside pieces more often than not; each call
-// recorded as the recorder would, to DIR/replay/close_columns_synth.bin.
+// range starts or ends inside a bottom-chain piece, and run_end closes a
+// run after the fact only for a second open run in one line's clip: no
+// golden pose reaches either (host/uncovered.txt: rare). So: random bottom
+// chains over the whole screen, a piece order shuffled as the pool's real
+// ones are, and a column range landing inside pieces more often than not;
+// each call recorded as the recorder would, to DIR/replay/close_columns_synth.bin
+// and run_end_synth.bin.
+
+// A random bottom chain over the whole screen into r's pool: its head. cut
+// gets the pieces' bounds, 0 = cut[0] < ... < cut[n] = 128.
+static uint8_t synth_chain(rc_random *rng, pt_render *r, uint8_t cut[13], uint32_t *np)
+{
+    uint32_t n = 1 + rc_random_next(rng) % 12;
+    memset(cut, 0, 13);
+    cut[n] = 128;
+    for (uint32_t i = 1; i < n; i++)
+        cut[i] = (uint8_t)(1 + rc_random_next(rng) % 127);
+    for (uint32_t i = 1; i < n; i++)    // sorted, and distinct, or the chain is shorter
+        for (uint32_t j = i + 1; j < n; j++)
+            if (cut[j] < cut[i]) {
+                uint8_t t = cut[i];
+                cut[i] = cut[j];
+                cut[j] = t;
+            }
+    uint32_t m = 1;
+    for (uint32_t i = 1; i <= n; i++)
+        if (cut[i] != cut[m - 1])
+            cut[m++] = cut[i];
+    n = m - 1;
+    uint8_t order[12];
+    for (uint32_t i = 0; i < n; i++)
+        order[i] = (uint8_t)(i + 1);
+    for (uint32_t i = n; i > 1; i--) {
+        uint32_t j = rc_random_next(rng) % i;
+        uint8_t t = order[i - 1];
+        order[i - 1] = order[j];
+        order[j] = t;
+    }
+    r->pool_num = (uint16_t)(n + 1);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t a = rc_random_next(rng), c = rc_random_next(rng);
+        uint16_t mag = (a >> 8) % 4 == 0 ? 0 : (uint16_t)((a >> 10) % 0x800);
+        r->pool[order[i]] = (pt_piece) {.x0 = cut[i], .x1 = cut[i + 1], .y0 = (uint8_t)(a % 65),
+                                        .yf = (uint8_t)(c >> 16),
+                                        .g = pt_g_make(mag, (uint8_t)((a >> 9) & 1)),
+                                        .ce = (uint8_t)c, .co = (uint8_t)(c >> 8),
+                                        .next = i + 1 < n ? order[i + 1] : 0};
+    }
+    *np = n;
+    return order[0];
+}
+
+// A random column range [l, rr), each end inside a piece three times in
+// four, and a colour.
+static void synth_range(rc_random *rng, const uint8_t cut[13], uint32_t n, uint8_t *l, uint8_t *rr,
+                        pt_pattern *cbfb)
+{
+    uint32_t a = rc_random_next(rng);
+    *l = (uint8_t)(a % 128);
+    *rr = (uint8_t)(*l + 1 + (a >> 8) % (uint32_t)(128 - *l));
+    if ((a >> 16) % 4 == 0)
+        *l = cut[(a >> 18) % n];
+    if ((a >> 20) % 4 == 0) {
+        uint8_t e = cut[1 + (a >> 22) % n];
+        if (e > *l)
+            *rr = e;
+    }
+    *cbfb = (pt_pattern) {.e = (uint8_t)(a >> 24), .o = (uint8_t)~(a >> 24)};
+}
+
+static void synth_write(FILE *o, const tr_buf *b, const tr_buf *ab)
+{
+    uint32_t len = b->n + ab->n;
+    uint8_t lh[2] = {(uint8_t)len, (uint8_t)(len >> 8)};
+    fwrite(lh, 1, 2, o);
+    fwrite(b->p, 1, b->n, o);
+    fwrite(ab->p, 1, ab->n, o);
+}
+
+static FILE *synth_open(const char *dir, const char *name, uint32_t fn)
+{
+    char path[1024];
+    snprintf(path, sizeof path, "%s/replay/%s", dir, name);
+    FILE *o = open_out(NULL, path);
+    uint8_t hdr[8] = {'P', 'C', 'R', 'P', 1, (uint8_t)fn, 0, 0};
+    fwrite(hdr, 1, sizeof hdr, o);
+    return o;
+}
+
 static void synth_close(const char *dir, uint32_t seed, uint32_t count)
 {
     static pt_render r;
     static uint8_t before[TR_BUF], after[TR_BUF];
     load_map(0);
     rc_random rng = rc_random_make(seed);
-    char path[1024];
-    snprintf(path, sizeof path, "%s/replay/close_columns_synth.bin", dir);
-    FILE *o = open_out(NULL, path);
-    uint8_t hdr[8] = {'P', 'C', 'R', 'P', 1, TR_close_columns, 0, 0};
-    fwrite(hdr, 1, sizeof hdr, o);
+    FILE *o = synth_open(dir, "close_columns_synth.bin", TR_close_columns);
     for (uint32_t k = 0; k < count; k++) {
         pt_render_init(&r, &map_);
         r.num_visits = 1;
         r.num_insts = 1;
         r.seg_num = 1;
-        uint32_t n = 1 + rc_random_next(&rng) % 12;
-        uint8_t cut[13] = {0};    // the pieces' bounds, 0 = cut[0] < ... < cut[n] = 128
-        cut[n] = 128;
-        for (uint32_t i = 1; i < n; i++)
-            cut[i] = (uint8_t)(1 + rc_random_next(&rng) % 127);
-        for (uint32_t i = 1; i < n; i++)    // sorted, and distinct, or the chain is shorter
-            for (uint32_t j = i + 1; j < n; j++)
-                if (cut[j] < cut[i]) {
-                    uint8_t t = cut[i];
-                    cut[i] = cut[j];
-                    cut[j] = t;
-                }
-        uint32_t m = 1;
-        for (uint32_t i = 1; i <= n; i++)
-            if (cut[i] != cut[m - 1])
-                cut[m++] = cut[i];
-        n = m - 1;
-        uint8_t order[12];
-        for (uint32_t i = 0; i < n; i++)
-            order[i] = (uint8_t)(i + 1);
-        for (uint32_t i = n; i > 1; i--) {
-            uint32_t j = rc_random_next(&rng) % i;
-            uint8_t t = order[i - 1];
-            order[i - 1] = order[j];
-            order[j] = t;
-        }
-        r.pool_num = (uint16_t)(n + 1);
-        for (uint32_t i = 0; i < n; i++) {
-            uint32_t a = rc_random_next(&rng), c = rc_random_next(&rng);
-            uint16_t mag = (a >> 8) % 4 == 0 ? 0 : (uint16_t)((a >> 10) % 0x800);
-            r.pool[order[i]] = (pt_piece) {.x0 = cut[i], .x1 = cut[i + 1], .y0 = (uint8_t)(a % 65),
-                                           .yf = (uint8_t)(c >> 16),
-                                           .g = pt_g_make(mag, (uint8_t)((a >> 9) & 1)),
-                                           .ce = (uint8_t)c, .co = (uint8_t)(c >> 8),
-                                           .next = i + 1 < n ? order[i + 1] : 0};
-        }
-        // the range: each end inside a piece, three times in four
-        uint32_t a = rc_random_next(&rng);
-        uint8_t l = (uint8_t)(a % 128), rr = (uint8_t)(l + 1 + (a >> 8) % (uint32_t)(128 - l));
-        if ((a >> 16) % 4 == 0)
-            l = cut[(a >> 18) % n];
-        if ((a >> 20) % 4 == 0) {
-            uint8_t e = cut[1 + (a >> 22) % n];
-            if (e > l)
-                rr = e;
-        }
-        pt_pattern cbfb = {.e = (uint8_t)(a >> 24), .o = (uint8_t)~(a >> 24)};
+        uint8_t cut[13];
+        uint32_t n;
+        uint8_t head = synth_chain(&rng, &r, cut, &n);
+        uint8_t l, rr;
+        pt_pattern cbfb;
+        synth_range(&rng, cut, n, &l, &rr, &cbfb);
         tr_buf b = {.p = before, .cap = TR_BUF}, ab = {.p = after, .cap = TR_BUF};
         enc_cam(&b, &r, 0);
-        put8(&b, order[0]);
+        put8(&b, head);
         put8(&b, l);
         put8(&b, rr);
         put8(&b, cbfb.e);
         put8(&b, cbfb.o);
         enc_fs(&b, &r);
-        close_columns__impl(&r, order[0], l, rr, cbfb);
+        close_columns__impl(&r, head, l, rr, cbfb);
         enc_fs(&ab, &r);
-        uint32_t len = b.n + ab.n;
-        uint8_t lh[2] = {(uint8_t)len, (uint8_t)(len >> 8)};
-        fwrite(lh, 1, 2, o);
-        fwrite(before, 1, b.n, o);
-        fwrite(after, 1, ab.n, o);
+        synth_write(o, &b, &ab);
+    }
+    fclose(o);
+}
+
+// run_end on a bound line's open run [rl, rr) over a child's random bottom
+// chain: the first run (taken as the child), or a later one (closed), or
+// none, a quarter each of the first and the last.
+static void synth_run_end(const char *dir, uint32_t seed, uint32_t count)
+{
+    static pt_render r;
+    static uint8_t before[TR_BUF], after[TR_BUF];
+    load_map(0);
+    rc_random rng = rc_random_make(seed ^ 0x52554E44u);
+    FILE *o = synth_open(dir, "run_end_synth.bin", TR_run_end);
+    for (uint32_t k = 0; k < count; k++) {
+        pt_render_init(&r, &map_);
+        r.num_visits = 2;
+        r.num_insts = 1;
+        r.seg_num = 1;
+        uint8_t cut[13];
+        uint32_t n;
+        uint8_t head = synth_chain(&rng, &r, cut, &n);
+        r.visits[1] = (pt_visit) {.cell = 1, .bcur = head};
+        uint8_t l, rr;
+        pt_pattern cbfb;
+        synth_range(&rng, cut, n, &l, &rr, &cbfb);
+        pt_clip cx = {.shut = ST_ABOVE, .child = 1, .cbfb = cbfb, .rl = l, .rr = rr};
+        uint32_t a = rc_random_next(&rng);
+        if (a % 4 == 0) {
+            cx.rl = cx.rr = 0;    // no run
+        } else if (a % 4 != 1 && l > 0) {
+            cx.ol = (uint8_t)((a >> 8) % l);    // a first run before it: this one's closed
+            cx.orr = (uint8_t)(cx.ol + 1 + (a >> 16) % (uint32_t)(l - cx.ol));
+        }
+        tr_buf b = {.p = before, .cap = TR_BUF}, ab = {.p = after, .cap = TR_BUF};
+        enc_cam(&b, &r, 0);
+        enc_cx(&b, &cx);
+        enc_fs(&b, &r);
+        run_end__impl(&r, &cx);
+        enc_fs(&ab, &r);
+        enc_cx(&ab, &cx);
+        synth_write(o, &b, &ab);
     }
     fclose(o);
 }

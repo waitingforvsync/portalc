@@ -1631,3 +1631,178 @@ turn from one frame to the next goes 3, 4, 3, 3, 4.
   the C does with sprites off. Capture still projects the boulder and
   records its segments, a few hundred cycles. A `-D NOSPRITES` in
   `main.6502` and the Makefile, if wanted.
+
+## 2026-10-04 — The clip rework, on the Beeb
+
+The C's capture changed under the port (the root JOURNAL, 2026-10-03 and
+04): exact rows, twins, the run-by-run clip, the level skip, the portal
+in the visit. Now the 6502's has too, routine for routine.
+
+### What's there
+
+- **The visit holds the portal.** `vs_x`, `vs_xr`, `vs_tcur`, `vs_bcur`,
+  `vs_tmax` and `vs_bmin` join its tables, and the walk recurses on the
+  visit alone. A level pushes 3 bytes (the visit, its edges left, the
+  pending count), not 9.
+- **Pieces keep their exact row.** `p_yf`, the fraction plus a half, is
+  the pool's ninth page. A split never moves a row, and the plotter starts
+  its fraction there, not at 128.
+- **The clip** is render.c's: `own_piece`, `chain_add`, `merge` (twins
+  and all), `flip`, `hide`, `meet`, `clip_line`, `merge_above`,
+  `close_columns` and `run_end`, on one line cursor, `line_at`: the row in
+  hand, one step on, or a product.
+- **The walk** is `visit_of`, `enter` and `process_edge`, with the level
+  skip.
+
+Gone: `cut`, `emit`, `resolve_block`, `clip_edge_line`, `chain_extents`,
+`chain_append`, the closed list (`closed_add`, `next_open`, `cl_*`),
+`child_portal`, `visit_new`, `root_portal`, and the `po_*`, `ch_*` and
+`cb_*` globals. So are two overflows, the closed list's (3) and the
+visits' (5).
+
+What render.c hands from call to call lives in zero page, where the
+calls can share it: the range being placed and its row (`rg_*`), and the
+line's and the bound's rows where a run starts (`rn_*`). `hide` and
+`meet` move those on; `flip` and `merge` only read them. The bounds'
+cursors are `cx_p + st`, so a side's status indexes its own.
+
+### Memory
+
+Everything the capture throws away before the plot came to 1,128 bytes,
+against the junk rows' 768:
+
+- the visits, now 29 tables. Rich's call: sized by the map's cells, 28,
+  as a cell has a visit at most. So they can't overflow, and the check's
+  gone.
+- `p_next`, which only the capture reads now (the sprite pass reads
+  segments, not chains);
+- `cell_visit` and the pending stack.
+
+Rich's other idea: things used one after the other can share. The sprite
+pass's own state (its instances' column cursors, row edges and art, and
+the toggles, 519 bytes) only comes to life after the plot. The capture's
+is dead by then. So:
+
+| Where | What |
+|---|---|
+| A's junk rows | 18 of the visits' tables |
+| B's junk row above | `p_next` |
+| the spare | six pool pages, as before |
+| BSS, &5100 | `p_co`, `p_yf`, the segments and what the capture makes of the instances (873 bytes); then the overlap |
+| the overlap | the sprite pass's state, or until the plot the capture's spill: the other 11 visit tables, `cell_visit`, pending, `in_segt`, `in_prev` |
+
+Baron can't say union, so it's two sections over the same bytes: `Bss`'s
+tables and `Spill`'s. `BSS_BASE` stays at &5100, with 144 bytes to spare.
+
+Every field is a table of its own. The four active slots are four tables
+end to end, so a line's slot table plus its visit is one index, `cx_act`,
+worked out once a line.
+
+The code grew 525 bytes: 250 of them the bigger map, 255 the clip. It
+ends at &4E1A, 741 bytes short of &5100.
+
+### Bugs on the way
+
+Two of mine:
+
+- `line_at` took column x0 as the line's anchor before looking at x1. An
+  empty line (both ends too near, x0 = x1) is cut off at every column,
+  x0 included. 80 of the 256 demo angles.
+- `piece_at` doesn't keep A when it stops on an odd step (`TYA : TAX`),
+  and `clip_line` thought it did. It walked off a chain's end and spun.
+  The cure I wanted, `LDX p_next,X`, isn't an instruction, so the caller
+  reloads A.
+
+And two in the checks:
+
+- The C replays a call into a fresh renderer, zero past the record's
+  state. The Beeb's tables held the last record's, so a visit made by the
+  call started from rubbish. The host pokes whole tables now, zero past
+  the record.
+- A visit never entered has no cursor, vertices or instance yet. The
+  Beeb doesn't touch them until `enter` sets them; the C zeroes them when
+  it makes the visit. S6's capture CRC counts them as 0 where `xr` is 0,
+  on both sides. The replays can't: `inst_new` runs inside `enter`, after
+  the vertices are in and before `xr` is.
+
+### Checking it
+
+On the emulator first: `emu6502.py` behind a stand-in for b2 that drives
+the harness's mailbox, so `b2.py`'s own phases run unchanged.
+
+- Every golden pose's image, sprites on: 22,572 frames, all the C's.
+- S5u: 4,988 records of the 21 functions on maps 0, 7 and 9, plus 4,000
+  synthetic `close_columns` records and, new, 4,000 synthetic `run_end`
+  ones (a later open run closed after the fact, which no pose reaches).
+  All reproduce.
+- S4 on both buffers, the pools with their fractions, random ones too.
+- S6 and S7 on every stream, both buffers, map 7 and the stress map, and
+  the abort check.
+
+Then on b2: phases 4, 5 and 6, and phase 7's sprite replays, its frames
+and the abort check. All clean. The stress map's capture there: median
+51,456 cycles, 90% 132,954, worst 249,284, and the stack never below
+&1A0 (it was &146).
+
+Poking a record's state into the Beeb a table at a time made the replays
+crawl on b2, about 60 HTTP requests a record. `replay.py` gathers the
+writes now and sends each run of tables in one go, 12 a record. A
+`clip_line` there takes 654 cycles at the median and 976 on average, a
+`process_edge` 3,336 and 4,006.
+
+The coverage gate's list of render.c lines was the old render.c's. It
+has the new ones now, a reason each. The pose search found four new
+poses, two of them in room 3. They're in the goldens and the records.
+
+### What it costs
+
+Maps 0 and 1 at the demo poses, all 256 angles, cycles a frame
+(`frame.py sweep`):
+
+| | map 0 before | after | map 1 before | after |
+|---|---|---|---|---|
+| capture, mean | 51,485 | 47,910 | 81,449 | 74,431 |
+| capture, median | 22,037 | 24,032 | 92,402 | 90,375 |
+| capture, 90% | 135,259 | 118,846 | 142,720 | 115,845 |
+| capture, max | 149,656 | 132,933 | 168,785 | 129,171 |
+| frame, mean | 145,291 | 140,540 | 166,257 | 158,117 |
+| frame, max | 335,543 | 314,549 | 258,447 | 232,022 |
+| pieces, mean and max | 23.3, 68 | 16.6, 47 | 35.8, 73 | 26.6, 50 |
+| the demo, frames a second | 17.8 | 17.6 | 13.9 | 14.2 |
+
+The frames a second simulate the demo's loop over those costs; for
+"before" they match b2's 17.5 and 13.9.
+
+The stress map didn't change, so its 10,520 golden poses compare too:
+capture's mean goes from 64,152 to 61,780, its 90% from 140,841 to
+132,122 and its worst from 258,129 to 248,111, with the median flat. A
+straight corridor has few steps for twins and the level skip to save.
+
+The heavy frames win: those over 100k cycles of capture are 12% down on
+map 0 and 14% on map 1, and the worst 11% and 23%. The light ones lose
+about 2,500 cycles. Map 0's demo is mostly light, so it's a shade slower.
+
+Angle 210 shows why: one wall, 9,161 cycles before, 13,038 after. A near
+wall's lines are cut off at the screen's edge. The old clip split the
+cut-off columns off as blocks of known side and ran the rest through the
+extents test: one product a line. render.c runs them through everything
+else's machinery. `flip` finds where the line comes back on screen
+against the bound (a product at x0), `merge` splits there (the same
+product again), and the visible part goes through `meet` twice. That's
+about seven products a line, and the calls between. It's the price of
+splitting a bound only where a run really ends: the old split at x0
+whether it needed to or not.
+
+One saving is the 6502's own. In a cut-off stretch on the bound's side,
+the line's row is the furthest there is, so it's beyond whatever the
+bound's rows are. `flip` sets the cursor as `line_at` would and skips the
+bound's product.
+
+### Not done
+
+For the light frames, if wanted:
+
+- **A row cache.** About seven products a frame repeat one already
+  worked out, worth some 600 cycles. Exact, so the C needn't change.
+- **The extents test at each run's start**, not just the clip's. A
+  prototype says 1%. That's a change to render.c.

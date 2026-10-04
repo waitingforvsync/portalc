@@ -329,12 +329,12 @@ ZA_AUTO1 el_vis                 ; its visit
     ZA_AUTO2 sxq, dxq           ; local: the clip point's column (u8.8); the gradient's run
     ZA_AUTO1 syf, cs            ; local: the far endpoint's row; the clip column
     ZA_AUTO1 sign, fr           ; local: the gradient's sign; the clip column's fraction
-    ZA_AUTO2 off, y0q           ; local: the start row's offset, and the start row (u8.8)
+    ZA_AUTO2 off                ; local: the start row's offset
     LDA h_m : LSR A : LSR A : LSR A : LSR A : STA d + 1   ; 16 * h.m, a nibble
     LDA h_m : ASL A : ASL A : ASL A : ASL A : STA d       ; across the two bytes
     LDA #0 : STA edge
-    STA l_y0 : STA l_g : STA l_g + 1
-    LDA h_below : BEQ @+
+    STA l_y : STA l_y + 1 : STA l_g : STA l_g + 1
+    LDA h_below : STA l_below : BEQ @+
     LDA #64 : STA edge
 .@  LDA ep_sx : STA l_x0 : STA l_x1
     LDA ep_xl : CMP d : LDA ep_xh : SBC d + 1   ; near0 = e0.x < d
@@ -353,7 +353,8 @@ ZA_AUTO1 el_vis                 ; its visit
 
 .both                           ; neither near: the line between their rows
     LDX #0 : JSR row_from
-    STA sy0 : STA l_y0
+    STA sy0 : STA l_y + 1       ; anchored at the row's middle
+    LDA #128 : STA l_y
     LDX #1 : JSR row_from       ; sy1
     LDX ep_sx + 1 : STX l_x1
     LDY #0                      ; the sign
@@ -425,8 +426,8 @@ ZA_AUTO1 el_vis                 ; its visit
     JSR gradq8_mag              ; syf >= edge: falling
     LDA fr : SETMUL
     MULU16_FRAC gradq8_mag.q, off
-    LDA #128 : CLC : ADC off : STA y0q      ; base + off (at most 16,512 + 32,639:
-    LDA edge : ADC off + 1 : STA y0q + 1    ; the C's clamp on a carry is dead)
+    LDA #128 : CLC : ADC off : STA l_y      ; base + off, exactly (at most 16,512 +
+    LDA edge : ADC off + 1 : STA l_y + 1    ; 32,639: the C's clamp on a carry is dead)
     LDY #0
     JMP anchor
 .rising
@@ -434,18 +435,15 @@ ZA_AUTO1 el_vis                 ; its visit
     JSR gradq8_mag
     LDA fr : SETMUL
     MULU16_FRAC gradq8_mag.q, off
-    LDA #128 : SEC : SBC off : STA y0q      ; base - off, stopping at 0
-    LDA edge : SBC off + 1 : BCS @+
-    LDA #0
-.@  STA y0q + 1
-    LDY #&80
-.anchor
+    LDA #128 : SEC : SBC off : STA l_y      ; base - off, exactly, stopping at 0
+    LDA edge : SBC off + 1 : STA l_y + 1
+    BCS @+
+    LDA #0 : STA l_y : STA l_y + 1
+.@  LDY #&80
+.anchor                         ; (a piece made from it starts at the screen's edge at most)
     STY sign
     LDA cs : STA l_x0
     LDA ep_sx + 1 : STA l_x1
-    LDA y0q + 1 : CMP #65 : BCC @+          ; the nearest row, on screen or at its edge
-    LDA #64
-.@  STA l_y0
     LDA gradq8_mag.q : STA l_g
     LDA gradq8_mag.q + 1 : JMP signed
 
@@ -455,7 +453,8 @@ ZA_AUTO1 el_vis                 ; its visit
 .@  LDA sxq : SEC : SBC #0 : STA gradq8_mag.dx  ; sxq - e0.sx * 256
     LDA sxq + 1 : SBC ep_sx : STA gradq8_mag.dx + 1
     LDA cs : STA l_x1
-    LDA syf : STA l_y0
+    LDA syf : STA l_y + 1       ; anchored at the far endpoint's row's middle
+    LDA #128 : STA l_y
     LDY #0
     LDA edge : SEC : SBC syf : BCS @+       ; edge >= syf: falling
     EOR #&FF : ADC #1           ; syf - edge (C clear)
@@ -479,16 +478,17 @@ ZA_AUTO1 el_vis                 ; its visit
 \\ ev_* state. out: the line, and cx_act.
 .edge_line
 {
-    ZA_AUTO1 t                  ; local: slot * 8
-    ASL A : ASL A : ASL A : STA t   ; slot * 24 + the visit: the line's active
-    ASL A : ADC t               ; piece, in cx_act for the clip (no carries)
-    ADC el_vis : STA cx_act : TAX
-    LDY vis_act,X : BEQ made
-    LDA p_x0,Y : STA l_x0       ; carried on: the piece's start, to the edge's end
+    TAX                         ; the slot's table plus the visit: the line's active
+    LDA el_vis : CLC : ADC act_base,X   ; piece, in cx_act for the clip
+    STA cx_act : TAX
+    LDY vs_act,X : BEQ made
+    LDA p_x0,Y : STA l_x0       ; carried on: the piece's start, to the edge's end,
     LDA el_sx1 : STA l_x1
-    LDA p_y0,Y : STA l_y0
+    LDA p_yf,Y : STA l_y        ; from its exact row
+    LDA p_y0,Y : STA l_y + 1
     LDA p_glo,Y : STA l_g
     LDA p_ghi,Y : STA l_g + 1
+    LDA h_below : STA l_below
     RTS
 .made
     LDA el_have : BNE make
@@ -515,3 +515,9 @@ ZA_AUTO1 el_vis                 ; its visit
 .make
     JMP make_line
 }
+
+\ Each slot's table in vs_act.
+.act_base
+    FOR s = 0 ..< PT_NUM_SLOTS
+        EQUB s * VISITS
+    NEXT

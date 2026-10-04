@@ -4,16 +4,18 @@
 \ *
 \ **************************************************************************
 \
-\ Zeroed by start. What crosses the plot: two of the pool's pages (the
-\ other six are in the spare), the segment pool, the sprite instances, and
-\ the sprite pass's toggles. The capture's own state is in the junk rows
-\ (scratch.6502, D13).
+\ Zeroed by start. What crosses the plot: two of the pool's pages (six are
+\ in the spare), the segment pool, and what the capture makes of the
+\ sprite instances. Then the overlap: the sprite pass's own state, which
+\ comes to life after the plot, shares its bytes with the capture's
+\ spill, dead by then (scratch.6502's Spill section, at the same
+\ addresses). The rest of the capture's state is in the junk rows (D13).
 
 IN_ROWS = 33                    ; row edges an instance keeps: its art's height + 1, at most
 
 .bss_start
 .p_co   SKIP 256                ; the pool's odd colour pattern (both 0: a bound, not plotted)
-.p_next SKIP 256                ; the next piece in its chain, 0 = the end
+.p_yf   SKIP 256                ; the fraction of its row at x0, plus a half
 .segs   SKIP PT_SEG_POOL        ; clip segments: offsets into here, 0 = none
 
 \ The sprite instances (pt_inst), a field a table, by instance (1..7).
@@ -21,9 +23,7 @@ IN_ROWS = 33                    ; row edges an instance keeps: its art's height 
 .in_cx0 SKIP PT_MAX_INSTS       ; the screen columns it covers, [cx0, cx1)
 .in_cx1 SKIP PT_MAX_INSTS
 .in_seg SKIP PT_MAX_INSTS       ; its clip segments, in x order
-.in_segt SKIP PT_MAX_INSTS
-.in_prev SKIP PT_MAX_INSTS      ; the draw order, far to near
-.in_next SKIP PT_MAX_INSTS
+.in_next SKIP PT_MAX_INSTS      ; the draw order, far to near
 .in_scl SKIP PT_MAX_INSTS       ; screen pixels per source pixel, u8.8
 .in_sch SKIP PT_MAX_INSTS
 .in_l0  SKIP PT_MAX_INSTS       ; the left edge's column, u8.8, 24 bits
@@ -32,8 +32,13 @@ IN_ROWS = 33                    ; row edges an instance keeps: its art's height 
 .in_t0  SKIP PT_MAX_INSTS       ; the top edge's row, likewise
 .in_t1  SKIP PT_MAX_INSTS
 .in_t2  SKIP PT_MAX_INSTS
-\ ...and the sprite pass's, stepped along its columns
-.in_col SKIP PT_MAX_INSTS       ; the source column at the current one
+
+.aborts SKIP 1                  ; frames dropped on an overflow (D9)
+
+\ The overlap: from here to overlap_end, the sprite pass's state, or, until
+\ the plot, the capture's spill.
+.overlap
+.in_col SKIP PT_MAX_INSTS       ; an instance's source column at the current one
 .in_cn0 SKIP PT_MAX_INSTS       ; its right edge plus a half (rounding), u8.8, 24 bits
 .in_cn1 SKIP PT_MAX_INSTS
 .in_cn2 SKIP PT_MAX_INSTS
@@ -62,5 +67,4 @@ TG_TAIL = PT_MAX_TOGS + 1
 .tg_e   SKIP TG_TAIL + 1
 .tg_o   SKIP TG_TAIL + 1
 .tg_nx  SKIP TG_TAIL + 1
-
-.aborts SKIP 1                  ; frames dropped on an overflow (D9)
+.overlap_end

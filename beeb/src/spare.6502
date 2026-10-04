@@ -6,7 +6,8 @@
 \
 \ Zeroed by start. The pool is a page a field, indexed by piece (1..255; 0
 \ is the C's null piece), each page standing alone: six live here, where
-\ nothing else ever writes, and p_co and p_next in BSS.
+\ nothing else ever writes, p_co and p_yf in BSS, and p_next, which only
+\ the capture reads, in the junk row above B (scratch.6502).
 
 .p_x0   SKIP 256                ; first column
 .p_x1   SKIP 256                ; one past the last

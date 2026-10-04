@@ -19,14 +19,14 @@ arith.c:393       pt_project_col      dead: exhaustive over x (uy = x, the worst
 arith.c:403       pt_project_col_q8   rare: a near-clip lerp overshooting the ray; S2 tests uy > d directly
 arith.c:415       pt_project_col_q8   rare: needs the near-clip point exactly on the ray; fires for 14,798 values of d at uy = d, so S2 covers it
 arith.c:455       pt_project_rowd     dead: exhaustive over x at the largest h8 the on-screen assert allows never gives q > H/2; the Beeb's has no clamp
-render.c:259      crossing            dead: n = 0 needs span = 0, which the assert after it forbids
-render.c:531      make_line           rare: the clip column rounding left of a near endpoint's; S5 synthetic make_line records
-render.c:547      make_line           dead: base + off is at most 16,512 + 32,639 (gm < &8000, fr < 256), so it never carries; the Beeb's has no clamp
-render.c:752-754  cut                 dead: in a healthy ring the cursor never lags xa (process_edge's own comment)
-render.c:988-990  child_portal        dead: the degenerate-ring guard, broken maps only (RC_ASSERT(0))
-render.c:1042-1044 close_columns      rare: a split at l needs a pinch whose open range starts inside a child bottom piece (a ceiling-line closure); descend's cap always lands on piece bounds; S6's synthetic close_columns records (beebtool synthclose)
-render.c:1047     close_columns       rare: the same at rr; the same records
-render.c:1095-1096 edge_line          dead: an edge starting past the right ray (BNEG, not ANEG) has sx0 = 128 = xa >= xb, and process_edge returns before edge_line
-render.c:1292-1293 root_exact         dead in these maps: the eye-vertex root needs every other vertex within pt_rot's rounding of the left ray, i.e. a sliver cell
-render.c:1684     seg_piece_at        dead: inst_bounds re-seeks only at a segment's first column (its cc + 1 != c test never fires), where the first piece covers it
-render.c:1927     sprite_pass         dead: j >= w needs round(left + w * scale) < c1, but c1 = round(left + width) with width = w * scale (less when saturated)
+render.c:241      crossing            dead: n = 0 needs span = 0, which the assert after it forbids (flip asks only where the sign changes between c and the stretch's last column)
+render.c:347-348  run_end             rare: a second open run in one line's clip, which needs a crossing's rounding to pinch an opening shut in the middle; S6's synthetic run_end records (beebtool synthclose)
+render.c:619      make_line           rare: the clip column rounding left of a near endpoint's; S5 synthetic make_line records
+render.c:635      make_line           dead: base + off is at most 16,512 + 32,639 (gm < &8000, fr < 256), so it never carries; the Beeb's has no clamp
+render.c:1014-1016 enter              dead: the degenerate-ring guard, broken maps only (RC_ASSERT(0)); not ported
+render.c:1066-1067 edge_line          dead: an edge starting past the right ray (BNEG, not ANEG) has sx0 = 128 = xa >= xb, and process_edge returns before edge_line
+render.c:1145     process_edge        rare: a soft edge into a cell already walked over these columns, a rounding mishap with the eye on a vertex (a drawn edge's, into the scratch visit, runs); ported
+render.c:1186     process_edge        rare: a portal with level ceilings in different shades, which none of the maps has (the floors' twin, render.c:1190, runs); ported
+render.c:1307-1308 root_exact         dead in these maps: the eye-vertex root needs every other vertex within pt_rot's rounding of the left ray, i.e. a sliver cell
+render.c:1687     seg_piece_at        dead: inst_bounds re-seeks only at a segment's first column (its cc + 1 != c test never fires), where the first piece covers it
+render.c:1930     sprite_pass         dead: j >= w needs round(left + w * scale) < c1, but c1 = round(left + width) with width = w * scale (less when saturated)

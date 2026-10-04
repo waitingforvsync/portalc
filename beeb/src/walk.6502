@@ -4,22 +4,18 @@
 \ *
 \ **************************************************************************
 \
-\ The portal being walked (render.c's pt_portal) is po_*, and the child
-\ process_edge finds is ch_*. The walk recurses on the hardware stack: a
-\ descent pushes po_*, the edges left and the call's pending count round
-\ the JSR and takes them back after (D15); a portal's last child is a tail
-\ call, a JMP. A cell's visit is a field a table in the junk rows
-\ (scratch.6502), with its active pieces in vis_act.
+\ A cell's visit is a field a table (scratch.6502), shared by every later
+\ visit of the cell that frame. Visits of one cell run in increasing x and
+\ never nest, so the visit holds the portal being walked as well as the
+\ ring cursor: where the next edge's span starts (vs_x), the portal's end
+\ (vs_xr), and its bounds' cursors and row extents. The walk recurses on
+\ the visit alone: a descent pushes it, its edges left and the call's
+\ pending count round the JSR (D15), and a visit's last child is a tail
+\ call, a JMP.
 
 ZA_AUTO1 fr_cell                ; the camera's cell
 ZA_AUTO1 num_visits             ; the visits so far, plus 1 (0 is the null visit)
-ZA_AUTO1 depth                  ; the walk's nesting: the root portal's is 1
-ZA_AUTO1 po_cell, po_x, po_xr   ; the portal: its cell, where the next span starts, its end...
-ZA_AUTO1 po_tcur, po_bcur       ; ...its bound chains' cursors...
-ZA_AUTO1 po_tmax, po_bmin       ; ...and their row extents
-ZA_AUTO1 ch_cell, ch_x, ch_xr   ; the child portal, the same
-ZA_AUTO1 ch_tcur, ch_bcur
-ZA_AUTO1 ch_tmax, ch_bmin
+ZA_AUTO1 depth                  ; the walk's nesting: the root visit's is 1
 ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to (D9)
 
 \ ---- visits ----
@@ -80,32 +76,29 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     RTS
 }
 
-\\ A new visit of cell X, the frame's next: Y = its index, its active pieces
-\\ none, its sprite projected (inst_new). Its cursor and vertices are the
-\\ caller's to set. Keeps X.
-.visit_new
+\\ Cell X's visit, made on first need: when an edge into it is first
+\\ clipped, so that the clip can build its bounds there. A new one has no
+\\ active pieces and isn't walked yet (vs_xr 0); its cursor, vertices,
+\\ columns and sprite instance are set when it's entered. The tables hold
+\\ a visit a cell, and a cell has a visit at most, so they never fill.
+\\ out: Y = the visit. Keeps X.
+.visit_of
 {
-    ZA_AUTO1 cell, vs           ; local
-    LDY num_visits : CPY #PT_MAX_VISITS : BCC room
-    OVERFLOW 5                  ; the visits are full
-.room
+    LDY cell_visit,X : BNE done
+    LDY num_visits
     INC num_visits
     TXA : STA vs_cell,Y
     TYA : STA cell_visit,X
-    LDA #0
-    STA vis_act,Y
-    STA vis_act + 24,Y
-    STA vis_act + 48,Y
-    STA vis_act + 72,Y
-    STX cell : STY vs
-    JSR inst_new
-    LDY vs : STA vs_inst,Y
-    LDX cell
+    LDA #0 : STA vs_xr,Y
+    FOR s = 0 ..< PT_NUM_SLOTS
+        STA vs_act + s * VISITS,Y
+    NEXT
+.done
     RTS
 }
 
 \\ Move visit Y's cursor (cell X) to the next edge: its end vertex becomes
-\\ the start, and that edge's lines start afresh.
+\\ the start, and that edge's lines start afresh. Keeps X and Y.
 .visit_advance
 {
     LDA vs_k,Y : CLC : ADC #1   ; the ring's next edge
@@ -115,36 +108,33 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     JSR vs_shift
     JSR vs_next1
     LDA #0
-    STA vis_act,Y
-    STA vis_act + 24,Y
-    STA vis_act + 48,Y
-    STA vis_act + 72,Y
+    FOR s = 0 ..< PT_NUM_SLOTS
+        STA vs_act + s * VISITS,Y
+    NEXT
     RTS
 }
 
-\ ---- pushing portals ----
-
-\\ The child portal through portal edge A over [ch_x, ch_xr), its bound
-\\ cursors and extents in ch_*, ready to walk: its cell into ch_cell, and
-\\ that cell's visit with its cursor on the child's first edge, the first
-\\ whose end vertex is strictly right of ch_x. A first visit starts from P,
-\\ the portal's start vertex (ev_*[0]), whose edge is the twin's ring
-\\ successor; a cell visited before resumes where its last visit ended.
-\\ (render.c's degenerate-ring guard is dead, D10.) out: C set, a child.
-.child_portal
+\\ Enter visit vi over [xl, xr) through edge ei of the cell before, its
+\\ bounds already in place: the cursor goes to the cell's first edge (spec
+\\ 7.4), the first whose end vertex is strictly right of xl. A first walk
+\\ searches from P, the portal's start vertex (ev_*[0]), whose edge is the
+\\ twin's ring successor, and projects the cell's sprite. A later one
+\\ resumes from the edge its last walk ended on (every earlier edge ends
+\\ left of that walk's xr, which is at or left of xl), with that edge's
+\\ vertices and its lines' last pieces in hand. (render.c's degenerate-ring
+\\ guard is dead, D10.) in: vi, ei, xl, xr, ev_*[0]. out: A = vi.
+.enter
 {
-    ZA_AUTO1 vs                 ; local: the visit
-    TAY                         ; Y = the edge
-    LDX e_adj,Y : STX ch_cell
-    LDA cell_visit,X : BNE resume
-    LDA e_twin,Y                ; first visit: the twin's ring index...
+    ZA_AUTO1 vi, ei, xl, xr     ; in
+    LDY vi : LDX vs_cell,Y
+    LDA vs_xr,Y : BNE seek      ; walked before: from where it ended
+    LDY ei
+    LDA e_twin,Y                ; first: the twin's ring index...
     SEC : SBC c_first,X
     CLC : ADC #1                ; ...and its successor's
     CMP c_num,X : BCC @+
     LDA #0
-.@  PHA
-    JSR visit_new
-    PLA : STA vs_k,Y
+.@  LDY vi : STA vs_k,Y
     LDA ev_xl : STA vs0_xl,Y    ; v0 = P
     LDA ev_xh : STA vs0_xh,Y
     LDA ev_yl : STA vs0_yl,Y
@@ -154,101 +144,41 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDA ev_f : STA vs0_f,Y
     LDA ev_e : STA vs0_e,Y
     JSR vs_next1
-    TYA
-.resume
-    STA vs
-.seek                           ; to the first edge ending strictly right of ch_x
-    LDY vs : LDA ch_x : JSR col_gt : BCS found
-    LDX ch_cell : LDY vs
+.seek                           ; to the first edge ending strictly right of xl
+    LDY vi : LDA xl : JSR col_gt : BCS found
+    LDY vi : LDX vs_cell,Y
     JSR visit_advance
     JMP seek
 .found
-    LDY vs
-    LDA ch_xr : STA vs_xr,Y
-    RTS                         ; (C set)
-}
-
-\\ The next open range of [c, xb) left to right: past the closed ranges
-\\ covering c, then up to the next one's start (or xb).
-\\ in: c, xb. out: C set if there's one, in [ol, orr); c moved past it.
-.next_open
-{
-    ZA_AUTO1 c, xb              ; in (c also out)
-    ZA_AUTO1 ol, orr            ; out
-    LDA c
-.again                          ; (the order the ranges are tried in can't matter:
-    LDY #0                      ; a jump to a range's end skips only what it covers)
-    LDX cl_num
-.past
-    DEX : BMI passed
-    CMP cl_l,X : BCC past       ; c < l
-    CMP cl_r,X : BCS past       ; c >= r
-    LDA cl_r,X                  ; covered: to its end
-    INY
-    JMP past
-.passed
-    CPY #0 : BNE again          ; moved: try them all again
-    CMP xb : BCC open
-    CLC                         ; nothing left
-    RTS
-.open
-    STA ol
-    LDA xb : STA orr
-    LDX cl_num
-.next
-    DEX : BMI got
-    LDA cl_l,X : CMP ol : BCC next              ; l > ol (not equal: that range would cover ol)...
-    CMP orr : BCS next                          ; ...and l < orr: the end so far
-    STA orr
-    JMP next
-.got
-    LDA orr : STA c
-    SEC
-    RTS
-}
-
-\\ Close the open columns [l, rr) after the fact (a pinched sliver, or the
-\\ depth cap): the cell's ceiling EOR floor, cbe and cbo, EORed into the
-\\ pieces of bottom chain X over exactly those columns.
-\\ in: X = the chain, l, rr, cbe, cbo.
-.close_columns
-{
-    ZA_AUTO1 l, rr, cbe, cbo    ; in
-    LDA l : JSR piece_at
-    LDA p_x0,X : CMP l : BCS run
-    LDA l : JSR pool_split      ; starts before l: split there
-    TYA : TAX
-.run
-    LDA p_x0,X : CMP rr : BCS done
-    LDA rr : CMP p_x1,X : BCS whole
-    JSR pool_split              ; ends past rr: split there
-.whole
-    LDA p_ce,X : EOR cbe : STA p_ce,X
-    LDA p_co,X : EOR cbo : STA p_co,X
-    LDA p_next,X : TAX : BNE run
-.done
+    LDY vi
+    LDA vs_xr,Y : BNE walked
+    LDX vs_cell,Y : JSR inst_new    ; a first walk: the cell's sprite
+    LDY vi : STA vs_inst,Y
+.walked
+    LDA xl : STA vs_x,Y
+    LDA xr : STA vs_xr,Y
+    TYA
     RTS
 }
 
 \ ---- one edge of the walk (spec 7.8) ----
 
-\\ Process the portal's current edge, the one its cell's visit's cursor is
-\\ on: its lines, and the child portal through it, if any.
-\\ in: po_*. out: C set, a child, in ch_*; po_x, po_tcur and po_bcur moved on.
+\\ Process visit vi's current edge, the one its cursor is on: its lines,
+\\ and the child through it, if any, entered. A line with a piece on this
+\\ edge already is in screen space (edge_line); only a line not yet made
+\\ on it is projected. in: vi. out: A = the child's visit, 0 for none.
 .process_edge
 {
-    ZA_AUTO1 ei, xa, xb         ; local: the edge, and its span
-    ZA_AUTO1 th, bh             ; local: the bound sub-chains over it
-    ZA_AUTO1 adj                ; local: the cell beyond
+    ZA_AUTO1 vi                 ; in
+    ZA_AUTO1 ca, ei, xa, xb     ; local: the cell, the edge, and its span
+    ZA_AUTO1 adj, ci, bv        ; local: the cell beyond, its visit, and the visit its
+                                ; bounds are built in (0, scratch: walked over these columns)
     ZA_AUTO1 wle, wlo           ; local: the wall's colour
     ZA_AUTO1 cae, cao, cfe, cfo ; local: this cell's ceiling and floor colours
     ZA_AUTO1 bce, bco, bfe, bfo ; local: the cell beyond's
-    ZA_AUTO1 cbe, cbo           ; local: its ceiling EOR its floor
-    ZA_AUTO1 bhd, bbmin         ; local: the child's bottom chain, built first
-    ZA_AUTO1 pl, pr, pw         ; local: the widest open range, and its width
-
-    LDX po_cell
-    LDY cell_visit,X : STY el_vis
+    ZA_AUTO1 ol, orr            ; local: the child's columns
+    LDY vi : STY el_vis
+    LDX vs_cell,Y : STX ca
     LDA vs_k,Y : CLC : ADC c_first,X : STA ei
     LDA vs0_sx,Y : STA ev_sx    ; the edge's vertices, as far as its span needs
     LDA vs0_fl,Y : STA ev_flags
@@ -265,15 +195,15 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
 .@  LDA ev_sx
     JMP sx0
 .none
-    CLC
+    LDA #0
     RTS
 .aneg
     LDA ev_flags + 1 : AND #VF_ANEG OR VF_AZERO : BNE none
     \ (A = 0: the start's column)
 .sx0
     STA el_sx0
-    CMP po_x : BCS @+           ; xa: from where the last span ended, at least
-    LDA po_x
+    CMP vs_x,Y : BCS @+         ; xa: from where the last span ended, at least
+    LDA vs_x,Y
 .@  STA xa
     BIT ev_flags + 1 : BVS right
     BMI left
@@ -286,74 +216,78 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDA #0
 .sx1
     STA el_sx1
-    CMP po_xr : BCC @+          ; xb: to the portal's end, at most
-    LDA po_xr
+    CMP vs_xr,Y : BCC @+        ; xb: to the portal's end, at most
+    LDA vs_xr,Y
 .@  STA xb
     CMP xa : BEQ none : BCC none
-    STA po_x
+    STA vs_x,Y
+    LDX vs_tcur,Y : LDA xa : JSR piece_at   ; the bounds' pieces at xa (chains only
+    LDY vi : TXA : STA vs_tcur,Y            ; ever gain pieces, never lose them)
+    LDX vs_bcur,Y : LDA xa : JSR piece_at
+    LDY vi : TXA : STA vs_bcur,Y
     LDA #0 : STA el_have
-    LDY el_vis                  ; the start vertex whole: the child's P, if any
-    LDA vs0_xl,Y : STA ev_xl
+    LDA vs0_xl,Y : STA ev_xl    ; the start vertex whole: the child's P, if any
     LDA vs0_xh,Y : STA ev_xh
     LDA vs0_yl,Y : STA ev_yl
     LDA vs0_yh,Y : STA ev_yh
     LDA vs0_f,Y : STA ev_f
     LDA vs0_e,Y : STA ev_e
-
-    \ 2. take ownership of the bound sub-chains over [xa, xb)
-    LDA xa : STA cut.xa
-    LDA xb : STA cut.xb
-    LDA po_tcur : STA cut.cursor
-    JSR cut : STA th
-    LDA cut.cursor : STA po_tcur
-    LDA po_bcur : STA cut.cursor
-    JSR cut : STA bh
-    LDA cut.cursor : STA po_bcur
-
     LDX ei
     LDA e_colour,X : BNE drawn
-    LDA xa : STA ch_x           ; a soft edge: the child over the whole span
-    LDA xb : STA ch_xr
-    LDA th : STA ch_tcur
-    LDA bh : STA ch_bcur
-    LDA po_tmax : STA ch_tmax
-    LDA po_bmin : STA ch_bmin
-    TXA
-    JMP child_portal
+
+    \ 2. a soft edge is level both ways and has no lines: it hands the bounds
+    \ on as they are. A cell already walked over these columns can only be a
+    \ rounding mishap with the eye on a vertex: it isn't entered again.
+    LDA e_adj,X : TAX
+    JSR visit_of
+    LDA vs_xr,Y : CMP xa : BEQ @+ : BCC @+
+    LDA #0                      ; (not entered)
+    RTS
+.@  LDX vi
+    LDA vs_tcur,X : STA vs_tcur,Y
+    LDA vs_bcur,X : STA vs_bcur,Y
+    LDA vs_tmax,X : STA vs_tmax,Y
+    LDA vs_bmin,X : STA vs_bmin,Y
+    STY enter.vi
+    LDA ei : STA enter.ei
+    LDA xa : STA enter.xl
+    LDA xb : STA enter.xr
+    JMP enter
 
 .drawn
-    LDY el_vis                  ; the end vertex whole, for the lines
+    LDY vi                      ; the end vertex whole, for the lines
     LDX vs1_xl,Y : STX ev_xl + 1
     LDX vs1_xh,Y : STX ev_xh + 1
     LDX vs1_yl,Y : STX ev_yl + 1
     LDX vs1_yh,Y : STX ev_yh + 1
     LDX vs1_f,Y : STX ev_f + 1
     LDX vs1_e,Y : STX ev_e + 1
+    LDX vs_tmax,Y : STX cx_tmax ; every line of the edge clips against the bounds' extents
+    LDX vs_bmin,Y : STX cx_bmin ; (the ceiling line's, against its bottom's, once it's built)
     TAY                         ; the wall's shade, plus 1
     LDA shade_e - 1,Y : STA wle
     LDA shade_o - 1,Y : STA wlo
-    LDX po_cell
+    LDX ca
     LDY c_ceil,X
     LDA shade_e,Y : STA cae
     LDA shade_o,Y : STA cao
     LDY c_floor,X
     LDA shade_e,Y : STA cfe
     LDA shade_o,Y : STA cfo
+    LDA #ST_NONE : STA cx_shut
     LDX ei
     LDY e_adj,X : BNE portal
 
-    \ a solid wall: the ceiling's line and the floor's, recolouring only,
-    \ each with fresh cursors (role NONE never severs the chains)
-    JSR cx_none
-    LDX po_cell : LDA c_ceilz,X : JSR set_h
+    \ 3. a solid wall: its ceiling line and floor line, merges only
+    LDX ca : LDA c_ceilz,X : JSR set_h
     LDA cae : EOR wle : STA l_ce
     LDA cao : EOR wlo : STA l_co
-    LDA #PT_SLOT_CEIL : JSR edge_clip
-    LDX po_cell : LDA c_floorz,X : JSR set_h
+    LDA #PT_SLOT_CEIL : JSR plain
+    LDX ca : LDA c_floorz,X : JSR set_h
     LDA wle : EOR cfe : STA l_ce
     LDA wlo : EOR cfo : STA l_co
-    LDA #PT_SLOT_FLOOR : JSR edge_clip
-    CLC
+    LDA #PT_SLOT_FLOOR : JSR plain
+    LDA #0
     RTS
 
 .portal
@@ -362,142 +296,179 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDA shade_e,X : STA bce
     LDA shade_o,X : STA bco
     LDX c_floor,Y
-    LDA shade_e,X : STA bfe : EOR bce : STA cbe
-    LDA shade_o,X : STA bfo : EOR bco : STA cbo
+    LDA shade_e,X : STA bfe
+    LDA shade_o,X : STA bfo
 
-    \ 3. the lines that only recolour first, while the chains are whole: a
-    \ lintel down to the cell beyond's ceiling, a riser up to its floor
-    JSR cx_none
-    LDX po_cell : LDY adj
+    \ 3. the lines forming no bound go first: merges only, against the
+    \ bounds intact. Where the two cells' ceilings (or floors) are level,
+    \ the line there forms no bound either: everything seen past it is
+    \ farther, so on the screen it's below a level ceiling's line and above
+    \ a level floor's, and the child just keeps the parent's bound on that
+    \ side. The line is then only a change of colour, and isn't even made
+    \ if the shades match too.
+    LDX ca
     LDA c_ceilz,X : CMP c_ceilz,Y : BCS @+
-    JSR set_h
+    JSR set_h                   ; a lintel down to the cell beyond's ceiling
     LDA cae : EOR wle : STA l_ce
     LDA cao : EOR wlo : STA l_co
-    LDA #PT_SLOT_CEIL : JSR edge_clip
-    LDX po_cell : LDY adj
-.@  LDA c_floorz,Y : CMP c_floorz,X : BCS @+
-    LDA c_floorz,X : JSR set_h
+    LDA #PT_SLOT_CEIL : JSR plain
+    JMP floors
+.@  BNE floors                  ; (the cell beyond's ceiling higher: its line's a bound)
+    LDA cae : EOR bce : STA l_ce    ; level: a change of colour, if any
+    LDA cao : EOR bco : STA l_co
+    ORA l_ce : BEQ floors
+    LDA c_ceilz,X : JSR set_h
+    LDA #PT_SLOT_CEIL_BOUND : JSR plain
+.floors
+    LDX ca : LDY adj
+    LDA c_floorz,Y : CMP c_floorz,X : BCS @+
+    LDA c_floorz,X : JSR set_h  ; a riser up to the cell beyond's floor
     LDA wle : EOR cfe : STA l_ce
     LDA wlo : EOR cfo : STA l_co
-    LDA #PT_SLOT_FLOOR : JSR edge_clip
-.@
-    \ 4. the bound-forming lines, the floor's first: it builds the child's
-    \ bottom chain against T and B. Then the ceiling's builds its top chain
-    \ against T and the chain the floor's just built.
-    LDA #0 : STA cl_num
-    LDA th : STA cx_thead
-    LDA bh : STA cx_bhead
-    LDA po_tmax : STA cx_tmax
-    LDA po_bmin : STA cx_bmin
-    LDA #ROLE_BOTTOM : STA cx_role
-    STA cx_build                ; (nonzero)
-    LDA cbe : STA cx_cbfbe
-    LDA cbo : STA cx_cbfbo
-    JSR cb_new
-    LDX po_cell : LDY adj
-    LDA c_floorz,Y : CMP c_floorz,X : BCS @+
-    JSR set_h                   ; above a riser: at the cell beyond's floor
+    LDA #PT_SLOT_FLOOR : JSR plain
+    JMP bounds
+.@  BNE bounds                  ; (the cell beyond's floor lower: its line's a bound)
+    LDA bfe : EOR cfe : STA l_ce    ; level: a change of colour, if any
+    LDA bfo : EOR cfo : STA l_co
+    ORA l_ce : BEQ bounds
+    LDA c_floorz,X : JSR set_h
+    LDA #PT_SLOT_FLOOR_BOUND : JSR plain
+
+    \ 4. the lines forming the child's bounds, built into its visit (visit
+    \ 0, scratch, for a cell already walked over these columns: the eye on
+    \ a vertex). The floor line goes first, building the child's bottom
+    \ against the parent's two bounds; it closes the child where it's above
+    \ the top. The ceiling line then builds the top against the parent's
+    \ top and the child's bottom, over the columns the floor line left
+    \ open: where that one closed the child, the ceiling line's above the
+    \ top as well, and merges with nothing evaluated. A level side has no
+    \ line: the child shares the parent's bound there.
+.bounds
+    LDX adj : JSR visit_of
+    STY ci
+    LDA vs_xr,Y : CMP xa : BEQ @+ : BCC @+
+    LDY #0
+.@  STY bv
+    LDA bce : EOR bfe : STA cx_cbfbe
+    LDA bco : EOR bfo : STA cx_cbfbo
+    LDA bv : STA cx_child
+    LDA xa : STA ol
+    LDA xb : STA orr
+    LDX ca : LDY adj
+    LDA c_floorz,Y : CMP c_floorz,X : BNE floorline
+    LDX vi : LDY bv             ; level: the parent's bottom
+    LDA vs_bcur,X : STA vs_bcur,Y
+    LDA vs_bmin,X : STA vs_bmin,Y
+    JMP ceiling
+.floorline
+    BCS lower
+    JSR set_h                   ; a riser: at the cell beyond's floor (A = it)
     LDA bfe : EOR wle : STA l_ce
     LDA bfo : EOR wlo : STA l_co
-    JMP floor
-.@  LDA c_floorz,X : JSR set_h
+    JMP fset
+.lower
+    LDA c_floorz,X : JSR set_h  ; lower beyond: at this cell's floor
     LDA bfe : EOR cfe : STA l_ce
     LDA bfo : EOR cfo : STA l_co
-.floor
-    LDA #PT_SLOT_FLOOR_BOUND : JSR edge_clip
-    LDA cb_head : STA bhd
-    LDA cb_bmin : STA bbmin
-
-    JSR cb_new
-    LDA bhd : STA cx_bhead : BEQ @+     ; (no bottom chain: bmin 0)
-    LDA bbmin
-.@  STA cx_bmin
-    LDA #ROLE_TOP : STA cx_role
-    LDX po_cell : LDY adj
-    LDA c_ceilz,X : CMP c_ceilz,Y : BCS @+
-    LDA c_ceilz,Y : JSR set_h   ; under a lintel: at the cell beyond's ceiling
+.fset
+    LDY bv
+    LDA #0 : STA vs_bcur,Y
+    LDA #PT_SCREEN_HEIGHT : STA vs_bmin,Y
+    LDA #ST_ABOVE : STA cx_shut
+    JSR fresh
+    LDA #PT_SLOT_FLOOR_BOUND : JSR edge_line
+    LDA xa : STA clip_line.c
+    LDA xb : STA clip_line.c1
+    JSR clip_line
+    JSR run_end
+    LDA cx_ol : LDX cx_orr
+    CMP cx_orr : BCC @+
+    LDA xb : TAX                ; nothing left open
+.@  STA ol : STX orr
+.ceiling
+    LDX ca : LDY adj
+    LDA c_ceilz,X : CMP c_ceilz,Y : BNE ceilline
+    LDX vi : LDY bv             ; level: the parent's top
+    LDA vs_tcur,X : STA vs_tcur,Y
+    LDA vs_tmax,X : STA vs_tmax,Y
+    JMP child
+.ceilline
+    BCS higher
+    LDA c_ceilz,Y : JSR set_h   ; a lintel: at the cell beyond's ceiling
     LDA wle : EOR bce : STA l_ce
     LDA wlo : EOR bco : STA l_co
-    JMP ceiling
-.@  LDA c_ceilz,X : JSR set_h
+    JMP cset
+.higher
+    JSR set_h                   ; higher beyond: at this cell's ceiling (A = it)
     LDA cae : EOR bce : STA l_ce
     LDA cao : EOR bco : STA l_co
-.ceiling
-    LDA #PT_SLOT_CEIL_BOUND : JSR edge_clip
+.cset
+    LDY bv
+    LDA #0 : STA vs_tcur,Y : STA vs_tmax,Y
+    LDA #ST_NONE : STA cx_shut
+    JSR fresh
+    LDY bv : LDA vs_bcur,Y : STA cx_p + 1       ; against the child's bottom
+    LDA vs_bmin,Y : STA cx_bmin
+    LDA #PT_SLOT_CEIL_BOUND : JSR edge_line
+    LDA xa : STA merge_above.c
+    LDA ol : STA merge_above.c1
+    JSR merge_above
+    LDA ol : CMP orr : BCS @+
+    STA clip_line.c
+    LDA orr : STA clip_line.c1
+    LDA #ST_BELOW : STA cx_shut
+    JSR clip_line
+    JSR run_end
+    LDA #ST_NONE : STA cx_shut
+.@  LDA orr : STA merge_above.c
+    LDA xb : STA merge_above.c1
+    JSR merge_above
+    LDA cx_ol : STA ol
+    LDA cx_orr : STA orr
 
-    \ 5. the child portal. Every portal opening is convex on the screen, so
-    \ closed ranges only trim the span's ends, but rounding can pinch a
-    \ sliver shut in the middle: then the widest open range is the portal,
-    \ and the other open columns are closed too.
-    LDA cl_num : BNE pinched
-    LDA xa : STA pl             ; nothing closed: the whole span
-    LDA xb : STA pr
-    JMP child
-.pinched
-    LDA #0 : STA pl : STA pr : STA pw
-    LDA xa : STA next_open.c
-    LDA xb : STA next_open.xb
-.widest
-    JSR next_open : BCC others
-    LDA next_open.orr : SEC : SBC next_open.ol
-    CMP pw : BEQ widest : BCC widest
-    STA pw
-    LDA next_open.ol : STA pl
-    LDA next_open.orr : STA pr
-    JMP widest
-.others
-    LDA xa : STA next_open.c
-.close
-    JSR next_open : BCC closed
-    LDA next_open.ol : CMP pl : BEQ close
-    STA close_columns.l
-    LDA next_open.orr : STA close_columns.rr
-    LDA cbe : STA close_columns.cbe
-    LDA cbo : STA close_columns.cbo
-    LDX bhd : JSR close_columns
-    JMP close
-.closed
-    LDA pl : CMP pr : BCC child
-    CLC                         ; (all closed)
-    RTS
+    \ 5. the child: the run of columns the two lines left open
 .child
-    LDA pl : STA ch_x
-    LDA pr : STA ch_xr
-    LDX cb_head : LDA pl : JSR piece_at
-    STX ch_tcur
-    LDX bhd : LDA pl : JSR piece_at
-    STX ch_bcur
-    LDA cb_tmax : STA ch_tmax
-    LDA bbmin : STA ch_bmin
-    LDA ei
-    JMP child_portal
-
-\ The clip context for the lines that only recolour.
-.cx_none
-    LDA th : STA cx_thead
-    LDA bh : STA cx_bhead
-    LDA po_tmax : STA cx_tmax
-    LDA po_bmin : STA cx_bmin
-    LDA #ROLE_NONE : STA cx_role
-    STA cx_build
-    RTS
-
-\ An empty chain to build.
-.cb_new
+    LDA ol : CMP orr : BCS closed
+    LDA bv : BNE into
+    LDA ol : STA close_columns.l    ; walked over these columns already: closed
+    LDA orr : STA close_columns.rr  ; after the fact
+    LDA cx_cbfbe : STA close_columns.cbe
+    LDA cx_cbfbo : STA close_columns.cbo
+    LDX vs_bcur
+    JSR close_columns
+.closed
     LDA #0
-    STA cb_head : STA cb_tail : STA cb_tmax
-    LDA #PT_SCREEN_HEIGHT : STA cb_bmin
     RTS
+.into
+    STA enter.vi
+    LDA ei : STA enter.ei
+    LDA ol : STA enter.xl
+    LDA orr : STA enter.xr
+    JMP enter
 
-\ Line slot A of the edge, at height h in colour l_ce, l_co, clipped over
-\ [xa, xb) with the context in cx_*, its cursors fresh.
-.edge_clip
-    JSR edge_line               ; (and its active piece, cx_act)
-    LDA #0 : STA cx_tp : STA cx_bpset
-    LDA h_below : STA clip_edge_line.below
-    LDA xa : STA clip_edge_line.xa
-    LDA xb : STA clip_edge_line.xb
-    JMP clip_edge_line
+\ One of the edge's lines forming no bound, in slot A at height h in
+\ colour l_ce, l_co: clipped from the bounds' cursors at the span's start,
+\ merges only.
+.plain
+    LDY vi
+    LDX vs_tcur,Y : STX cx_p
+    LDX vs_bcur,Y : STX cx_p + 1
+    LDX #0 : STX cx_own
+    JSR edge_line               ; (and its active piece)
+    LDA xa : STA clip_line.c
+    LDA xb : STA clip_line.c1
+    JMP clip_line
+
+\ A bound-forming line's clip, afresh: from the parent's cursors (the
+\ ceiling line's bottom is the child's, after), nothing built or open yet.
+.fresh
+    LDY vi
+    LDA vs_tcur,Y : STA cx_p
+    LDA vs_bcur,Y : STA cx_p + 1
+    LDA #0
+    STA cx_tail : STA cx_own
+    STA cx_rl : STA cx_rr : STA cx_ol : STA cx_orr
+    RTS
 }
 
 \\ The height A from the eye (render.c's rel_h): h_m, h_below.
@@ -526,16 +497,16 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
 
 \\ Find the camera cell's root edge, where the ray sum a goes from <= 0 to
 \\ > 0, and begin the cell's visit on it (it's never revisited: every ray
-\\ starts in it); the root portal, the whole screen, into po_*. The search
-\\ is guarded: with the eye on the cell's boundary the rounded sums can read
+\\ starts in it), walking the root portal, the whole screen. The search is
+\\ guarded: with the eye on the cell's boundary the rounded sums can read
 \\ one-sided, and root_exact decides instead. (The root bounds are the
-\\ caller's, in po_tcur and po_bcur.)
-.root_portal
+\\ caller's, in the visit's vs_tcur and vs_bcur.)
+.root_visit
 {
     ZA_AUTO1 n, guard           ; local: the edge, the tries left
     ZA_AUTO1 first, last        ; local: the cell's ring
     LDX fr_cell
-    JSR visit_new               ; (visit 1)
+    JSR visit_of                ; (visit 1)
     LDA c_num,X : STA guard
     LDA c_first,X : STA first : STA n
     CLC : ADC guard : STA last
@@ -568,10 +539,11 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     LDY #1 : JSR vs_set1
 .rooted
     LDA n : SEC : SBC first : STA vs_k + 1
-    LDA #128 : STA vs_xr + 1 : STA po_xr
-    LDA fr_cell : STA po_cell
-    LDA #0 : STA po_x : STA po_tmax
-    LDA #PT_SCREEN_HEIGHT : STA po_bmin
+    LDA #0 : STA vs_x + 1 : STA vs_tmax + 1
+    LDA #128 : STA vs_xr + 1
+    LDA #PT_SCREEN_HEIGHT : STA vs_bmin + 1
+    LDX fr_cell : JSR inst_new
+    STA vs_inst + 1
     RTS
 
 \ A = n's ring successor.
@@ -584,7 +556,7 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     RTS
 }
 
-\\ The exact retry behind root_portal (cold: boundary poses only). The
+\\ The exact retry behind root_visit (cold: boundary poses only). The
 \\ exact ray sums a = rx k1 + ry k2 are linear in the world offsets, so on a
 \\ convex ring they go from a < 0 to a >= 0 exactly once: the root edge is
 \\ the one ending there. (render.c's eye-vertex fallback is dead in these
@@ -678,102 +650,84 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     RTS
 }
 
-\\ Walk the portal in po_* (spec 7.5): each edge of its cell from its
-\\ visit's cursor until one ends at or right of xr. The child through an
-\\ earlier edge is walked one level down, po_* and the edges left pushed
-\\ round the JSR (D15); the last edge's child is walked here, a tail call,
-\\ so the depth grows only with portals nested along a line of sight. Past
-\\ the depth cap a child's columns are closed instead. A ring with no
-\\ closing column (rooted at a zero vertex) ends when its steps run out.
+\\ Walk visit A (spec 7.5): each edge of its cell from the one its cursor's
+\\ on, until an edge ends at or right of xr. A child through an earlier
+\\ edge is walked one level down, the visit, its edges left and the
+\\ pending count pushed round the JSR (D15), and the visit carries on from
+\\ its own column when it returns; the last edge's child is walked here, a
+\\ tail call, so the depth grows only with portals nested along a line of
+\\ sight. Past the depth cap a child's columns are closed instead. A ring
+\\ with no closing column (rooted at a zero vertex) ends when its steps
+\\ run out.
 .walk
 {
-    ZA_AUTO1 steps, last        ; local: the edges left; this one ends at or past xr
+    ZA_AUTO1 vi, steps, last    ; local: the visit; the edges left; this one ends at or past xr
     ZA_AUTO1 pend               ; local: the pending count at entry (this call's portals
-    LDA num_pend : STA pend     ; leave theirs above it)
-.portal
-    JSR seg_record
-    LDX po_cell
+    STA vi                      ; leave theirs above it)
+    LDA num_pend : STA pend
+.visit
+    LDA vi : JSR seg_record
+    LDY vi : LDX vs_cell,Y
     LDY c_num,X : INY : STY steps
 .edge
     LDA steps : BNE @+
     JMP issue                   ; the steps ran out
 .@  DEC steps
-    LDX po_cell
-    LDY cell_visit,X
-    LDA po_xr : JSR col_ge
+    LDY vi : LDA vs_xr,Y : JSR col_ge
     LDA #0 : ROL A : STA last
+    LDA vi : STA process_edge.vi
     JSR process_edge
-    LDA last : BEQ notlast
-    BCS @+
+    LDX last : BEQ notlast
+    TAX : BNE tail
     JMP issue                   ; the last edge, no child
-.@  JSR take                    ; the tail call
-    JMP portal
+.tail
+    STA vi                      ; the tail call
+    JMP visit
 .notlast
-    BCC advance
-    LDA depth : CMP #PT_MAX_DEPTH : BCS cap
-    LDA po_cell : PHA           ; descend
-    LDA po_x : PHA
-    LDA po_xr : PHA
-    LDA po_tcur : PHA
-    LDA po_bcur : PHA
-    LDA po_tmax : PHA
-    LDA po_bmin : PHA
+    TAX : BEQ advance
+    LDX depth : CPX #PT_MAX_DEPTH : BCS cap
+    TAX
+    LDA vi : PHA                ; descend
     LDA steps : PHA
     LDA pend : PHA
-    JSR take
     INC depth
-    JSR walk
+    TXA : JSR walk
     DEC depth
     PLA : STA pend
     PLA : STA steps
-    PLA : STA po_bmin
-    PLA : STA po_tmax
-    PLA : STA po_bcur
-    PLA : STA po_tcur
-    PLA : STA po_xr
-    PLA : STA po_x
-    PLA : STA po_cell
+    PLA : STA vi
 .advance
-    LDX po_cell
-    LDY cell_visit,X
+    LDY vi : LDX vs_cell,Y
     JSR visit_advance
     JMP edge
 .cap                            ; past the cap: the child's ceiling EOR floor, flat
-    LDX ch_cell
+    TAY
+    LDX vs_cell,Y
+    LDA vs_x,Y : STA close_columns.l
+    LDA vs_xr,Y : STA close_columns.rr
+    LDA vs_bcur,Y : PHA
     LDY c_ceil,X
     LDA shade_e,Y : STA close_columns.cbe
     LDA shade_o,Y : STA close_columns.cbo
     LDY c_floor,X
     LDA shade_e,Y : EOR close_columns.cbe : STA close_columns.cbe
     LDA shade_o,Y : EOR close_columns.cbo : STA close_columns.cbo
-    LDA ch_x : STA close_columns.l
-    LDA ch_xr : STA close_columns.rr
-    LDX ch_bcur : JSR close_columns
+    PLA : TAX
+    JSR close_columns
     JMP advance
 .issue                          ; every portal of this call pops here, the tail
     LDA pend                    ; call's innermost first
     JMP inst_issue
-
-\ The child portal in place of the portal.
-.take
-    LDA ch_cell : STA po_cell
-    LDA ch_x : STA po_x
-    LDA ch_xr : STA po_xr
-    LDA ch_tcur : STA po_tcur
-    LDA ch_bcur : STA po_bcur
-    LDA ch_tmax : STA po_tmax
-    LDA ch_bmin : STA po_bmin
-    RTS
 }
 
-\\ The frame's capture: the root bounds, then the walk from the root portal.
+\\ The frame's capture: the root bounds, then the walk from the root visit.
 \\ in: fr_camx, fr_camy, fr_angle, fr_cell. out: C set if a capacity
 \\ overflowed and the frame was dropped (D9).
 .capture
 {
     TSX : STX capsp
-    LDA #0                      ; no visits yet (cell_visit is in a junk row: the
-    LDX #MAP_NUM_CELLS - 1      ; last frame's plot has been through it)
+    LDA #0                      ; no visits yet (cell_visit shares its memory with the
+    LDX #MAP_NUM_CELLS - 1      ; sprite pass's state: the last frame's was there)
 .clear
     STA cell_visit,X
     DEX : BPL clear
@@ -789,21 +743,21 @@ ZA_AUTO1 capsp                  ; S inside capture, for an overflow to unwind to
     STA pool_last
     LDA #1 : STA num_visits : STA depth
     \ the root bounds: a plotted top, seeding the fill with the cell's
-    \ ceiling, and a dummy bottom off the screen
+    \ ceiling, and a dummy bottom off the screen, both on their rows' middles
     LDY c_ceil,X
-    POOL_NEW : STX po_tcur
+    POOL_NEW : STX vs_tcur + 1
     LDA shade_e,Y : STA p_ce,X
     LDA shade_o,Y : STA p_co,X
     LDA #0 : STA p_y0,X
     STA p_x0,X : STA p_glo,X : STA p_ghi,X : STA p_next,X
-    LDA #128 : STA p_x1,X
-    POOL_NEW : STX po_bcur
+    LDA #128 : STA p_x1,X : STA p_yf,X
+    POOL_NEW : STX vs_bcur + 1
     LDA #0 : STA p_ce,X : STA p_co,X
     STA p_x0,X : STA p_glo,X : STA p_ghi,X : STA p_next,X
-    LDA #128 : STA p_x1,X
+    LDA #128 : STA p_x1,X : STA p_yf,X
     LDA #PT_SCREEN_HEIGHT : STA p_y0,X
-    JSR root_portal
-    JSR walk
+    JSR root_visit
+    LDA #1 : JSR walk
     CLC
     RTS
 }

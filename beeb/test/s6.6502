@@ -18,11 +18,13 @@
 \ IRQ), into prof_buf from its start; prof_ptr ends past the last.
 \ Per pose, S6_REC bytes in s6_out:
 \
-\    0  a CRC-16 of the capture: the pieces 1..pool_last (x0 x1 y0 glo ghi
-\       ce co next each), the visits 1.. (cell k xr, v0, v1, inst,
-\       active[4]), the instances 1.. (sprite cx0 cx1 seg seg_tail prev
-\       next, scale, left and top in 24 bits), the order's head and tail,
-\       seg_next and the segments 1.., num_pend
+\    0  a CRC-16 of the capture: the pieces 1..pool_last (x0 x1 y0 yf glo
+\       ghi ce co next each), the visits 1.. (cell k x xr tcur bcur tmax
+\       bmin, v0, v1, inst, active[4]; a visit never entered, xr 0, has no
+\       cursor, columns, vertices or instance yet, and they count as 0),
+\       the instances 1.. (sprite cx0 cx1 seg seg_tail prev next, scale,
+\       left and top in 24 bits), the order's head and tail, seg_next and
+\       the segments 1.., num_pend
 \    2  a CRC-16 of the image
 \    4  pool_last
 \    5  num_visits
@@ -216,6 +218,7 @@ ENDIF
     LDA p_x0,Y : JSR s6_crc
     LDA p_x1,Y : JSR s6_crc
     LDA p_y0,Y : JSR s6_crc
+    LDA p_yf,Y : JSR s6_crc
     LDA p_glo,Y : JSR s6_crc
     LDA p_ghi,Y : JSR s6_crc
     LDA p_ce,Y : JSR s6_crc
@@ -227,14 +230,46 @@ ENDIF
 .visit
     CPY num_visits : BCC @+
     JMP visited                 ; (out of branch range)
-.@  FOR t = 0 ..< 10            ; cell k xr, v0, v1, inst: the tables in order,
-        LDA vs_cell + t * PT_MAX_VISITS,Y : JSR s6_crc   ; ten in each junk row
+.@  LDA vs_cell,Y : JSR s6_crc
+    LDA vs_xr,Y : BEQ fresh0
+    LDA vs_k,Y : JSR s6_crc
+    LDA vs_x,Y : JSR s6_crc
+    JMP walked
+.fresh0                         ; never entered: no cursor or columns yet
+    LDA #0 : JSR s6_crc
+    LDA #0 : JSR s6_crc
+.walked
+    LDA vs_xr,Y : JSR s6_crc
+    LDA vs_tcur,Y : JSR s6_crc
+    LDA vs_bcur,Y : JSR s6_crc
+    LDA vs_tmax,Y : JSR s6_crc
+    LDA vs_bmin,Y : JSR s6_crc
+    LDA vs_xr,Y : BEQ fresh1
+    LDA vs0_xl,Y : JSR s6_crc
+    LDA vs0_xh,Y : JSR s6_crc
+    LDA vs0_yl,Y : JSR s6_crc
+    LDA vs0_yh,Y : JSR s6_crc
+    LDA vs0_sx,Y : JSR s6_crc
+    LDA vs0_fl,Y : JSR s6_crc
+    LDA vs0_f,Y : JSR s6_crc
+    LDA vs0_e,Y : JSR s6_crc
+    LDA vs1_xl,Y : JSR s6_crc
+    LDA vs1_xh,Y : JSR s6_crc
+    LDA vs1_yl,Y : JSR s6_crc
+    LDA vs1_yh,Y : JSR s6_crc
+    LDA vs1_sx,Y : JSR s6_crc
+    LDA vs1_fl,Y : JSR s6_crc
+    LDA vs1_f,Y : JSR s6_crc
+    LDA vs1_e,Y : JSR s6_crc
+    LDA vs_inst,Y : JSR s6_crc
+    JMP acts
+.fresh1                         ; nor vertices, nor an instance
+    FOR i = 0 ..< 17
+        LDA #0 : JSR s6_crc
     NEXT
-    FOR t = 0 ..< 10
-        LDA vs0_e + t * PT_MAX_VISITS,Y : JSR s6_crc
-    NEXT
-    FOR s = 0 ..< 4
-        LDA vis_act + s * 24,Y : JSR s6_crc
+.acts
+    FOR s = 0 ..< PT_NUM_SLOTS
+        LDA vs_act + s * VISITS,Y : JSR s6_crc
     NEXT
     INY
     JMP visit

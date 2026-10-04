@@ -42,10 +42,10 @@ MEASURED = {
 
 # The cost model's guesses for what has no 6502 yet (host/trace_hooks.c).
 GUESSES = {
-    'transform': 90, 'piece_y': 25, 'line_y': 25, 'process_edge': 60, 'edge_work': 250,
-    'make_line': 120, 'near_clip': 250, 'line_reuse': 40, 'clip_open': 90, 'clip_forced': 120,
-    'clip_fast': 0, 'resolve_block': 300, 'crossing': 40, 'emit_extend': 60, 'emit_visible': 130,
-    'emit_merge': 140, 'pool_split': 90, 'cut': 70, 'child_portal': 160, 'walk_entry': 120,
+    'transform': 90, 'piece_y': 25, 'line_y': 25, 'line_step': 20, 'process_edge': 60, 'edge_work': 250,
+    'make_line': 120, 'near_clip': 250, 'line_reuse': 40, 'clip_line': 90, 'clip_fast': 0, 'flip': 120,
+    'crossing': 40, 'piece_extend': 60, 'piece_new': 130, 'merge': 120, 'twin': 90, 'chain_add': 60,
+    'pool_split': 90, 'enter': 160, 'walk_entry': 120,
     'spr_bytecols': 150, 'spr_rows_scanned': 11, 'spr_pixcols': 150, 'spr_paints': 120,
     'spr_puts': 45, 'spr_erases': 45,
 }

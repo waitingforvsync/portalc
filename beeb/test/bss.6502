@@ -47,15 +47,11 @@ ELIF SUITE == 4
 .s6_extra SKIP 5                    ; a diagnosis's zero-page counts: num_insts, the order, seg_next, num_pend
 ELSE
 
-\ checks S5 and S5u (s5.6502): a replayed call's context, line, arguments and results
+\ checks S5 and S5u (s5.6502): a replayed call's counts, camera, arguments and results
 .rp_pool SKIP 1                     ; pool_last
-.rp_cx SKIP 35
-.rp_line SKIP 7
-.rp_args SKIP 4
-.rp_out SKIP 2
-.rp_cam SKIP 9                      ; the record's CAM (for transform and the walk)
-.rp_nvis SKIP 6                     ; num_visits, num_insts, the order, seg_next, num_pend (the walk's)
-.rp_buf SKIP 40                     ; the arguments, as the record has them (make_line on)
-.rp_res SKIP 41                     ; the results, likewise
+.rp_cam SKIP 9                      ; the record's CAM
+.rp_nvis SKIP 6                     ; num_visits, num_insts, the order, seg_next, num_pend
+.rp_buf SKIP 40                     ; the arguments, as the record has them
+.rp_res SKIP 44                     ; the results, likewise
 .s5t_out SKIP 2 * S5T_MAX           ; check S5: each pose's CRC of its view vertices
 ENDIF

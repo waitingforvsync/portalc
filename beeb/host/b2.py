@@ -476,6 +476,7 @@ def phase3(trials=8, seed=3):
 
 CMD_S4 = 5
 S4_MAX = 64
+S4_POOL = ('p_x0', 'p_x1', 'p_y0', 'p_yf', 'p_glo', 'p_ghi', 'p_ce', 'p_co')   # a pool's fields, in order
 
 
 def s4_records(path):
@@ -486,7 +487,7 @@ def s4_records(path):
     i = 0
     while i < len(data):
         n = data[i]
-        end = i + 1 + 7 * n
+        end = i + 1 + len(S4_POOL) * n
         out.append((data[i:end], data[end] | data[end + 1] << 8, data[end + 2] | data[end + 3] << 8))
         i = end + 4
     return out
@@ -530,7 +531,7 @@ def s4_beeb(mb, syms, pools):
             # too big for io_area: its fields straight into the pool's pages, plotted in place
             batch = [pools[i]]
             n = batch[0][0]
-            for k, page in enumerate(('p_x0', 'p_x1', 'p_y0', 'p_glo', 'p_ghi', 'p_ce', 'p_co')):
+            for k, page in enumerate(S4_POOL):
                 poke(syms[page] + 1, batch[0][1 + k * n:1 + (k + 1) * n])
             err, _ = mb.call(CMD_S4, (0, n), timeout=300)
         if err:
@@ -544,7 +545,7 @@ def s4_beeb(mb, syms, pools):
 def s4_culprit(mb, syms, pool, which):
     """The first piece of a failing pool that fails on its own."""
     n = pool[0]
-    pieces = [bytes([1]) + bytes(pool[1 + k * n + p] for k in range(7)) for p in range(n)]
+    pieces = [bytes([1]) + bytes(pool[1 + k * n + p] for k in range(len(S4_POOL))) for p in range(n)]
     d = os.path.join(BUILD, 's4')
     with open(os.path.join(d, 'culprit_in.bin'), 'wb') as f:
         f.write(b''.join(pieces))
@@ -554,9 +555,10 @@ def s4_culprit(mb, syms, pool, which):
     got = s4_beeb(mb, syms, pieces)
     for p, ((_, ca, cb), (crc, _)) in enumerate(zip(want, got)):
         if crc != (ca if which == 0 else cb):
-            x0, x1, y0, glo, ghi, ce, co = pieces[p][1:]
+            x0, x1, y0, yf, glo, ghi, ce, co = pieces[p][1:]
             g = '%s%d.%03d' % ('-' if ghi & 0x80 else '+', ghi & 0x7F, glo * 1000 // 256)
-            return 'piece %d: x %d..%d, y0 %d, g %s, colour &%02X/&%02X' % (p + 1, x0, x1, y0, g, ce, co)
+            return 'piece %d: x %d..%d, y %d.%03d, g %s, colour &%02X/&%02X' % (
+                p + 1, x0, x1, y0, yf * 1000 // 256, g, ce, co)
     return 'no single piece fails on its own'
 
 
@@ -589,8 +591,8 @@ def phase4(builds=('harness_s34_0', 'harness_s34_1')):
     return ok
 
 
-S5U_FNS = ['cut', 'emit', 'resolve_block', 'clip_line', 'clip_edge_line', 'transform', 'col_gt',
-           'col_ge', 'make_line', 'edge_line']
+S5U_FNS = ['own_piece', 'chain_add', 'close_columns', 'run_end', 'merge', 'flip', 'hide', 'meet', 'clip_line',
+           'merge_above', 'transform', 'col_gt', 'col_ge', 'make_line', 'edge_line']
 
 
 CMD_S5T = 7
@@ -634,7 +636,7 @@ def s5_transform():
 
 
 CMD_S5M = 8
-S5M_REC = 25
+S5M_REC = 27
 
 
 def s5_make(count=50000, seed=1):
@@ -653,7 +655,7 @@ def s5_make(count=50000, seed=1):
     bad = []
     for i in range(0, len(recs), per):
         batch = recs[i:i + per]
-        poke(syms['io_area'], b''.join(r[:18] + bytes(7) for r in batch))
+        poke(syms['io_area'], b''.join(r[:18] + bytes(S5M_REC - 18) for r in batch))
         err, _ = mb.call(CMD_S5M, (len(batch),), timeout=300)
         if err:
             raise B2Error('S5 make_line: error %d' % err)
@@ -720,7 +722,7 @@ def s5u(fns, limit=None):
     return ok
 
 
-S6U_FNS = ['child_portal', 'next_open', 'close_columns', 'process_edge']
+S6U_FNS = ['visit_of', 'enter', 'process_edge']
 S7U_FNS = ['inst_new', 'seg_record', 'inst_issue']
 CMD_S6 = 9
 S6_MAX = 16
@@ -728,7 +730,7 @@ S6_REC = 16                             # the Beeb's record (test/s6.6502)
 S6_ORACLE = 14                          # the oracle's: the pose, the CRCs, pool_last, num_visits
 S6_SETS = (('harness_prof', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
            ('harness_prof1', 0, ['sweep_poses.bin', 'rim_poses.bin', 'search0_poses.bin']),
-           ('harness_prof_map7', 7, ['map7_poses.bin']),
+           ('harness_prof_map7', 7, ['map7_poses.bin', 'search7_poses.bin']),
            ('harness_prof_map9', 9, ['stress_poses.bin', 'search9_poses.bin']))
 S6_B = {'harness_prof1'}                # the builds whose image is buffer B's
 
@@ -763,25 +765,33 @@ def s6_beeb(mb, syms, poses, sprites=False, capture_only=False):
     return out
 
 
-S6_POOL = ['p_x0', 'p_x1', 'p_y0', 'p_glo', 'p_ghi', 'p_ce', 'p_co', 'p_next']
+S6_POOL = ['p_x0', 'p_x1', 'p_y0', 'p_yf', 'p_glo', 'p_ghi', 'p_ce', 'p_co', 'p_next']
 S6_INST = ['in_sprite', 'in_cx0', 'in_cx1', 'in_seg', 'in_segt', 'in_prev', 'in_next', 'in_scl', 'in_sch',
            'in_l0', 'in_l1', 'in_l2', 'in_t0', 'in_t1', 'in_t2']
+S6_VERT = ('xl', 'xh', 'yl', 'yh', 'sx', 'fl', 'f', 'e')
+S6_VTABLES = ['vs_cell', 'vs_k', 'vs_x', 'vs_xr', 'vs_tcur', 'vs_bcur', 'vs_tmax', 'vs_bmin'] \
+    + ['vs0_' + f for f in S6_VERT] + ['vs1_' + f for f in S6_VERT] + ['vs_inst']
+S6_UNSET = [1, 2] + list(range(8, 25))  # a visit never entered (xr 0) has none of these yet: they count as 0
 
 
 def s6_state(syms, pool_last, num_visits):
     """The capture the Beeb left (after a capture-only CMD_S6), as the oracle's
     s6_state lays it out."""
     pool = [peek(syms[p], 256) for p in S6_POOL]
-    tables = peek(syms['vs_cell'], 10 * 24) + peek(syms['vs0_e'], 10 * 24)
-    act = peek(syms['vis_act'], 4 * 24)
+    visits = syms['VISITS']
+    tables = [peek(syms[t], visits) for t in S6_VTABLES]
+    act = peek(syms['vs_act'], 4 * visits)
     num_insts, head, tail, seg_next, num_pend = peek(syms['s6_extra'], 5)
     insts = [peek(syms[f], 8) for f in S6_INST]
     out = bytearray()
     for i in range(1, pool_last + 1):
         out += bytes(page[i] for page in pool)
     for v in range(1, num_visits):
-        out += bytes(tables[t * 24 + v] for t in range(20))
-        out += bytes(act[s * 24 + v] for s in range(4))
+        rec = bytearray(t[v] for t in tables)
+        if rec[3] == 0:
+            for k in S6_UNSET:
+                rec[k] = 0
+        out += rec + bytes(act[s * visits + v] for s in range(4))
     for i in range(1, num_insts):
         out += bytes(f[i] for f in insts)
     out += bytes([head, tail, seg_next])
@@ -790,20 +800,19 @@ def s6_state(syms, pool_last, num_visits):
     return bytes(out)
 
 
-S6_PIECE = ['x0', 'x1', 'y0', 'glo', 'ghi', 'ce', 'co', 'next']
-S6_VISIT = ['cell', 'k', 'xr'] + ['v0.' + f for f in ('xl', 'xh', 'yl', 'yh', 'sx', 'flags', 'f', 'e')] \
-    + ['v1.' + f for f in ('xl', 'xh', 'yl', 'yh', 'sx', 'flags', 'f', 'e')] + ['inst'] \
-    + ['active%d' % s for s in range(4)]
+S6_PIECE = ['x0', 'x1', 'y0', 'yf', 'glo', 'ghi', 'ce', 'co', 'next']
+S6_VISIT = ['cell', 'k', 'x', 'xr', 'tcur', 'bcur', 'tmax', 'bmin'] + ['v0.' + f for f in S6_VERT] \
+    + ['v1.' + f for f in S6_VERT] + ['inst'] + ['active%d' % s for s in range(4)]
 
 
 def s6_where(i, pool_last, num_visits):
     """Name byte i of an s6_state layout."""
-    if i < 8 * pool_last:
-        return 'piece %d %s' % (i // 8 + 1, S6_PIECE[i % 8])
-    i -= 8 * pool_last
-    if i < 24 * (num_visits - 1):
-        return 'visit %d %s' % (i // 24 + 1, S6_VISIT[i % 24])
-    i -= 24 * (num_visits - 1)
+    if i < len(S6_PIECE) * pool_last:
+        return 'piece %d %s' % (i // len(S6_PIECE) + 1, S6_PIECE[i % len(S6_PIECE)])
+    i -= len(S6_PIECE) * pool_last
+    if i < len(S6_VISIT) * (num_visits - 1):
+        return 'visit %d %s' % (i // len(S6_VISIT) + 1, S6_VISIT[i % len(S6_VISIT)])
+    i -= len(S6_VISIT) * (num_visits - 1)
     return 'byte %d of the sprite state (instances, order, segments, pending)' % i
 
 
@@ -912,20 +921,24 @@ def s6_abort():
 
 
 def s6_synth():
-    """close_columns on synthetic chains (beebtool synthclose): the splits at l
-    and rr no golden pose reaches."""
+    """close_columns and run_end on synthetic chains (beebtool synthclose):
+    the splits at l and rr, and the closing of a later open run, that no
+    golden pose reaches."""
     import replay
     boot(os.path.join(BUILD, 'harness0.ssd'))
     syms = symbols('harness0')
     mb = Mailbox()
-    path = os.path.join(BUILD, 'golden', 'replay', 'close_columns_synth.bin')
-    n, bad = replay.check(sys.modules[__name__], mb, syms, path, None, None, 0)
-    if bad:
-        print('FAIL   S5u close_columns, synthetic: %d of %d records differ; first, record %d: %s'
-              % (len(bad), n, bad[0][0], bad[0][1]))
-    else:
-        print('ok     S5u close_columns, synthetic: %d records' % n)
-    return not bad
+    ok = True
+    for name, what in (('close_columns_synth.bin', 'close_columns'), ('run_end_synth.bin', 'run_end')):
+        path = os.path.join(BUILD, 'golden', 'replay', name)
+        n, bad = replay.check(sys.modules[__name__], mb, syms, path, None, None, 0)
+        if bad:
+            ok = False
+            print('FAIL   S5u %s, synthetic: %d of %d records differ; first, record %d: %s'
+                  % (what, len(bad), n, bad[0][0], bad[0][1]))
+        else:
+            print('ok     S5u %s, synthetic: %d records' % (what, n))
+    return ok
 
 
 def phase7(what='all'):

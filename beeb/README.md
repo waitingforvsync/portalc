@@ -51,12 +51,12 @@ speed and no audio; `host/b2up.sh` starts it and records its pid in
 | `src/hw.6502` | the vsync IRQ with the buffer swap, the clock, palette |
 | `src/mode5.6502` | the buffers: the cursor macros, each buffer's clear and EOR fill |
 | `src/plot.6502` | the plotters: flat, shallow (the carry tree) and steep, over the pool |
-| `src/clip.6502` | pieces and chains, and the clip group: `emit`, `resolve_block`, `clip_line`, `clip_edge_line`, `cut` |
+| `src/clip.6502` | rows, pieces and the bounds they make, and the clip: `own_piece`, `chain_add`, `merge`, `flip`, `hide`, `meet`, `clip_line`, `merge_above` |
 | `src/lines.6502` | `transform`, the column tests, the side clips, `make_line` and `edge_line` |
-| `src/walk.6502` | the capture walk: visits, `child_portal`, `process_edge`, the root, `walk` and `capture` |
+| `src/walk.6502` | the capture walk: visits (`visit_of`, `enter`), `process_edge`, the root, `walk` and `capture` |
 | `src/sprites.6502` | sprite instances, clip segments, the draw order and the sprite pass |
 | `src/spare.6502` | six of the pool's pages, in the spare |
-| `src/scratch.6502` | the capture's own state, in the junk rows |
+| `src/scratch.6502` | the capture's own state: the visits' tables and `p_next` in the junk rows, the rest over the sprite pass's state |
 | `src/arith.6502` | the fixed-point arithmetic: quarter-square multiplies, reciprocal divisions, projections, rotation |
 | `src/main.6502` | `start` and the main loop |
 | `test/mailbox.6502` | the host's commands (test builds) |

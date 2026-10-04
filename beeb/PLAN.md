@@ -41,12 +41,12 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | D6 | Phase 1 | Are the generated `beeb/data/*.6502` files committed? | No. They are generated in the build and `beeb/data/` goes in `.gitignore`. |
 | D7 | Any time | The Baron guide's relocation example (`docs/guide.md:262`) copies with `,X` where it needs `,Y`. Fix it in the baron repo? | Your call. It is out of scope here. |
 | D8 | Phase 9 | How the tick count N is sampled. Measured between completed swaps, as you specified, N lags by two swap intervals (§4.2). Measured as vsyncs between main-loop tops, it lags by one interval. Both add up exactly to elapsed time. | Between swaps, as specified. |
-| D9 | Phase 6 | What the release build does when a capacity limit overflows (pool, segments, toggles, pending, closed). The C panics at these points, so there is no reference. | Abort the frame: restore S, clear `cell_visit`, skip the swap so the previous frame stays on screen, and count the abort. Test builds TRAP instead. |
+| D9 | Phase 6 | What the release build does when a capacity limit overflows (pool, segments, toggles, pending; the visits, sized to the map's cells, can't). The C panics at these points, so there is no reference. | Abort the frame: restore S, clear `cell_visit`, skip the swap so the previous frame stays on screen, and count the abort. Test builds TRAP instead. |
 | D10 | End of Phase 1 | Ported lines that no golden input reaches, even after the pose search and the stress map. Accept them as verified by code review only, or build more stress inputs? | *Settled by Rich:* dead code is not ported. The rest is listed with reasons in `host/uncovered.txt`. |
 | D11 | Phase 2 | Should the JOURNAL's Python 6502 interpreter be used alongside b2 to get exact cycle counts per routine? | No. Batch timing comes from T2 on b2; exact per-routine cycles, when wanted, from jsbeeb-mcp (§5.10). |
-| D13 | Phases 6-7 | *Rich's idea, Phases 3-4:* the junk rows (&5700, &6800 and &6F00, 768 bytes) double as scratch. Only the plotters write them, so they hold anything whose lifetime doesn't cross the plot: the visits (24 fields of 24 bytes, three rows' worth), `cell_visit`, pending and the clip scratch, about 730 bytes. Test builds zero them between capture and plot, so whole-frame checks still compare the overruns. The spare &6900-&6EFF (1.5K) is never written by anything but us, so it takes what does cross the plot: six of the pool's eight pages (each field page stands alone). BSS below the screens then needs about 1.35K (two pool pages, instances 480, segments 256, toggles 96), and `BSS_BASE` can rise from &4E00 to about &5100, about 768 bytes more for code. | Placed in Phase 7 (§2.1): `BSS_BASE` &5100. |
+| D13 | Phases 6-7 | *Rich's idea, Phases 3-4:* the junk rows (&5700, &6800 and &6F00, 768 bytes) double as scratch. Only the plotters write them, so they hold anything whose lifetime doesn't cross the plot: the visits (24 fields of 24 bytes, three rows' worth), `cell_visit`, pending and the clip scratch, about 730 bytes. Test builds zero them between capture and plot, so whole-frame checks still compare the overruns. The spare &6900-&6EFF (1.5K) is never written by anything but us, so it takes what does cross the plot: six of the pool's eight pages (each field page stands alone). BSS below the screens then needs about 1.35K (two pool pages, instances 480, segments 256, toggles 96), and `BSS_BASE` can rise from &4E00 to about &5100, about 768 bytes more for code. *The clip rework (2026-10-04):* the visits grew to 29 tables, sized by the map's cell count (28: a visit a cell at most, so they can't overflow), and the pool to nine pages (`p_yf`). Only the capture reads `p_next` now (the sprite pass reads segments), so it takes the junk row above B and `p_yf` its BSS page; 18 visit tables fill A's junk rows. *Rich:* data used one after the other can share. The other 11 tables, `cell_visit`, pending and two capture-only instance tables are the spill, which shares its bytes with the sprite pass's own state, born after the plot (a section of its own at the same addresses). | Placed in Phase 7 (§2.1): `BSS_BASE` &5100, kept there by the overlap. |
 | D14 | Phase 4 | *Settled by Rich:* `scrnbase` (`ZA_AUTO`, a page) is the buffer being drawn. Clear, plot and fill work on it (clear and fill by picking their unrolled body; plot through `AT`). The main loop sets `swapreq`; the IRQ writes R12 = `scrnbase` DIV 8, turns `scrnbase` to the other buffer and clears `swapreq`. | Done. Open for Phase 9: Rich's loop posts the swap and waits for it straight away; waiting just before the render instead lets camera and capture (which never touch a buffer) overlap the wait, about 13% more frames a second on the goldens (JOURNAL.md, Phase 4). |
-| D15 | Phase 6 | *Settled by Rich, Phase 5:* the walk saves its 9 per-level bytes on the hardware stack, `LDA : PHA` before the recursive `JSR` and `PLA : STA` after, not in depth-indexed arrays. The spike's case for the arrays was the hardware stack's depth, but page 1 holds both either way, so the total is the same (about 195 bytes at depth 16); pushes are about 20 cycles a descent cheaper, and simpler. | Pushes. Done in Phase 6: 8 bytes until Phase 7's pending count makes 9; S6's stress map, at the cap, never takes the stack below &153. |
+| D15 | Phase 6 | *Settled by Rich, Phase 5:* the walk saves its 9 per-level bytes on the hardware stack, `LDA : PHA` before the recursive `JSR` and `PLA : STA` after, not in depth-indexed arrays. The spike's case for the arrays was the hardware stack's depth, but page 1 holds both either way, so the total is the same (about 195 bytes at depth 16); pushes are about 20 cycles a descent cheaper, and simpler. | Pushes. Done in Phase 6: 8 bytes until Phase 7's pending count makes 9. Since the clip rework (2026-10-04) the visit holds the portal, so a level pushes 3: the visit, its edges left and the pending count. |
 | D12 | Phase 2 | *Settled by Rich:* the arithmetic primitives (`mulu8` through `mul_recip16`, and the accumulator shifts) are macros, expanded inline on the caller's variables. The composites stay routines. This costs about 410 bytes over routines (2,241 against 1,831). | Macros, named after their C functions. |
 
 **Process.** Each phase ends with a JOURNAL.md entry. The spec is updated on the schedule in §7. Nothing is committed until you have reviewed it.
@@ -61,7 +61,7 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 |---|---|---|
 | &00-&FB | 252 | Zero page: `ZA_POOL &00..&FB`, the same in every build. Estimated use is about 100 bytes. |
 | &FC-&FF | 4 | Reserved. The ROM IRQ entry saves A in &FC. The ROM's BRK path writes the BRK address+1 into &FD/&FE before doing anything else, so a crash dump always shows it. &FF is the OS Escape flag. |
-| &100-&1FF | 256 | Hardware stack, the walk's saves included (D15): at depth 16, 9 bytes a level pushed round the recursive `JSR` plus its 2-byte return (176), a seven-call leaf chain (about 16, from the Phase 1 spike) and the IRQ's 3: about 195. S6 runs a canary from &100 to just under its own stack: the stress map's frames reach &153, so &100-&152 is never touched. |
+| &100-&1FF | 256 | Hardware stack, the walk's saves included (D15): at depth 16, 3 bytes a level pushed round the recursive `JSR` plus its 2-byte return (80), a seven-call leaf chain (about 16, from the Phase 1 spike) and the IRQ's 3: about 100. S6 runs a canary from &100 to just under its own stack and reports the lowest byte written. |
 | &200-&203 | 4 | Kept. BRKV (&202) points at our `trap` in every build. |
 | &204-&205 | 2 | IRQ1V, pointing at `irq`. |
 | &206-&27D | 120 | Scratch block 1: camera tick `cur_y` lo/hi (64) and `cands` (32). |
@@ -74,12 +74,12 @@ Rich accepted every default below (D3 is resolved by a C fix, D4 is his design w
 | &D00-&DFF | 256 | `nrm`. Entry 0 is never read, so it holds **&40 = RTI**: the ROM's NMI vector jumps straight to &0D00, which makes it a free NMI handler. |
 | &E00-&EFF | 256 | `sbyte` |
 | &F00-&50FF | 16,896 | Code, map, art, shades, masks, IRQ, keyboard tables. `Code guard = BSS_BASE`. |
-| &5100-&56FF | 1536 | BSS, what crosses the plot (D13, Phase 7): the pool's `p_co` and `p_next` pages, the segment pool (256), the instances (27 tables of 8), their row edges (7 × 33), the sprite pass's toggles (3 × 32), `aborts`: 1,312 bytes |
-| &5700-&57FF | 256 | Junk row above A. Capture's scratch (D13): ten of the visits' twenty tables |
+| &5100-&56FF | 1536 | BSS (D13): what crosses the plot, the pool's `p_co` and `p_yf` pages, the segment pool (256), the capture's instance tables (13 of 8) and `aborts`, 873 bytes; then the overlap, 519 bytes: the sprite pass's own state (12 instance tables, their row edges, 7 × 33, the art's 7 tables, the toggles, 4 × 34), or before the plot the capture's spill (the visits' other 11 tables, `cell_visit`, the pending stack, `in_segt`, `in_prev`) |
+| &5700-&57FF | 256 | Junk row above A. Capture's scratch (D13): nine of the visits' 29 tables |
 | &5800-&67FF | 4096 | **Buffer A.** R12 = &0B, R13 = &00. |
-| &6800-&68FF | 256 | Junk row below A. Capture's scratch: the other ten visit tables |
+| &6800-&68FF | 256 | Junk row below A. Capture's scratch: the active pieces' four tables and five more |
 | &6900-&6EFF | 1536 | Spare: never plotted, filled, cleared or shown. Six of the pool's eight pages (D13) |
-| &6F00-&6FFF | 256 | Junk row above B. Capture's scratch: `cell_visit`, the pending stack, the active pieces, the closed list (169 bytes) |
+| &6F00-&6FFF | 256 | Junk row above B. Capture's scratch: the pool's `p_next` page |
 | &7000-&7FFF | 4096 | **Buffer B.** R12 = &0E, R13 = &00. The displayed MA stays below &1000, so the hardware wrap latch plays no part. |
 | &8000-&80FF | 256 | B's junk row below: the paged ROM, so stores go nowhere (D2) |
 
@@ -213,7 +213,7 @@ The tool runs `pt_arith_init`, `pt_scene_init` and `end_map`, so twins, `angle` 
   - edges `e_v0`/`e_adj`/`e_twin`/`e_colour`/`e_angle`/`e_len8`;
   - sprites `s_x`/`s_y`/`s_size` (lo and hi) and `s_art`.
 - **`map7.6502`:** the same map with `add_test_sprites` (D1). Selected with `-D MAP=7`.
-- **`stress.6502`:** a deep corridor of at least 18 thin cells in one line of sight, with its own start pose. It is built with the existing map builder and must pass `pt_map_validate`. It exists to reach the depth cap (16), `close_columns` and `closed_add` with no engine change. Selected with `-D MAP=S`.
+- **`stress.6502`:** a deep corridor of at least 18 thin cells in one line of sight, with its own start pose. It is built with the existing map builder and must pass `pt_map_validate`. It exists to reach the depth cap (16) and `close_columns` with no engine change. Selected with `-D MAP=S`.
 - **`art.6502`, `shades.6502`, `sine.6502`:** `sin_` uses `lround(sin)`, so it is exported, never recomputed.
 - **`consts.6502`:**
   - radius, speeds, `PT_CAM_HEIGHT`, `PT_SPRITE_NEAR`;
@@ -360,11 +360,11 @@ These numbers are replaced at the fps go/no-go point at the end of Phase 4 (§5.
 
 ### 4.4 Capacity overflow
 
-- **One macro, `OVERFLOW n`** (clip.6502), at every C `RC_PANIC`: the pool (2), the closed list (3), the visits (5), and Phase 7's.
+- **One macro, `OVERFLOW n`** (clip.6502), at every C `RC_PANIC`: the pool (2), and Phase 7's segments (8) and pending stack (9). The visits' tables have a visit a cell, so they can't overflow.
 - **Test builds:** it stops with the code, as `TRAP n` does, unless a check has set `ovf_abort`, when it takes the release's way. `TRAP n` (test builds only) stands at the `RC_ASSERT`s whose failure would make the frame meaningless.
 - **Release build** (D9):
   - `capture` saves S with `TSX : STX capsp`.
-  - On overflow (`capture_abort`): `LDX capsp : TXS`, clear `cell_visit` for the visits made so far, `INC aborts`, and return from `capture` with C set. The caller skips the rest of the frame and the swap.
+  - On overflow (`capture_abort`): `LDX capsp : TXS`, `INC aborts`, and return from `capture` with C set. The caller skips the rest of the frame and the swap. (`capture` zeroes `cell_visit` at its start, so nothing needs clearing.)
   - The same applies to overflows in the sprite pass. The half-drawn back buffer is cleared next frame.
 
 ---
@@ -435,16 +435,15 @@ These numbers are replaced at the fps go/no-go point at the end of Phase 4 (§5.
 
 ### 5.6 Unit replay (clip group and walk internals)
 
-- **Targets:** `clip_line`, `resolve_block`, `emit`, `clip_edge_line`, `cut`, `child_portal`, `next_open`, `close_columns`, `process_edge`, `seg_record`, `inst_new` and `inst_issue`.
+- **Targets:** the clip's `own_piece`, `chain_add`, `close_columns`, `run_end`, `merge`, `flip`, `hide`, `meet`, `clip_line` and `merge_above`; the walk's `visit_of`, `enter` and `process_edge`; the lines' `make_line`, `edge_line`, `transform`, `col_gt` and `col_ge`; the sprites' `inst_new`, `seg_record` and `inst_issue`.
 - **Recording.** Across the golden poses, the oracle's wrappers record each call's arguments and its before-state and after-state:
-  - `pool[1..pool_num)` and `pool_num`;
-  - the `pt_clip` fields and cursors (tp, bp, bp_set);
-  - the chain builders and the closed list;
-  - the visit record;
+  - `pool[0..pool_num)` and `pool_num`;
+  - the `pt_clip`, the line's row cursor included;
+  - the visits, which hold the portals and the bounds they're walked with;
   - the segments and instances.
 - **Sampling.** Records are capped per function, keeping every call that reaches a new line.
 - **Replay.** A Beeb shim pokes the before-state into the BSS layout, calls the routine, and the host diffs the after-state.
-- The record format is in `REPLAY.md`. `make record` writes about 3,100 records (the first 64 calls of each function, every call that runs a new basic block, every 1024th call, at most 2,000 per function), then replays each on the host: every record must reproduce itself, which proves it holds everything the function reads.
+- The record format is in `REPLAY.md`. `make record` writes about 5,000 records (the first 64 calls of each function, every call that runs a new basic block, every 1024th call, at most 2,000 per function), then replays each on the host: every record must reproduce itself, which proves it holds everything the function reads.
 
 ### 5.7 Checks
 
@@ -514,7 +513,7 @@ Effort is in focused working days. Phase 8 can start any time after Phase 2.
 | **3. Mode 5** | Cursor macros, clearA/B, fillA/B | S3 on both buffers; fill about 37k and clear about 21k cycles | 1-2 |
 | **4. Plotters** | Steep, the shallow trees, flat, end bytes, `plot` with `pool_last` | S4 on both buffers. **fps go/no-go (§5.9).** | 3-4 |
 | **5. Vertices, lines, clip** | Pool and chain helpers, `transform`, `col_*`, side clips, `rel_h`/`make_line` (near-clip branch included), `edge_line`, the clip group | S5, S5u. Budget checkpoint. | 6-8 |
-| **6. Walk and capture** | Visits, `child_portal`, `next_open`, `close_columns`, `process_edge`, roots, walk (save stack, tail `JMP`), frame driver, overflow handling (D9) | S5u (walk functions), S6 on the demo and stress maps. **First whole frames byte-exact with sprites off.** | 4-6 |
+| **6. Walk and capture** | Visits (`visit_of`, `enter`), `process_edge`, roots, walk (save stack, tail `JMP`), frame driver, overflow handling (D9) | S5u (walk functions), S6 on the demo and stress maps. **First whole frames byte-exact with sprites off.** | 4-6 |
 | **7. Sprites** | `inst_new` (24-bit, flooring `>>8`), `seg_record`, `inst_issue`, `sprite_pass` | S5u (sprite functions), S7 including `map7`. Budget checkpoint; `BSS_BASE` finalised. | 5-7 |
 | **8. Camera** | C first: `pt_camera_step(c, m, input, n)` (the accumulation, then the existing tick body), with `pt_camera_tick` = n of 1 so nothing else changes. Then `camera.6502` (u24 position, page-2 scratch). | S8 over 84,000 steps with n in 1..12, plus cycles per step | 3-5 |
 | **9. Integration** | Release main loop, keyboard, clamp, Esc power-on exit, the `SCRIPTED` ring, `PROFILE` | S9, the profile report, a manual play test (including Esc and BREAK) | 3-4 |

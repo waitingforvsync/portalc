@@ -6,10 +6,11 @@
 \
 \ CMD_S4 plots arg0 pools (up to S4_MAX) that the host has packed into
 \ io_area, each as a piece count n and then the pool's fields, n bytes
-\ each, in the order p_x0, p_x1, p_y0, p_glo, p_ghi, p_ce, p_co. For each,
-\ it zeroes the image (the buffer under test and its junk rows; B's junk
-\ row below is ROM, so not that), plots, and leaves the image's CRC-16 and
-\ the plot's microseconds in s4_out, 4 bytes a pool. With arg0 0, the one
+\ each, in the order p_x0, p_x1, p_y0, p_yf, p_glo, p_ghi, p_ce, p_co. For
+\ each, it zeroes the image (the buffer under test and its junk rows; B's
+\ junk row below is ROM, so not that), plots, and leaves the image's
+\ CRC-16 and the plot's microseconds in s4_out, 4 bytes a pool. With arg0
+\ 0, the one
 \ pool is already in the pool's pages (too big for io_area), and arg1 is
 \ its pool_last.
 
@@ -55,6 +56,7 @@ ENDMACRO
 .@  FIELD p_x0
     FIELD p_x1
     FIELD p_y0
+    FIELD p_yf
     FIELD p_glo
     FIELD p_ghi
     FIELD p_ce

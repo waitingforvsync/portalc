@@ -246,21 +246,22 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     RTS
 }
 
-\\ On entering portal po_* of a cell with a sprite: record the bound
+\\ On entering visit A's portal, of a cell with a sprite: record the bound
 \\ pieces over the columns the portal and the sprite share, while the
-\\ chains are whole (the visit's own edges cut them, and its children
-\\ relink their pieces, but a piece never changes its line). The instance
-\\ waits on the pending stack, issued when this walk call pops.
+\\ chains are whole (the visit's own edges split them, but a piece never
+\\ changes its line). The instance waits on the pending stack, issued when
+\\ this walk call pops.
 .seg_record
 {
-    ZA_AUTO1 ii, at             ; local: the instance, its new segment
-    LDX po_cell : LDY cell_visit,X
-    LDA vs_inst,Y : BEQ done
-    STA ii : TAX
-    LDA po_x : CMP in_cx0,X : BCS @+    ; [s0, s1): the portal's columns and the sprite's
+    ZA_AUTO1 vi, ii, at         ; local: the visit, its instance, the new segment
+    TAY : STY vi
+    LDA vs_inst,Y : BNE @+
+    RTS                         ; no sprite
+.@  STA ii : TAX
+    LDA vs_x,Y : CMP in_cx0,X : BCS @+  ; [s0, s1): the portal's columns and the sprite's
     LDA in_cx0,X
 .@  STA seg_pieces.s0
-    LDA po_xr : CMP in_cx1,X : BCC @+
+    LDA vs_xr,Y : CMP in_cx1,X : BCC @+
     LDA in_cx1,X
 .@  STA seg_pieces.s1
     CMP seg_pieces.s0 : BEQ done : BCC done
@@ -272,9 +273,9 @@ ZA_AUTO2 spr_pal, spr_data      ; an instance's art: its palette, and its encode
     LDA seg_pieces.s0 : STA segs + SEG_X0,Y
     LDA seg_pieces.s1 : STA segs + SEG_X1,Y
     LDA #0 : STA segs + SEG_NEXT,Y
-    LDX po_tcur : JSR seg_pieces
+    LDY vi : LDX vs_tcur,Y : JSR seg_pieces
     LDY at : STA segs + SEG_NT,Y
-    LDX po_bcur : JSR seg_pieces
+    LDY vi : LDX vs_bcur,Y : JSR seg_pieces
     LDY at : STA segs + SEG_NB,Y
     LDX ii
     LDY in_segt,X : BEQ first   ; the instance's segments, in x order

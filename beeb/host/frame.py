@@ -34,7 +34,6 @@ BUILD = os.path.join(HERE, '..', 'build')
 TOOL = os.path.join(HERE, '..', '..', 'build', 'beeb', 'host', 'portalc_beebtool')
 SENT = 0xFFF0                       # the stages return here: nothing else does
 STAGES = ('clear', 'capture', 'plot', 'sprite_pass', 'fill')
-ST_OPEN = 3                         # clip.6502's statuses
 
 
 def build_name(mp):
@@ -134,17 +133,17 @@ class Machine:
 
 # capture's routines, by job
 JOBS = (
-    ('clipping against the bounds', {'clip_line', 'clip_edge_line', 'resolve_block', 'emit', 'cut', 'pool_split',
-                                     'chain_extents', 'chain_append', 'crossing', 'grad_diff', 'div_cols', 'piece_at',
-                                     'closed_add', 'next_open', 'close_columns'}),
-    ('row evaluations (row_step, piece_y, line_y)', {'row_step', 'piece_y', 'line_y'}),
+    ('clipping against the bounds', {'clip_line', 'hide', 'meet', 'flip', 'merge', 'merge_above', 'visible',
+                                     'own_piece', 'chain_add', 'close_columns', 'run_end', 'pool_split', 'piece_at',
+                                     'crossing', 'grad_diff', 'div_cols'}),
+    ('row evaluations (row_step, piece_y, line_at)', {'row_step', 'piece_y', 'line_at'}),
     ('making lines (side clips, projections, gradients)',
      {'make_line', 'edge_line', 'project_rowd', 'row_from', 'project_col', 'project_col_q8', 'grad_mag', 'gradq8_mag',
       'div_t', 'div_q8', 'lerp16', 'clip_right', 'clip_left', 'ep_unclipped', 'ep_recip', 'ep_depth', 'set_h',
       'col_gt', 'col_ge', 'col_behind'}),
     ('vertex transforms', {'rot', 'transform', 'tf_vertex', 'tf_edge', 'vs_set1', 'vs_shift', 'vs_next1'}),
-    ('the walk (process_edge, visits, children, roots)', {'process_edge', 'walk', 'child_portal', 'visit_new',
-                                                          'visit_advance', 'root_portal', 'root_exact', 'muls16',
+    ('the walk (process_edge, visits, children, roots)', {'process_edge', 'walk', 'enter', 'visit_of',
+                                                          'visit_advance', 'root_visit', 'root_exact', 'muls16',
                                                           'capture'}),
     ('sprites (inst_new, seg_record, inst_issue)', {'inst_new', 'seg_record', 'seg_pieces', 'inst_issue', 'project_q8',
                                                     'inst_art'}),
@@ -181,12 +180,12 @@ class Trace:
         self.evals, self.evcyc = collections.Counter(), collections.Counter()
         self.fast = collections.Counter()
         self.emits = collections.Counter()
-        self.hooks = {s['walk.portal']: self.portal, s['tf_vertex']: lambda: self.tf.append(mc.cpu.x),
-                      s['visit_new']: lambda: self.visits.append(mc.cpu.x), s['process_edge']: self.edge,
-                      s['make_line']: self.line, s['piece_y']: self.row, s['line_y']: self.row,
-                      s['pool_split']: self.split, s['emit.fresh']: self.fresh,
-                      s['emit.grow']: lambda: self.emits.update(['grown']), s['clip_line']: self.clip,
-                      s['clip_line.place']: self.missed}
+        self.hooks = {s['walk.visit']: self.portal, s['tf_vertex']: lambda: self.tf.append(mc.cpu.x),
+                      s['visit_of']: self.visit, s['process_edge']: self.edge,
+                      s['make_line']: self.line, s['piece_y']: self.row, s['line_at']: self.row,
+                      s['pool_split']: self.split, s['own_piece.new']: self.fresh,
+                      s['own_piece.grow']: lambda: self.emits.update(['grown']), s['clip_line']: self.clip,
+                      s['clip_line.run']: self.missed, s['merge.open']: self.twin}
         mc.pose(x, y, cell, angle)
         self.tot = {}
         for st in STAGES:
@@ -252,29 +251,37 @@ class Trace:
         return ((self.x - ax - t * dx) ** 2 + (self.y - ay - t * dy) ** 2) ** 0.5
 
     def portal(self):
-        n = dict(cell=self.b('po_cell'), x=self.b('po_x'), xr=self.b('po_xr'), self=0, kids=[], dist=0)
+        vi = self.b('walk.vi')
+        n = dict(cell=self.b('vs_cell', vi), x=self.b('vs_x', vi), xr=self.b('vs_xr', vi), self=0, kids=[], dist=0)
         if self.cur is not None:
-            cell = self.cur['cell']
-            v = self.b('cell_visit', cell)
-            n['dist'] = self.dist(*self.edge_verts(cell, self.b('vs_k', v)))
+            n['dist'] = self.dist(*self.edge_verts(self.cur['cell'], self.b('vs_k', self.cur['vi'])))
             self.cur['kids'].append(n)
+        n['vi'] = vi
         self.nodes.append(n)
         self.cur = self.node = n
 
+    def visit(self):
+        if self.b('cell_visit', self.mc.cpu.x) == 0:
+            self.visits.append(self.mc.cpu.x)
+
     def edge(self):
-        cell = self.b('po_cell')
-        self.edges.append((cell, self.b('vs_k', self.b('cell_visit', cell))))
+        vi = self.b('process_edge.vi')
+        self.edges.append((self.b('vs_cell', vi), self.b('vs_k', vi)))
 
     def line(self):
-        cell = self.b('po_cell')
-        self.lines[(cell, self.b('vs_k', self.b('cell_visit', cell)), self.b('h_m'), self.b('h_below'))] += 1
+        vi = self.b('el_vis')
+        self.lines[(self.b('vs_cell', vi), self.b('vs_k', vi), self.b('h_m'), self.b('h_below'))] += 1
 
     def row(self):
         cpu = self.mc.cpu
         if cpu.pc == self.s['piece_y']:
             who, x0, x1 = 'piece', self.b('p_x0', cpu.x), self.b('p_x1', cpu.x)
         else:
+            if cpu.a + 1 == self.b('cx_lc'):
+                return                          # in hand: no evaluation at all
             who, x0, x1 = 'line', self.b('l_x0'), self.b('l_x1')
+            if cpu.a == self.b('cx_lc') and x0 < cpu.a < x1:
+                who = 'line step'               # one on from the row in hand: an add
         where = 'at x0' if cpu.a == x0 else 'at x1-1' if cpu.a == x1 - 1 else 'inside'
         tag = (who, where, self.caller())
         self.evals[tag] += 1
@@ -282,39 +289,38 @@ class Trace:
 
     def split(self):
         how = self.caller()
-        if how.startswith('cut'):
-            how += ', a soft edge' if self.b('e_colour', self.b('process_edge.ei')) == 0 else ', a drawn edge'
-        elif not (self.b('l_ce') | self.b('l_co')):
+        if not (self.b('l_ce') | self.b('l_co')):
             how += ', a colour-0 line'
         self.origin[self.b('pool_last') + 1] = ('split by ' + how,)
 
+    def twin(self):
+        if self.b('cx_shut') != 3:
+            self.origin[self.b('pool_last') + 1] = ('twin of a bound piece',)
+
     def fresh(self):
-        act = self.b('vis_act', self.b('cx_act'))
+        act = self.b('vs_act', self.b('cx_act'))
         if act == 0:
             why = 'no active piece'
-        elif self.b('p_x1', act) != self.b('emit.r0'):
+        elif self.b('p_x1', act) != self.b('rg_r0'):
             why = 'active piece ends elsewhere'
-        elif (self.b('p_glo', act), self.b('p_ghi', act)) != (self.b('l_g'), self.b('l_g', 1)):
-            why = 'gradient differs'
-        elif (self.b('p_ce', act), self.b('p_co', act)) != (self.b('l_ce'), self.b('l_co')):
-            why = 'colour differs'
+        elif (self.b('p_ce', act), self.b('p_co', act)) != (self.b('own_piece.ce'), self.b('own_piece.co')):
+            why = 'colour differs (visible or hidden)'
         else:
-            why = 'another piece is the chain tail'
+            why = 'a bound line, visible after hidden or back'
         self.origin[self.b('pool_last') + 1] = ('new line piece: ' + why,)
         self.emits['fresh, ' + why] += 1
 
     def clip(self):
-        self.fast['open' if self.b('clip_line.st') == ST_OPEN else 'known side'] += 1
+        self.fast['clips'] += 1
 
     def missed(self):
-        if self.b('clip_line.st') == ST_OPEN:
-            self.fast['open, fast path missed'] += 1
+        self.fast['runs'] += 1
 
     # ---- the report ----
     def pieces(self):
         P = {}
         for i in range(1, self.b('pool_last') + 1):
-            P[i] = dict(x0=self.b('p_x0', i), x1=self.b('p_x1', i), y0=self.b('p_y0', i),
+            P[i] = dict(x0=self.b('p_x0', i), x1=self.b('p_x1', i), y0=self.b('p_y0', i), yf=self.b('p_yf', i),
                         g=self.b('p_glo', i) | self.b('p_ghi', i) << 8, ce=self.b('p_ce', i), co=self.b('p_co', i))
         return P
 
@@ -361,7 +367,7 @@ class Trace:
         p('Edges processed: %d, %d distinct' % (len(self.edges), len(ec)))
         p('Lines projected: %d, %d distinct (cell, edge, height)' % (sum(self.lines.values()), len(self.lines)))
         p('Line clips: %s' % dict(self.fast))
-        p('Visible emits: %s' % dict(self.emits))
+        p('Own pieces: %s' % dict(self.emits))
 
         p('\nPortal tree: cell, columns, the entry edge\'s distance; own and subtree cycles')
 
@@ -386,14 +392,13 @@ class Trace:
 
         def row_at(q, c):
             gm = q['g'] & 0x7FFF
-            y = q['y0'] * 256 + 128 + (-gm if q['g'] & 0x8000 else gm) * (c - q['x0'])
-            return min(64, max(0, y >> 8))
+            return q['y0'] * 256 + q['yf'] + (-gm if q['g'] & 0x8000 else gm) * (c - q['x0'])
 
         same = collections.Counter()
         for i, a in P.items():
             for j, c in P.items():
                 if (c['x0'] == a['x1'] and c['g'] == a['g'] and (c['ce'], c['co']) == (a['ce'], a['co'])
-                        and row_at(a, c['x0']) == c['y0']):
+                        and row_at(a, c['x0']) == c['y0'] * 256 + c['yf']):
                     same[(self.origin.get(j, ('?',))[0], 'plotted' if j in plotted else 'colour 0')] += 1
         p('  same line and colour as the piece just left of it, made by:')
         for (how, pl), n in same.most_common():

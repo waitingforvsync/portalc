@@ -97,6 +97,11 @@ static inline uint8_t pt_map_twin(const pt_map *m, uint8_t e)
 // stepped pit.
 void pt_scene_init(pt_map *m);
 
+// Build the stress map: a squat corridor into a tall, deep room whose far
+// side opens on three little cells, for the paths the demo scene never
+// takes (the Beeb port's map 9).
+void pt_stress_scene_init(pt_map *m);
+
 // Check every structural invariant (twins, convexity, winding, soft-edge
 // attribute equality, collision data, sprites within their cells); trips an
 // assert on failure in debug, returns false in release.

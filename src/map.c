@@ -597,3 +597,130 @@ void pt_scene_init(pt_map *m)
 
     end_map(&b);
 }
+
+// ---- the stress map ----
+//
+// For the paths the demo scene never takes (beeb/PLAN.md 3.4, 5.5). A squat
+// corridor of 17 soft-joined cells runs up +x into a tall, deep room Q,
+// whose far side is three portals to little cells R1..R3 (x up the page,
+// y right, as the demo scene):
+//
+//   +            +------------+           +
+//   | R1  \      |    R3      |     / R2  |     R1 behind a-b, R3 behind
+//   |            b------------c           |     b-c, R2 behind c-d
+//   |         /                 \         |
+//   |     /           Q             \     |
+//   |  /                               \  |
+//   a                                     d
+//   +-------------------------------------+
+//   |              corridor               |     cells 16..0, 0 the wedge
+//
+// - From corridor cell 0 a line of sight crosses more portals than
+//   PT_MAX_DEPTH: the depth cap closes the rest.
+// - R1's floor, 48 above the corridor's eye, hides behind the corridor's
+//   lintel (32 above) where a-b is close enough behind it: closed columns
+//   from the floor line, at a-b's near end, the left.
+// - R2's ceiling, 160 below the eye, hides under the corridor's floor edge
+//   (80 below) the same way: closed columns from the ceiling line, at c-d's
+//   near end, the right.
+// - R3 is a slot 8 units tall: far off, a sliver for rounding to pinch.
+// - The corridor's near end is a wedge (65 degrees at the tip), where the
+//   camera's slide wedges and the move is blocked.
+// - An obelisk in Q, taller than the corridor's lintel lets through, and a
+//   one-unit one down the corridor, too small to scale from far off.
+//
+// Built with the same builder as the demo scene, so it passes
+// pt_map_validate like it.
+
+#define STRESS_X0 256
+#define STRESS_Y0 1024
+#define STRESS_LEN 48
+#define STRESS_WIDTH 192
+#define STRESS_CELLS 17
+
+void pt_stress_scene_init(pt_map *m)
+{
+    builder b = begin_map(m);
+    uint8_t lv[STRESS_CELLS + 1];
+    uint8_t rv[STRESS_CELLS + 1];
+    for (uint32_t i = 0; i <= STRESS_CELLS; i++) {
+        uint16_t x = (uint16_t)(STRESS_X0 + i * STRESS_LEN);
+        lv[i] = add_vert(&b, x, STRESS_Y0);
+        rv[i] = add_vert(&b, x, STRESS_Y0 + STRESS_WIDTH);
+    }
+    uint16_t xq = STRESS_X0 + STRESS_CELLS * STRESS_LEN;    // the room's near wall
+    uint8_t qa = add_vert(&b, xq + 24, STRESS_Y0);
+    uint8_t qb = add_vert(&b, xq + 120, STRESS_Y0 + 64);
+    uint8_t qc = add_vert(&b, xq + 120, STRESS_Y0 + 128);
+    uint8_t qd = add_vert(&b, xq + 24, STRESS_Y0 + STRESS_WIDTH);
+    uint8_t r1 = add_vert(&b, xq + 168, STRESS_Y0);
+    uint8_t r3l = add_vert(&b, xq + 168, STRESS_Y0 + 64);
+    uint8_t r3r = add_vert(&b, xq + 168, STRESS_Y0 + 128);
+    uint8_t r2 = add_vert(&b, xq + 168, STRESS_Y0 + STRESS_WIDTH);
+    uint8_t tip = add_vert(&b, STRESS_X0 - 150, STRESS_Y0 + STRESS_WIDTH / 2);
+
+    static const char *const obelisk_rows[] = {
+        "0110", "0110", "1221", "1221", "1221", "1221", "1221", "1221",
+        "1221", "1221", "1221", "1221", "1221", "1221", "1221", "1221",
+        "1331", "1331", "1331", "1331", "1331", "1331", "1331", "1331",
+        "1331", "1331", "1331", "1331", "1331", "1331", "3333", "3333",
+        NULL,
+    };
+    static const uint8_t obelisk_pal[7] = {PT_SH_KKKK, PT_SH_BBRR, PT_SH_RRGG, PT_SH_KKKK,
+                                           PT_SH_KKKK, PT_SH_KKKK, PT_SH_KKKK};
+    uint8_t obelisk = add_art(&b, obelisk_rows, obelisk_pal);
+
+    uint8_t wall_l = PT_EDGE_COLOUR(PT_SH_BBRR);
+    uint8_t wall_r = PT_EDGE_COLOUR(PT_SH_KBBB);
+    uint8_t lit = PT_EDGE_COLOUR(PT_SH_RRGG);
+    uint8_t dim = PT_EDGE_COLOUR(PT_SH_KKBB);
+
+    // the corridor: floor 480, eye 400, ceiling 368; clockwise from above:
+    // far left, far right, near right, near left
+    for (uint32_t i = 0; i < STRESS_CELLS; i++) {
+        begin_cell(&b, 480, 368, PT_SH_KRRR, PT_SH_KKKB);
+        if (i == 14)
+            add_sprite(&b, (uint16_t)(STRESS_X0 + 14 * STRESS_LEN + STRESS_LEN / 2),
+                       STRESS_Y0 + STRESS_WIDTH / 2, 1, obelisk);
+        add_edge(&b, lv[i + 1], i + 1 < STRESS_CELLS ? PT_EDGE_SOFT : lit);
+        add_edge(&b, rv[i + 1], wall_r);
+        if (i == 0) {
+            add_edge(&b, rv[0], wall_r);    // the wedge
+            add_edge(&b, tip, wall_l);
+        } else {
+            add_edge(&b, rv[i], PT_EDGE_SOFT);
+        }
+        add_edge(&b, lv[i], wall_l);
+    }
+
+    // Q: a lofty ceiling, a deep floor
+    begin_cell(&b, 600, 336, PT_SH_KKGG, PT_SH_KKKB);
+    add_sprite(&b, xq + 60, STRESS_Y0 + STRESS_WIDTH / 2, 256, obelisk);
+    add_edge(&b, lv[STRESS_CELLS], wall_l);
+    add_edge(&b, qa, lit);    // to R1
+    add_edge(&b, qb, dim);    // to R3
+    add_edge(&b, qc, lit);    // to R2
+    add_edge(&b, qd, wall_r);
+    add_edge(&b, rv[STRESS_CELLS], dim);    // back to the corridor
+
+    // R1: a high shelf, 16 tall, floor 48 above the corridor's eye
+    begin_cell(&b, 352, 336, PT_SH_RRRR, PT_SH_KKKB);
+    add_edge(&b, qa, wall_l);
+    add_edge(&b, r1, wall_r);
+    add_edge(&b, qb, dim);
+
+    // R3: a slot 8 tall, just above the corridor's eye
+    begin_cell(&b, 392, 384, PT_SH_BBBB, PT_SH_KKKB);
+    add_edge(&b, qb, wall_l);
+    add_edge(&b, r3l, lit);
+    add_edge(&b, r3r, wall_r);
+    add_edge(&b, qc, dim);
+
+    // R2: a crawlspace in the pit, its ceiling 160 below the corridor's eye
+    begin_cell(&b, 600, 560, PT_SH_KKGG, PT_SH_RRRR);
+    add_edge(&b, qc, wall_l);
+    add_edge(&b, r2, wall_r);
+    add_edge(&b, qd, dim);
+
+    end_map(&b);
+}

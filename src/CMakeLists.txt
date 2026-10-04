@@ -44,15 +44,19 @@ if(NOT MSVC)
     target_compile_options(portalc_dump PRIVATE -Wall -Wextra)
 endif()
 
-# ---- verification tools: byte-exact sweep dumps and the map dump ----
+# ---- verification tools: byte-exact sweep dumps, the map dump, and the
+# comparison against a floating-point ray cast ----
 
-foreach(tool sweep fb2ppm mapdump)
+foreach(tool sweep fb2ppm mapdump refcmp)
     add_executable(portalc_${tool} tools/${tool}.c)
     target_link_libraries(portalc_${tool} PRIVATE portal)
     if(NOT MSVC)
         target_compile_options(portalc_${tool} PRIVATE -Wall -Wextra)
     endif()
 endforeach()
+if(NOT MSVC)
+    target_link_libraries(portalc_refcmp PRIVATE m)
+endif()
 
 # ---- tests ----
 

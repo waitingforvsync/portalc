@@ -21,6 +21,16 @@
                               // recursion, which keeps only a visit index)
 #define PT_MAX_VISITS PT_MAX_CELLS    // distinct cells one frame may visit; entry 0 is null
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
+#define PT_MAX_RECS 128       // runs plotted in a frame, for the unplotter
+
+// A plotted run, as the unplotter wants it: columns [x0, x1) from the row at
+// x0 (u8.8, the rounding half in), stepping by g (plot.h's gradient). Six
+// bytes; on the 6502, six arrays, a field each.
+typedef struct pt_rec {
+    uint8_t x0, x1;
+    uint16_t y;
+    uint16_t g;
+} pt_rec;
 
 // A height as an edge's lines see it.
 typedef struct pt_height {
@@ -63,9 +73,13 @@ typedef struct pt_visit {
 
 typedef struct pt_render {
     const pt_map *map;
-    uint8_t fbmem[PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD];    // the back buffer, with the
-                                                               // junk rows either side
-    uint8_t *fb;             // the back buffer proper, within fbmem
+    uint8_t fb[PT_FB_BYTES];    // the frame: the back buffer, every byte of it
+                                // written by the fill
+    uint8_t tmem[PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD];    // the toggle buffer, T,
+                                // with a junk character row either side for
+                                // the plotters' overruns
+    uint8_t *tb;                // T proper, within tmem: all zero between frames
+                                // (its junk rows aside: never read)
 
     // camera for the frame being rendered
     uint8_t eye_z;           // in 8-unit z steps, like the cell heights
@@ -88,6 +102,13 @@ typedef struct pt_render {
     uint8_t cell_visit[PT_MAX_CELLS];    // each cell's visit record, 0 = none
     uint8_t depth_high;              // deepest walk nesting across frames, for stats
 
+    // the frame's plotted runs, for the unplotter, and each byte column's
+    // last toggled row + 1, for the fill
+    pt_rec recs[PT_MAX_RECS];
+    uint8_t num_recs;
+    uint8_t recs_high;               // high-water mark across frames, for stats
+    uint8_t lastp1[PT_SCREEN_WIDTH / 4];
+
     bool sprites;                    // draw sprites (none yet: phase 5)
 } pt_render;
 
@@ -96,7 +117,8 @@ void pt_render_init(pt_render *r, const pt_map *m, pt_vcache *vc);
 
 // Render one frame into r->fb from the camera: the vertex cache looks from
 // its eye, and cell is the one the cache's angles put it in, as the
-// camera's tick left them. Clear, capture walk, fill.
+// camera's tick left them. The capture walk toggles lines into T, the fill
+// takes T into the frame, and the unplotter clears T again.
 void pt_render_view(pt_render *r, uint8_t angle, uint8_t cell);
 
 // Render one frame from a bare pose (the tools' and tests'): the vertex

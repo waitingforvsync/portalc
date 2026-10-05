@@ -53,4 +53,12 @@ void pt_plot_steep(uint8_t *fb, const pt_run *p, pt_pattern pat);
 // A flat run on one row, over [x0, x1).
 void pt_plot_flat(uint8_t *fb, uint8_t x0, uint8_t x1, uint8_t row, pt_pattern pat);
 
+// The unplotters: zero every byte a run toggled, whole, on both scanlines,
+// stepping it as the plotters did, with no masks. A shallow run goes a byte
+// at a time, its rows in each from the fraction's carries.
+void pt_unplot_shallow(uint8_t *fb, const pt_run *p);
+
+// A steep run: a row a column, a byte every fourth.
+void pt_unplot_steep(uint8_t *fb, const pt_run *p);
+
 #endif

@@ -33,9 +33,6 @@ static inline uint16_t pt_mode5_offset(uint8_t bytecol, uint8_t scanline)
     return (uint16_t)(((scanline & 0xF8u) << 5) + ((unsigned)bytecol << 3) + (scanline & 7u));
 }
 
-// Clear the whole buffer to zero.
-void pt_mode5_clear(uint8_t *fb);
-
 // A screen position as the 6502 addresses it, for EOR (blk),Y : STA (blk),Y:
 // a character block's address in zero page and the scanline within it in Y.
 // A canvas row is the scanline pair Y, Y + 1 with Y even (so the odd one is
@@ -115,11 +112,28 @@ static inline void pt_mode5_right(pt_mode5_cur *c, uint8_t *mask)
     }
 }
 
+// Zero a canvas row's two scanlines in the byte at the cursor, whole: the
+// unplotter's store, no read and no mask.
+//   LDA #0 : STA (c),Y : INY : STA (c),Y
+static inline void pt_mode5_zero(uint8_t *fb, pt_mode5_cur c)
+{
+    int16_t a = (int16_t)(c.blk + c.y);
+    RC_ASSERT(a >= -PT_FB_GUARD && a < PT_FB_BYTES + PT_FB_GUARD - 1);
+    fb[a] = 0;
+    fb[a + 1] = 0;
+}
+
 // EOR-plot one pixel pair, pixel column col, canvas row row (as pt_mode5_at).
 void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat);
 
-// The EOR vertical fill: even-scanline pass then odd-scanline pass.
-void pt_mode5_fill(uint8_t *fb);
+// The EOR vertical fill, from the toggle buffer t into the screen s, which
+// it writes every byte of: down each byte column, its even scanlines from
+// start.e and its odd from start.o, each byte the EOR of everything toggled
+// above and in it. Under a column's last toggled row (lastp1, the row after
+// it: 1..64, or 65 for the junk row, the same as 64) nothing more is
+// toggled, and the rest of the column is stored as it is.
+void pt_mode5_fill(uint8_t *s, const uint8_t *t, pt_pattern start,
+                   const uint8_t lastp1[PT_SCREEN_WIDTH / 4]);
 
 // Expand the filled buffer to 128x128 RGBA8 (R first in memory) for display.
 void pt_mode5_to_rgba(const uint8_t *fb, uint8_t *rgba);

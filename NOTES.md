@@ -26,8 +26,10 @@ tried and kept or tried and dropped.
 - **A structural pass, done (awaiting commit).** One vertex cache, the
   app's, shared by the camera and the renderer; the plotters in `plot.c`;
   the old spec gone. Pixels unchanged.
-- **Next, phase 4.** The toggle buffer, and clearing it from the clips'
-  records.
+- **Phase 4, done (awaiting commit).** The toggle buffer, T: the fill
+  from T into the frame, stopping its EORs at each column's last toggle,
+  and the unplotter clearing T from the frame's records. Pixels unchanged.
+- **Next, phase 5.** Sprites after the fill.
 
 The phases are at the end.
 
@@ -1131,63 +1133,183 @@ wait was worth half a vsync a frame on `main` (3.36 vsyncs a frame down to
 2.85). A separate toggle buffer, T, keeps it:
 
 1. capture plots into T while the swap is pending;
-2. the fill reads T and writes the back buffer (`EOR T,X : STA S,X`, 9
-   cycles a byte, as now), writing every byte, so the screens never need
-   clearing;
-3. T is cleared;
+2. the fill reads T and writes the back buffer, S, every byte of it, so
+   the screens never need clearing;
+3. the unplotter clears T from the frame's records;
 4. sprites go into the back buffer;
 5. swap.
 
 T in screen layout keeps the plotters' addressing and the fill as they
 are. Only T needs junk rows for plot overruns: the screens only get the
 fill (rows 0 to 63 exactly) and clipped sprites. So buffer B can sit right
-up against &8000 without its overruns landing in the code bank.
+up against &8000 without its overruns landing in the code bank. In the C,
+`pt_render` has `tb`, T within its junk rows, and `fb`, the frame.
 
 On a 65C12 the fill could clear T as it goes with `STZ T,X`: 14 cycles a
 byte against 14.3 for fill then clear. NMOS only, so no.
 
-### Clearing T from the lines
+### Records
 
-A full clear is 21.8k. Not storing pieces seemed to rule out clearing only
-the bytes the lines touched, but a small record per clipped line is
-enough: x0, x1, the row at x0 (8.8) and the gradient, 6 bytes.
+Every run plotted is recorded: x0, x1, the row at x0 (8.8) and the
+gradient, 6 bytes, six arrays a field each on the 6502. That's 11.7 a frame
+on map 0's random poses, 57 at most (13.8 and 60 on map 9), against room
+for 128.
 
-Why that covers everything: a hidden toggle lands on its bound's row, and
-a bound's row in a column is always where some bound-forming line was
-visible there, or the ceiling strip's row 0, or the junk row 64. So zeroing
-every recorded line's own rows over its columns, plus row 0, clears every
-toggle, hidden ones included. The junk rows are never read, so they never
-need clearing.
+They have to cover every toggle in T, for the unplotter. A hidden toggle
+lands on its bound's row, and a bound's row in a column is where some
+bound-forming line was visible there, or row 0, or the junk row. So
+zeroing every recorded run's rows, plus row 0, clears it all. The catch is
+the word visible. A bound line can have no colour (a step between two
+floors of one shade makes one), and then plots nothing, but it's still the
+child's bound, and other lines' hidden toggles land on its rows. So the
+record is made before the colour check: every run, plotted or not. The
+first measurement hooked in after it, and missed toggles in 0.14% of
+columns (1.2% on map 9). The debug build now checks T is all zero after
+every frame's unplotter.
 
-The zeroing is plain `STA (blk),Y` with A = 0 on both scanlines of each row
-a line touches in a byte column: no read, no mask, about 33 cycles a byte
-column a line. About 4k on the typical frame and 9k on the heavy one.
+### The unplotter
+
+After the fill, each record is stepped again as the plotter stepped it,
+and every byte it toggled is zeroed whole, both scanlines: no read, no
+mask. Then row 0, whole, for the lines running off the top, whose flat
+runs there aren't recorded. The junk rows are never read, so never
+cleared.
+
+With no masks, all a byte needs to know is which rows it has. A shallow
+run is split as the plotter splits it: whole bytes four columns at once,
+the partial bytes at its ends a column at a time.
+
+A whole byte's rows are its first column's and one more for each carry
+over the three steps to its last: the high byte of f + 3g, k, so k + 1
+rows. Add g once more to that sum's low byte and it's the next byte's
+first column, and the carry says if that's a row further down. On the
+6502, with f in A and the carry clear:
+
+```
+    ADC #g3 : TAX : LDA #0 : BCS more   ; C: a row more than 3g's high byte
+    STA (c),Y : INY : STA (c),Y         ; each row, INY : CPY #8 between
+    DEY : LDA c : ADC #8 : STA c        ; on a byte
+    TXA : ADC #g : BCC on : DOWN        ; C: the next byte a row down
+```
+
+About 48 cycles a byte and 20 a row more, in one of three loops picked by
+3g's high byte (0 to 2), with 3g and g patched in: about 40 a run, so
+only a run with a whole byte pays it.
+
+A partial byte zeroes the row it's on, then adds g a column at a time,
+`ADC #g : BCS row`, 4 cycles a column, zeroing again on each carry. DOWN's
+`CPY #8` leaves the carry clear for the next add. A flat run is its bytes
+along one row, no adds at all.
+
+Either way alone does worse. All bytes by f + 3g pays 40 a run, and map
+9's runs are short, about 3 bytes. All bytes a column at a time breaks out
+at every carry to swap f out of A and back, 35 a row more. Split, it's
+100 to 230 cycles a frame better than either.
+
+A steep run is a row a column, and the cursor steps as the plotter's does,
+gi rows and the fraction's carry, but with no mask: every fourth column
+it just moves on a byte. About 30 cycles a column, and 8 a row moved.
+
+On map 0 that's 43.3 whole bytes a frame, 13.6 partial ones, 24 rows more
+within them, and 3.8 steep columns (steep runs are rare). With each run's
+setup and row 0, about 4.8k a frame, 15.6k at worst; 3.7k on map 9, 9.8k
+at worst. My first guess was 2.4k. I'd costed a byte at 30 cycles, and
+the fraction's arithmetic alone is half that.
+
+**Would a clear ever be cheaper?** It only has to clear the rows above
+each column's last toggle, as T is already zero below them: a block of
+stores laid out bottom up, entered at that row, no patch. About 10 cycles
+a row and 50 a column: 12.1k a frame on map 0, 8.3k on map 9. The
+unplotter costs more in no frame of 20,000 on either map. Picking the
+cheaper each frame would save nothing, and the picking costs something
+every frame. Not done. The full clear, 21.8k, it never gets near.
+
+All of this is costed from sketches of the 6502 code, not measured.
 
 ### Filling only where it changes
 
-Below a byte column's last toggle the fill's value never changes again,
-so there the fill is a store, `STA S,X`, 5 cycles, not 9. Start each
-column's pass from the camera cell's ceiling pattern instead of 0, with
-no strip plotted, and above a column's first toggle it's a store too.
-Measured over map 0's random poses, 49.1% of the screen's bytes are below
-their column's last toggle and 11.5% above its first; on map 9, 67.8% and
-16.9%. At 4 cycles a byte that's about 10k a frame on map 0, and the
-strip's 64 EORs go as well.
+Under a byte column's last toggled row the fill's value never changes
+again, so there the fill is a store, 5 cycles, not 9. And with the camera
+cell's ceiling colour as each column's starting value, no ceiling strip is
+plotted at all. On map 0 48.7% of the screen is just stored, 67.4% on map
+9.
 
-It needs each byte column's first and last toggled row. Each plotted run
-can update them with its rows' extremes over its byte columns. That's
-conservative (the fill just EORs a little more), about 10 cycles a byte
-column a run, perhaps 1.2k a frame. The fill is unrolled down a column,
-so it goes into the EOR stretch and out to the store stretch by jumping
-in at the right rows. For phase 4.
+**Each byte column's last toggled row** comes from the records as they're
+made, a byte at a time. A line's rows only run one way, so a byte's
+lowest is its last column's on a falling line and its first's on a rising
+one. With g, 2g, 3g and 4g made once a run, a byte is a 16-bit add, then,
+the row in A:
+
+```
+    CMP lastp1,X : BCC no : ADC #0 : STA lastp1,X    ; C set: the row + 1
+```
+
+About 30 cycles a byte column, 1.8k a frame. A byte whose lowest row is
+the junk row gets 65, which the fill takes as 64: one more entry in its
+tables, and no check here. That's as good as the exact
+last rows read off T (48.8%); taking each run's lowest row for all its
+byte columns would be half the work but leave 3 points of the screen to
+EOR. Row 0 always EORs (`lastp1` starts at 1), as lines running off the
+top toggle it unrecorded. The debug build checks the fill finds nothing
+toggled under a column's last row.
+
+**The fill.** T and S share the layout, a byte column's block at column *
+8 in each 256-byte character row, so one unrolled block serves both passes:
+
+```
+.body
+    EOR T + r * 256 + k, X : STA S + r * 256 + k, X    ; rows 0..63
+    RTS
+```
+
+X is the column's block for the even scanlines and one on for the odd
+(abs,X never leaves its page). A column leaves it after its last toggled
+row by an `RTS` patched over the next row's `EOR` opcode (`&5D` to `&60`
+and back): one byte, for both passes. It goes on into a block of stores
+alone, entered at that row:
+
+```
+.tailblock
+    STA S + r * 256 + k, X                             ; rows 0..63
+    RTS
+```
+
+A column, from tables by the row (the exit's address, the tail's entry;
+65 the same as 64):
+
+```
+    LDY lastp1,X
+    LDA exitlo,Y : STA patch+1 : STA unpatch+1
+    LDA exithi,Y : STA patch+2 : STA unpatch+2
+    LDA taillo,Y : STA tail+1 : LDA tailhi,Y : STA tail+2
+    LDA #&60
+.patch   STA &FFFF                 ; RTS over the next row's EOR
+    LDA start_e : JSR body : JSR tail
+    INX
+    LDA start_o : JSR body : JSR tail
+    DEX
+    LDA #&5D
+.unpatch STA &FFFF                 ; the EOR back
+    ...
+.tail    JMP &FFFF
+```
+
+About 140 cycles a column on top, about 4.5k a frame, for 4 cycles on each
+byte stored alone, 8k on map 0 and 11k on map 9. Each S buffer has its own
+blocks and tables, about 0.9 KB each, in the code bank. The details are
+for the port.
+
+The top of a column, above its first toggle, is constant too (11.5% of
+the screen on map 0), and a block of stores laid out bottom up could store
+it with no patch. But entering the EOR block part way down costs a jump a
+pass, for perhaps 0.6k a frame. Not done.
 
 ### All together
 
-Very roughly, for the typical frame: fill 37k, clear 4k, capture and plot
-about 25 to 30k. Around 70k, 1.75 vsyncs, against 118.6k now. The heavy
-frame comes down from 289k to perhaps 180k before the sprite change. All
-estimates, from inner loops on paper; the C prototype and then the 6502
-will say.
+Fill and clear, as estimated for the 6502: the fill about 33.4k (36.9k,
+less 8k stored alone, plus 4.5k of exits), the unplotter about 4.8k, and
+the bookkeeping and records about 2.5k. About 41k, against `main`'s 58.7k
+for its clear and fill: 18k a frame.
 
 ## Sprites after the fill
 
@@ -1328,8 +1450,9 @@ have nothing wrong, against 6,210.
    clips, with the fast path, runs and the screen's edge; closing. (b) The
    lines from the logs, ends off the view by Doom's clipper, the near clip
    in screen space.
-4. **Fill and clear.** A record per clip, T into the back buffer, then T
-   cleared from the records.
+4. **Fill and clear.** Done: T; a record per plotted run, colourless bound
+   lines too; the fill from T into the frame, from the ceiling's colour,
+   its EORs stopping at each column's last toggled row; the unplotter.
 5. **Sprites.** After the fill, spritescale's pixels exactly, clipped by
    the saved rows.
 6. **Measure and write up.** Against `main`, then the journal. The old spec

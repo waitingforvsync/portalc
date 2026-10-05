@@ -237,7 +237,48 @@ static pt_line make_line(const pt_end *e0, const pt_end *e1, int16_t ldc, pt_hei
 static void toggle(pt_render *r, uint8_t c, uint8_t row, pt_pattern col)
 {
     if ((col.e | col.o) != 0)
-        pt_mode5_plot(r->fb, c, row, col);
+        pt_mode5_plot(r->tb, c, row, col);
+}
+
+// Record a run about to be plotted, for the unplotter to clear T from
+// after the fill: a bound line's even with no colour, plotting nothing,
+// since other lines' hidden toggles land on its rows (a step between two
+// floors of one shade makes one). Hidden runs and the closing toggles land
+// on bound rows, which are recorded runs' rows; or on row 0, which is
+// cleared whole; or in the junk rows, never read. So the records cover
+// every toggle.
+//
+// A record also brings its byte columns' last toggled rows down for the
+// fill, a byte at a time. A line's rows only run one way, so a byte's
+// lowest is its last column's on a falling line and its first's on a
+// rising one: n - 1 steps on from the byte's first column, or none, where
+// the run has n columns in it, and the next byte's first column is n steps
+// on. The 6502 holds g, 2g, 3g and 4g (a shift and an add each), so a byte
+// is a 16-bit add, and then, the row in A,
+//   CMP lastp1,X : BCC no : ADC #0 : STA lastp1,X    ; C set: the row + 1
+// about 30 cycles a byte column. The junk row gives 65, which the fill
+// takes as 64.
+static void record(pt_render *r, uint8_t x0, uint8_t x1, uint16_t y, uint16_t g)
+{
+    RC_PANIC(r->num_recs < PT_MAX_RECS);
+    r->recs[r->num_recs++] = (pt_rec) {.x0 = x0, .x1 = x1, .y = y, .g = g};
+    uint16_t gm = pt_g_mag(g);
+    bool up = pt_g_isneg(g) != 0;
+    for (uint8_t c = x0;;) {
+        uint8_t n = (uint8_t)(4u - (c & 3u));
+        if (n > (uint8_t)(x1 - c))
+            n = (uint8_t)(x1 - c);
+        uint16_t dl = pt_u16((int32_t)(n - 1u) * gm);    // to the byte's last column
+        uint8_t row = row_of(up ? y : pt_u16((int32_t)y + dl));
+        uint8_t bc = (uint8_t)(c >> 2);
+        if (row >= r->lastp1[bc])
+            r->lastp1[bc] = pt_u8((int32_t)row + 1);
+        c = (uint8_t)(c + n);
+        if (c == x1)
+            break;
+        uint16_t d = pt_u16((int32_t)n * gm);    // to the next byte's first
+        y = up ? pt_u16((int32_t)y - d) : pt_u16((int32_t)y + d);
+    }
 }
 
 // Plot columns [x0, x1) of a line, wholly visible there, from its row y at
@@ -245,14 +286,15 @@ static void toggle(pt_render *r, uint8_t c, uint8_t row, pt_pattern col)
 // steep.
 static void plot_run(pt_render *r, const pt_line *L, uint8_t x0, uint8_t x1, uint16_t y)
 {
+    record(r, x0, x1, y, L->g);
     pt_pattern pat = {.e = L->ce, .o = L->co};
     if ((pat.e | pat.o) == 0)
         return;
     pt_run p = {.x0 = x0, .x1 = x1, .y0 = (uint8_t)(y >> 8), .yf = (uint8_t)y, .g = L->g};
     if (pt_g_mag(L->g) < 0x100)
-        pt_plot_shallow(r->fb, &p, pat);
+        pt_plot_shallow(r->tb, &p, pat);
     else
-        pt_plot_steep(r->fb, &p, pat);
+        pt_plot_steep(r->tb, &p, pat);
 }
 
 
@@ -314,7 +356,7 @@ typedef struct pt_hrun {
 static void hrun_end(pt_render *r, pt_hrun *h, uint8_t x1)
 {
     if (h->x0 != 0xFF && h->row < PT_SCREEN_HEIGHT && (h->pat.e | h->pat.o) != 0)
-        pt_plot_flat(r->fb, h->x0, x1, h->row, h->pat);
+        pt_plot_flat(r->tb, h->x0, x1, h->row, h->pat);
     h->x0 = 0xFF;
 }
 
@@ -330,7 +372,7 @@ static void hrun_add(pt_render *r, pt_hrun *h, uint8_t c, uint8_t row, pt_patter
 static void flat_top(pt_render *r, uint8_t x0, uint8_t x1, pt_pattern pat)
 {
     if (x0 < x1 && (pat.e | pat.o) != 0)
-        pt_plot_flat(r->fb, x0, x1, 0, pat);
+        pt_plot_flat(r->tb, x0, x1, 0, pat);
 }
 
 // The part of [xa, xb) the screen's pre-clip left a line, [*l, *rr): empty
@@ -1029,6 +1071,34 @@ static void walk(pt_render *r, uint8_t vi, uint8_t depth)
     }
 }
 
+// ---- the unplotter ----
+
+// After the fill, clear T from the records: each run stepped again as the
+// plotter stepped it, and every byte it toggled zeroed whole, both
+// scanlines, with no read and no mask: a shallow run a byte at a time, a
+// steep one a row a column (plot.c). Then row 0, whole, which lines running
+// off the top toggle in flat runs that aren't recorded: a flat run's
+// unplotting, 32 bytes. Clearing T instead, even just above each column's
+// last toggle, would cost more in all but a handful of frames (NOTES.md).
+static void unplot(pt_render *r)
+{
+    for (uint8_t i = 0; i < r->num_recs; i++) {
+        const pt_rec *q = &r->recs[i];
+        pt_run p = {.x0 = q->x0, .x1 = q->x1, .y0 = (uint8_t)(q->y >> 8), .yf = (uint8_t)q->y,
+                    .g = q->g};
+        if (pt_g_mag(q->g) < 0x100)
+            pt_unplot_shallow(r->tb, &p);
+        else
+            pt_unplot_steep(r->tb, &p);
+    }
+    pt_run row0 = {.x0 = 0, .x1 = PT_SCREEN_WIDTH, .y0 = 0, .yf = 128, .g = 0};
+    pt_unplot_shallow(r->tb, &row0);
+#ifndef NDEBUG
+    for (uint16_t i = 0; i < PT_FB_BYTES; i++)
+        RC_ASSERT(r->tb[i] == 0);    // the records covered every toggle
+#endif
+}
+
 // ---- the frame ----
 
 // The camera's cell's visit, begun on the root portal, the whole screen: its
@@ -1089,19 +1159,23 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     RC_ASSERT(m->cells[cell].floor_z >= PT_CAM_HEIGHT);
     r->eye_z = pt_u8((int32_t)m->cells[cell].floor_z - PT_CAM_HEIGHT);
 
-    pt_mode5_clear(r->fb);
+    // the records, and every byte column's last toggled row: row 0 to begin
+    // with, as lines running off the top toggle it unrecorded
+    r->num_recs = 0;
+    memset(r->lastp1, 1, sizeof r->lastp1);
 
-    // the root portal's bounds are the screen's edges, the top at row 0
-    // under the strip of the camera cell's ceiling colour that seeds the
-    // fill and the bottom in the junk row below it: its extents say so, and
-    // top[] and bot[] needn't hold them
-    pt_plot_flat(r->fb, 0, PT_SCREEN_WIDTH, 0, pt_shade(m->cells[cell].ceil));
-
+    // the root portal's bounds are the screen's edges, the top at row 0 and
+    // the bottom in the junk row below: its extents say so, and top[] and
+    // bot[] needn't hold them. Above row 0 is the camera cell's ceiling: the
+    // fill starts each column from its colour
     walk(r, root_visit(r), 1);
-    pt_mode5_fill(r->fb);
+    pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->lastp1);
+    unplot(r);
 
     if (r->num_visits > r->visits_high)
         r->visits_high = r->num_visits;
+    if (r->num_recs > r->recs_high)
+        r->recs_high = r->num_recs;
 }
 
 void pt_render_init(pt_render *r, const pt_map *m, pt_vcache *vc)
@@ -1109,7 +1183,7 @@ void pt_render_init(pt_render *r, const pt_map *m, pt_vcache *vc)
     *r = (pt_render) {0};
     r->map = m;
     r->vc = vc;
-    r->fb = r->fbmem + PT_FB_GUARD;
+    r->tb = r->tmem + PT_FB_GUARD;
     r->sprites = true;
 }
 

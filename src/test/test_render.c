@@ -20,8 +20,8 @@ static void centroid(const pt_map *m, uint8_t cell, uint16_t *x, uint16_t *y)
     uint32_t sx = 0;
     uint32_t sy = 0;
     for (uint8_t k = 0; k < (c->num + 1); k++) {
-        sx += m->verts[m->halves[c->first + k].v0].x;
-        sy += m->verts[m->halves[c->first + k].v0].y;
+        sx += m->verts[pt_map_side(m, c, k)->v].x;
+        sy += m->verts[pt_map_side(m, c, k)->v].y;
     }
     *x = (uint16_t)(sx / (c->num + 1));
     *y = (uint16_t)(sy / (c->num + 1));

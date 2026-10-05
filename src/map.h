@@ -67,17 +67,6 @@ static inline uint8_t pt_side_twin(const pt_side *sd)
     return (uint8_t)(sd->qt >> 2);
 }
 
-// The old renderer's view of a side, kept until phase 3 rewrites it. A
-// cell's halves fill the same range as its sides, clockwise where its
-// sides are counter-clockwise. Derived by the builder.
-typedef struct pt_half {
-    uint8_t v0;          // start vertex; the end is the next ring half's v0
-    uint8_t adj;         // adjacent cell, 0 = solid wall
-    uint8_t twin;        // the adjacent cell's half running this one the
-                         // other way (a portal's twin; unused for walls)
-    uint8_t colour;      // wall shade + 1 (walls, risers and lintels); 0 = soft
-} pt_half;
-
 typedef struct pt_cell {
     uint8_t first;       // its ring's base: sides[first + k] is position k
     uint8_t num;         // the ring's count LESS ONE: its last position. The
@@ -106,8 +95,6 @@ typedef struct pt_map {
     pt_cell cells[PT_MAX_CELLS];    // cell 0 is the "outside" and never used
     pt_edge edges[PT_MAX_EDGES];
     pt_side sides[PT_MAX_SIDES];    // the cells' rings
-    pt_half halves[PT_MAX_SIDES];   // the old view: each cell's range of
-                                    // sides[], but clockwise
     pt_sprite sprites[PT_MAX_SPRITES];    // sprite 0 is unused ("none")
     pt_sprite_art arts[PT_MAX_ARTS];
     uint8_t num_verts;
@@ -140,21 +127,6 @@ static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t k)
 static inline uint8_t pt_map_side_v1(const pt_map *m, const pt_cell *c, uint8_t k)
 {
     return pt_map_side(m, c, pt_map_ring_next(c, k))->v;
-}
-
-// The old view's next half clockwise from half i (an index into halves[]):
-// the one after it.
-static inline uint8_t pt_map_half_next(const pt_cell *c, uint8_t i)
-{
-    uint8_t k = (uint8_t)(i - c->first + 1);
-    return (uint8_t)(c->first + (k > c->num ? 0 : k));
-}
-
-// The twin of a portal half: the adjacent cell's half running the shared
-// wall the other way (the old view's).
-static inline uint8_t pt_map_twin(const pt_map *m, uint8_t i)
-{
-    return m->halves[i].twin;
 }
 
 // Build the demo scene: a pentagonal room with a depressed square in the

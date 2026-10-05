@@ -35,8 +35,8 @@ int main(int argc, char **argv)
         uint32_t sx = 0;
         uint32_t sy = 0;
         for (uint8_t k = 0; k < (c->num + 1); k++) {
-            sx += map.verts[map.halves[c->first + k].v0].x;
-            sy += map.verts[map.halves[c->first + k].v0].y;
+            sx += map.verts[pt_map_side(&map, c, k)->v].x;
+            sy += map.verts[pt_map_side(&map, c, k)->v].y;
         }
         for (uint32_t a = 0; a < 256; a += 8) {
             pt_render_frame(&render, (uint16_t)(sx / (c->num + 1)),

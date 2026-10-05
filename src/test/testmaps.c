@@ -10,8 +10,8 @@ bool pt_testmaps_add_sprites(pt_map *m)
         uint32_t sx = 0;
         uint32_t sy = 0;
         for (uint8_t k = 0; k < (c->num + 1); k++) {
-            sx += m->verts[m->halves[c->first + k].v0].x;
-            sy += m->verts[m->halves[c->first + k].v0].y;
+            sx += m->verts[pt_map_side(m, c, k)->v].x;
+            sy += m->verts[pt_map_side(m, c, k)->v].y;
         }
         m->sprites[m->num_sprites] = (pt_sprite) {
             .x = (uint16_t)(sx / (c->num + 1)),

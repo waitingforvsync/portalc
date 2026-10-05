@@ -434,15 +434,15 @@ its cell sees it) and takes the colour of the side that shows a face. It
 stops if two showing sides ever disagree, or if one side is soft and the
 other isn't.
 
-### The old view
+### The old view, gone
 
-The old renderer read the old per-side records, now `pt_half`: start
-vertex, cell across, twin and colour. The builder derives them exactly as
-before, in each cell's range of `sides[]` but clockwise. So until phase 3a
-replaced it, `main`'s pictures were byte-identical: the sweep's
-framebuffers matched, and so did every comparer record but the
-reference's own changes (below). Now only a few tests, probes and tools
-read them, and `pt_half` goes when they move over.
+The old renderer read per-side records, `pt_half`: start vertex, cell
+across, twin and colour, clockwise. Through phase 2 the builder made them
+alongside the sides, so `main`'s pictures stayed byte-identical until
+phase 3a replaced the renderer. Now the map doesn't hold them at all. The
+builder keeps its own clockwise halves as scratch, as the scene names
+them, to match twins and make the edges, and the tests and tools read the
+sides.
 
 The Beeb port's host tools follow `main`'s map, so on `polar` they're off
 unless `PORTALC_BEEB_HOST` asks for them.

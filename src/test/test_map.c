@@ -6,14 +6,7 @@
 #include "map.h"
 #include "richc/test.h"
 
-// The old view's half for position k of cell c's ring: the same range,
-// reversed.
-static uint8_t half_of(const pt_cell *c, uint8_t k)
-{
-    return (uint8_t)(c->first + c->num - k);
-}
-
-// The rings, the edges they name, and the old view derived from them.
+// The rings, and the edges they name.
 static void check_structure(const pt_map *m)
 {
     RC_CHECK_TRUE(pt_map_validate(m));
@@ -43,7 +36,6 @@ static void check_structure(const pt_map *m)
             RC_CHECK(t->adj, ==, c);
             RC_CHECK(t->v, ==, pt_map_side_v1(m, cell, k));
             RC_CHECK(pt_map_side_v1(m, d, pt_side_twin(sd)), ==, sd->v);
-            RC_CHECK(pt_map_twin(m, half_of(cell, k)), ==, half_of(d, pt_side_twin(sd)));
         }
     }
     RC_CHECK(total, ==, (uint16_t)m->num_sides);
@@ -74,7 +66,6 @@ static void check_structure(const pt_map *m)
         const pt_cell *cell = &m->cells[c];
         for (uint8_t k = 0; k <= cell->num; k++) {
             const pt_side *sd = pt_map_side(m, cell, k);
-            RC_CHECK(m->halves[half_of(cell, k)].v0, ==, sd->v);
             pt_vertex a = m->verts[sd->v];
             pt_vertex b = m->verts[pt_map_side_v1(m, cell, k)];
             int16_t dx = (int16_t)(b.x - a.x);

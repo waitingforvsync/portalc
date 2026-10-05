@@ -505,7 +505,8 @@ slide iterations, the hop walk) with new pieces:
   are then one 16 x 8 fractional multiply: about 90 cycles, against 160
   for the reciprocal division and its quarter, or 170 by log and exp. And
   the reciprocal table, `sbyte` and the normaliser go. It's built by
-  restoring division at start up, 8 steps an entry.
+  restoring division at start up, 8 steps an entry, with the other tables
+  in `arith.c`; `camera.h` checks the radius it was built for.
 
 The facing step comes from the quarter sine table, four 1024ths a camera
 step: the same values as before.
@@ -1090,6 +1091,23 @@ Not worth it, measured: a row-address table for the steep plotter (about
 about 0.5k cycles), a log sine at whole steps (512 bytes for about 90
 cycles), and exp shift tables (2.5 KB).
 
+A second look after the review found nothing big left in capture and
+lines; the fill is where it is (Filling only where it changes, under
+Buffers). The small things, a frame on map 0, roughly:
+
+- An edge's second and third lines could take their gradient's log from
+  the first's, plus the heights' difference, since the offsets' difference
+  scales with the height: 7.4 logs, about 0.3k.
+- Entering a child skips the back-facing sides after its portal, 2.6 a
+  frame, working out 2 polar forms only for that: about 0.55k when the
+  camera's moved. Telling a back face without its angles costs as much.
+- The bound lines write 45 rows a frame, and half are read back, so
+  writing them only when wanted saves 0.3k at most. Storing them while
+  plotting instead of in a pass of their own: about 0.25k.
+- A frame from the camera's own cache locates the eye's cell again, which
+  the camera has just done: about 0.2k.
+- Every visit made is walked (map 9: all but 0.6 a frame).
+
 ## Buffers
 
 ### The toggle buffer
@@ -1131,6 +1149,24 @@ need clearing.
 The zeroing is plain `STA (blk),Y` with A = 0 on both scanlines of each row
 a line touches in a byte column: no read, no mask, about 33 cycles a byte
 column a line. About 4k on the typical frame and 9k on the heavy one.
+
+### Filling only where it changes
+
+Below a byte column's last toggle the fill's value never changes again,
+so there the fill is a store, `STA S,X`, 5 cycles, not 9. Start each
+column's pass from the camera cell's ceiling pattern instead of 0, with
+no strip plotted, and above a column's first toggle it's a store too.
+Measured over map 0's random poses, 49.1% of the screen's bytes are below
+their column's last toggle and 11.5% above its first; on map 9, 67.8% and
+16.9%. At 4 cycles a byte that's about 10k a frame on map 0, and the
+strip's 64 EORs go as well.
+
+It needs each byte column's first and last toggled row. Each plotted run
+can update them with its rows' extremes over its byte columns. That's
+conservative (the fill just EORs a little more), about 10 cycles a byte
+column a run, perhaps 1.2k a frame. The fill is unrolled down a column,
+so it goes into the EOR stretch and out to the store stretch by jumping
+in at the right rows. For phase 4.
 
 ### All together
 

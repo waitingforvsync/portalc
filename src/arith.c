@@ -63,6 +63,9 @@ static uint8_t a2c_[256];
 #define PT_LOG_STEP 2137
 static uint16_t lsec16_[256];
 
+// The posts' division (pt_rpost), by d2 >> 3 for d2 in [256, PT_RPOST_END).
+static uint8_t rpost_[PT_RPOST_END / 8];
+
 static bool inited_;
 
 // ---- packed delta tables ----
@@ -252,6 +255,26 @@ void pt_arith_init(void)
         } while (v < 256);
     }
     RC_ASSERT(b == 0);
+
+    // rpost_: 1.25 * 2^15 / d2 from each 8's start d, rounded up. The
+    // quotient is under 256, so a restoring division of 8 steps an entry
+    for (uint16_t i = 256 / 8; i < PT_RPOST_END / 8; i++) {
+        uint16_t d = pt_u16(8 * (int32_t)i);
+        uint16_t n = pt_u16(40960 + (int32_t)d - 1);
+        uint16_t rem = n >> 8;    // under d: the quotient is a byte
+        uint8_t lo = (uint8_t)n;
+        uint8_t q = 0;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            rem = pt_u16((int32_t)rem << 1 | lo >> 7);
+            lo = (uint8_t)(lo << 1);
+            q = (uint8_t)(q << 1);
+            if (rem >= d) {
+                rem = pt_u16((int32_t)rem - d);
+                q |= 1;
+            }
+        }
+        rpost_[i] = q;
+    }
 
     // lsec16_: lsec_, then from logs (see above), for which log2_ needs
     // logf_, nrm_ and k8_
@@ -457,6 +480,13 @@ uint16_t pt_mulu16_frac(uint16_t a, uint8_t f)
     uint16_t lo = (uint16_t)(pt_mulu8((uint8_t)a, f) >> 8);
     uint16_t hi = pt_mulu8((uint8_t)(a >> 8), f);
     return pt_u16((int32_t)lo + hi);
+}
+
+uint8_t pt_rpost(uint16_t d2)
+{
+    RC_ASSERT(inited_);
+    RC_ASSERT(d2 >= 256 && d2 < PT_RPOST_END);
+    return rpost_[d2 >> 3];
 }
 
 uint16_t pt_mulg_u16(uint16_t g, uint8_t dx)

@@ -1310,6 +1310,12 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     const pt_map *m = r->map;
     RC_ASSERT(cell >= 1 && cell < m->num_cells);
 
+    // empty the last frame's visit cache: each record clears its own cell's
+    // index
+    for (uint8_t i = 1; i < r->num_visits; i++)
+        r->cell_visit[r->visits[i].cell] = 0;
+    r->num_visits = 1;
+
     // the cell the angles put the eye in (the camera's own already is)
     cell = pt_vcache_locate(r->vc, m, cell);
     r->cam_cell = cell;
@@ -1318,7 +1324,6 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     r->eye_z = pt_u8((int32_t)m->cells[cell].floor_z - PT_CAM_HEIGHT);
 
     pt_mode5_clear(r->fb);
-    r->num_visits = 1;
 
     // the root portal's bounds are the screen's edges, the top at row 0
     // under the strip of the camera cell's ceiling colour that seeds the
@@ -1332,10 +1337,6 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
 
     if (r->num_visits > r->visits_high)
         r->visits_high = r->num_visits;
-
-    // empty the visit cache: each record clears its own cell's index
-    for (uint8_t i = 1; i < r->num_visits; i++)
-        r->cell_visit[r->visits[i].cell] = 0;
 }
 
 void pt_render_init(pt_render *r, const pt_map *m)

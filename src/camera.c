@@ -84,37 +84,6 @@ static uint16_t mulu16x8_lo(uint16_t a, uint8_t b)
     return pt_u16((int32_t)pt_mulu8((uint8_t)a, b) + ((int32_t)pt_mulu8((uint8_t)(a >> 8), b) << 8));
 }
 
-// The posts' division: 1.25 * 2^15 / d2 at the start of each 8 of d2,
-// rounded up, by d2 >> 3 (32..199 for d2 in [256, 1600), the circle's), a
-// byte. It errs high only, by up to 7% (the bucket's width and the byte's
-// rounding), so the overcorrection is never under a quarter. Built as the
-// 6502 would: the quotient is under 256, so a restoring division of 8 steps
-// an entry.
-static uint8_t rpost_[PT_CAM_RADIUS * PT_CAM_RADIUS / 8];
-static bool rpost_built_;
-
-static void build_rpost(void)
-{
-    for (uint16_t i = 256 / 8; i < PT_CAM_RADIUS * PT_CAM_RADIUS / 8; i++) {
-        uint16_t d = pt_u16(8 * (int32_t)i);
-        uint16_t n = pt_u16(40960 + (int32_t)d - 1);    // rounded up
-        uint16_t rem = n >> 8;                     // under d: the quotient is a byte
-        uint8_t lo = (uint8_t)n;
-        uint8_t q = 0;
-        for (uint8_t b = 0; b < 8; b++) {
-            rem = pt_u16((int32_t)rem << 1 | lo >> 7);
-            lo = (uint8_t)(lo << 1);
-            q = (uint8_t)(q << 1);
-            if (rem >= d) {
-                rem = pt_u16((int32_t)rem - d);
-                q |= 1;
-            }
-        }
-        rpost_[i] = q;
-    }
-    rpost_built_ = true;
-}
-
 // A solid wall endpoint as a point obstacle. When the circle overlaps the
 // vertex and the move approaches it, remove the move's radial component
 // (overcorrected by a quarter, so a grazing arc drifts back out instead of
@@ -161,10 +130,10 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
 
     // f = |M . v| / (v . v) in q14, overcorrected by a quarter: under 0.71 *
     // 1.25 of 2^14 for any move this slow. The division and the quarter are
-    // one byte, rpost_, and a fractional multiply. The correction along v
+    // one byte, pt_rpost, and a fractional multiply. The correction along v
     // is f * a / 64 in s.8, one fractional multiply by 4a (a < 40, so a
     // byte)
-    uint16_t f = pt_u16((int32_t)pt_mulu16_frac(mag, rpost_[d2 >> 3]) << 1);
+    uint16_t f = pt_u16((int32_t)pt_mulu16_frac(mag, pt_rpost(d2)) << 1);
     int16_t cx = pt_i16(pt_mulu16_frac(f, pt_u8((int32_t)ax << 2)));
     int16_t cy = pt_i16(pt_mulu16_frac(f, pt_u8((int32_t)ay << 2)));
     *mx = pt_i16(ux < 0 ? (int32_t)*mx - cx : (int32_t)*mx + cx);
@@ -188,8 +157,6 @@ void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8
     uint8_t cell = pt_map_find_cell(m, x, y);
     RC_ASSERT(cell != 0);
 
-    if (!rpost_built_)
-        build_rpost();
     *c = (pt_camera) {
         .x = (uint32_t)x << 8,
         .y = (uint32_t)y << 8,

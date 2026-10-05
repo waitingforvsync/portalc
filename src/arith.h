@@ -134,4 +134,16 @@ uint16_t pt_mulu16_frac(uint16_t a, uint8_t f);
 // gradient magnitude (u7.8) times a column count, saturating at 0xFFFF.
 uint16_t pt_mulg_u16(uint16_t g, uint8_t dx);
 
+// ---- the camera's posts ----
+
+// The squared distances the posts divide by run over the camera's circle,
+// [256, PT_RPOST_END): its radius squared, which camera.h checks.
+#define PT_RPOST_END 1600
+
+// 1.25 * 2^15 / d2, a byte: the posts' division and their quarter's
+// overcorrection in one. Read at the start of d2's 8 and rounded up, so it
+// errs high only, by up to 7%, and the overcorrection is never under a
+// quarter.
+uint8_t pt_rpost(uint16_t d2);
+
 #endif

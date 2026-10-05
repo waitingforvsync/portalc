@@ -8,10 +8,13 @@
 
 #include <stdint.h>
 
+#include "arith.h"
+
 #include "map.h"
 #include "vcache.h"
 
 #define PT_CAM_RADIUS 40
+_Static_assert(PT_CAM_RADIUS * PT_CAM_RADIUS == PT_RPOST_END, "the posts' table covers the circle");
 #define PT_CAM_MOVE_SPEED 8    // whole units per tick
 #define PT_CAM_TURN_SPEED 2            // 256ths of a turn per tick
 

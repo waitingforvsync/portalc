@@ -1,6 +1,6 @@
-// render.c - the capture walk (spec section 7), its lines clipped against
-// the bounds a screen column at a time and toggled straight into the back
-// buffer as they're made, and the fill. The walk finds its way by the
+// render.c - the capture walk, its lines clipped against the bounds a
+// screen column at a time and toggled straight into the back buffer as
+// they're made, and the fill. The walk finds its way by the
 // angles of the cells' vertices from the eye (the vertex cache): those
 // give every edge its columns, and their logs its lines' rows.
 //
@@ -8,7 +8,7 @@
 // first inside the portal) and the bottom bound's (the first below it). A
 // line's toggle in a column goes at its own row clamped between them: on
 // or above the top it merges into the top bound's row, on or below the
-// bottom into the bottom's (spec 7.9.1: the same as plotting it on the
+// bottom into the bottom's (the same, to the fill, as plotting it on the
 // bound). A line forming one of a child's bounds writes the child's rows
 // over the parent's as it goes: the walk finishes a column's whole subtree
 // before moving on, and never needs the parent's rows there again. A bound
@@ -22,6 +22,8 @@
 
 #include <stdbool.h>
 #include <string.h>
+
+#include "plot.h"
 
 // A candidate line from make_line, before clipping against the bounds: on
 // the screen over [x0, x1), and beyond its edge on the side below says
@@ -97,7 +99,7 @@ static uint16_t step1(uint16_t y, uint16_t g)
     return s;
 }
 
-// ---- line generation (spec 7.7) ----
+// ---- line generation ----
 
 // A height as its lines see it: |z - eye_z| in 8-unit steps, the side (the
 // subtract's borrow), and its log, made once a visit.
@@ -229,239 +231,7 @@ static pt_line make_line(const pt_end *e0, const pt_end *e1, int16_t ldc, pt_hei
     return L;
 }
 
-// ---- the clip, a column at a time (spec 7.9) ----
-
-// A stretch of a line for the plotters: columns [x0, x1) from the row at x0
-// (y0, and its fraction yf with the rounding bias), stepping by g.
-typedef struct pt_run {
-    uint8_t x0;
-    uint8_t x1;
-    uint8_t y0;
-    uint8_t yf;
-    uint16_t g;
-} pt_run;
-
-// ---- plotting (spec 8.1) ----
-
-// The pixels from p to the byte's right end, and from its left end to p.
-static const uint8_t mask_from_[4] = {0xFF, 0x77, 0x33, 0x11};
-static const uint8_t mask_to_[4] = {0x88, 0xCC, 0xEE, 0xFF};
-
-// One column's step of a falling line's row fraction: the carry, 1 when the
-// next column is a row down.
-static uint8_t carry_down(uint8_t *f, uint8_t gm)
-{
-    uint16_t s = (uint16_t)(*f + gm);
-    *f = (uint8_t)s;
-    return (uint8_t)(s >> 8);
-}
-
-// And a rising line's: the borrow, 1 when the next column is a row up.
-static uint8_t borrow_up(uint8_t *f, uint8_t gm)
-{
-    uint8_t b = *f < gm;
-    *f = (uint8_t)(*f - gm);
-    return b;
-}
-
-// The lines are plotted as the 6502 will, through a screen cursor (a
-// character block's address and Y, pt_mode5_cur) placed once at the piece's
-// first pixel and then only moved: a row down or up (Y by two, a character
-// row on at a block's edge), a byte right, or a pixel right (the mask).
-
-// Plot a row of a byte under mask, then move the cursor a row down (up).
-static void row_down(uint8_t *fb, pt_mode5_cur *cur, uint8_t mask, pt_pattern pat)
-{
-    pt_mode5_eor(fb, *cur, mask, pat);
-    pt_mode5_down(cur);
-}
-
-static void row_up(uint8_t *fb, pt_mode5_cur *cur, uint8_t mask, pt_pattern pat)
-{
-    pt_mode5_eor(fb, *cur, mask, pat);
-    pt_mode5_up(cur);
-}
-
-// One whole byte of a falling shallow line, as the 6502 does it: the three
-// steps inside the byte decide, carry by carry, which of eight fixed routines
-// plots it, each with its row masks as constants (the comments give the
-// carries, the step after the leftmost pixel first). The fourth step then
-// says whether the next byte starts a row down. (The 6502 takes that step at
-// the routine's start and carries it through the plotting in C.)
-static void byte_down(uint8_t *fb, pt_mode5_cur *cur, uint8_t *f, uint8_t gm, pt_pattern pat)
-{
-    if (!carry_down(f, gm)) {
-        if (!carry_down(f, gm)) {
-            if (!carry_down(f, gm)) {
-                pt_mode5_eor(fb, *cur, 0xFF, pat);    // 000: all four on one row
-            } else {
-                row_down(fb, cur, 0xEE, pat);         // 001
-                pt_mode5_eor(fb, *cur, 0x11, pat);
-            }
-        } else if (!carry_down(f, gm)) {
-            row_down(fb, cur, 0xCC, pat);             // 010
-            pt_mode5_eor(fb, *cur, 0x33, pat);
-        } else {
-            row_down(fb, cur, 0xCC, pat);             // 011
-            row_down(fb, cur, 0x22, pat);
-            pt_mode5_eor(fb, *cur, 0x11, pat);
-        }
-    } else if (!carry_down(f, gm)) {
-        if (!carry_down(f, gm)) {
-            row_down(fb, cur, 0x88, pat);             // 100
-            pt_mode5_eor(fb, *cur, 0x77, pat);
-        } else {
-            row_down(fb, cur, 0x88, pat);             // 101
-            row_down(fb, cur, 0x66, pat);
-            pt_mode5_eor(fb, *cur, 0x11, pat);
-        }
-    } else if (!carry_down(f, gm)) {
-        row_down(fb, cur, 0x88, pat);                 // 110
-        row_down(fb, cur, 0x44, pat);
-        pt_mode5_eor(fb, *cur, 0x33, pat);
-    } else {
-        row_down(fb, cur, 0x88, pat);                 // 111: a row per pixel
-        row_down(fb, cur, 0x44, pat);
-        row_down(fb, cur, 0x22, pat);
-        pt_mode5_eor(fb, *cur, 0x11, pat);
-    }
-    if (carry_down(f, gm))
-        pt_mode5_down(cur);
-    pt_mode5_next(cur);
-}
-
-// And of a rising one: the same tree on the borrows, moving up.
-static void byte_up(uint8_t *fb, pt_mode5_cur *cur, uint8_t *f, uint8_t gm, pt_pattern pat)
-{
-    if (!borrow_up(f, gm)) {
-        if (!borrow_up(f, gm)) {
-            if (!borrow_up(f, gm)) {
-                pt_mode5_eor(fb, *cur, 0xFF, pat);    // 000
-            } else {
-                row_up(fb, cur, 0xEE, pat);           // 001
-                pt_mode5_eor(fb, *cur, 0x11, pat);
-            }
-        } else if (!borrow_up(f, gm)) {
-            row_up(fb, cur, 0xCC, pat);               // 010
-            pt_mode5_eor(fb, *cur, 0x33, pat);
-        } else {
-            row_up(fb, cur, 0xCC, pat);               // 011
-            row_up(fb, cur, 0x22, pat);
-            pt_mode5_eor(fb, *cur, 0x11, pat);
-        }
-    } else if (!borrow_up(f, gm)) {
-        if (!borrow_up(f, gm)) {
-            row_up(fb, cur, 0x88, pat);               // 100
-            pt_mode5_eor(fb, *cur, 0x77, pat);
-        } else {
-            row_up(fb, cur, 0x88, pat);               // 101
-            row_up(fb, cur, 0x66, pat);
-            pt_mode5_eor(fb, *cur, 0x11, pat);
-        }
-    } else if (!borrow_up(f, gm)) {
-        row_up(fb, cur, 0x88, pat);                   // 110
-        row_up(fb, cur, 0x44, pat);
-        pt_mode5_eor(fb, *cur, 0x33, pat);
-    } else {
-        row_up(fb, cur, 0x88, pat);                   // 111
-        row_up(fb, cur, 0x44, pat);
-        row_up(fb, cur, 0x22, pat);
-        pt_mode5_eor(fb, *cur, 0x11, pat);
-    }
-    if (borrow_up(f, gm))
-        pt_mode5_up(cur);
-    pt_mode5_next(cur);
-}
-
-// A shallow line: its row moves by at most one per column, so it is kept as
-// a row byte and a fraction, and each step's carry out of the fraction says
-// whether the next column is a row on. Whole bytes go four pixels at a time
-// (byte_down, byte_up); the partial bytes at either end go a pixel at a
-// time. A flat line has no steps: whole bytes on one row, the end bytes
-// masked, with no arithmetic at all (through the tree each byte would still
-// take its four steps).
-static void plot_shallow(uint8_t *fb, const pt_run *p, pt_pattern pat)
-{
-    uint8_t gm = (uint8_t)pt_g_mag(p->g);
-    pt_mode5_cur cur = pt_mode5_at(p->x0 >> 2, p->y0);
-    uint8_t mask = pt_mode5_pixmask(p->x0);
-    uint8_t f = p->yf;    // the row fraction, rounding bias and all, as line_y
-    uint8_t c = p->x0;
-
-    if (gm == 0) {
-        uint8_t n = (uint8_t)(((uint8_t)(p->x1 - 1) >> 2) - (p->x0 >> 2));    // bytes after the first
-        uint8_t m0 = mask_from_[p->x0 & 3];
-        uint8_t m1 = mask_to_[(p->x1 - 1) & 3];
-        if (n == 0) {
-            pt_mode5_eor(fb, cur, m0 & m1, pat);
-            return;
-        }
-        pt_mode5_eor(fb, cur, m0, pat);
-        while (--n) {
-            pt_mode5_next(&cur);
-            pt_mode5_eor(fb, cur, 0xFF, pat);
-        }
-        pt_mode5_next(&cur);
-        pt_mode5_eor(fb, cur, m1, pat);
-    } else if (!pt_g_isneg(p->g)) {
-        for (; (c & 3) != 0 && c < p->x1; c++) {
-            pt_mode5_eor(fb, cur, mask, pat);
-            if (carry_down(&f, gm))
-                pt_mode5_down(&cur);
-            pt_mode5_right(&cur, &mask);
-        }
-        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4))
-            byte_down(fb, &cur, &f, gm, pat);
-        for (; c < p->x1; c++) {
-            pt_mode5_eor(fb, cur, mask, pat);
-            if (carry_down(&f, gm))
-                pt_mode5_down(&cur);
-            pt_mode5_right(&cur, &mask);
-        }
-    } else {
-        for (; (c & 3) != 0 && c < p->x1; c++) {
-            pt_mode5_eor(fb, cur, mask, pat);
-            if (borrow_up(&f, gm))
-                pt_mode5_up(&cur);
-            pt_mode5_right(&cur, &mask);
-        }
-        for (; (uint8_t)(p->x1 - c) >= 4; c = (uint8_t)(c + 4))
-            byte_up(fb, &cur, &f, gm, pat);
-        for (; c < p->x1; c++) {
-            pt_mode5_eor(fb, cur, mask, pat);
-            if (borrow_up(&f, gm))
-                pt_mode5_up(&cur);
-            pt_mode5_right(&cur, &mask);
-        }
-    }
-}
-
-// A steep line (|g| >= 1): a pixel pair per column, the row moving on by
-// the gradient's whole rows plus the fraction's carry, a row at a time.
-static void plot_steep(uint8_t *fb, const pt_run *p, pt_pattern pat)
-{
-    uint8_t gi = (uint8_t)(pt_g_mag(p->g) >> 8);
-    uint8_t gf = (uint8_t)pt_g_mag(p->g);
-    pt_mode5_cur cur = pt_mode5_at(p->x0 >> 2, p->y0);
-    uint8_t mask = pt_mode5_pixmask(p->x0);
-    uint8_t f = p->yf;    // the row fraction, rounding bias and all, as line_y
-
-    if (!pt_g_isneg(p->g)) {
-        for (uint8_t c = p->x0; c < p->x1; c++) {
-            pt_mode5_eor(fb, cur, mask, pat);
-            for (uint8_t n = (uint8_t)(gi + carry_down(&f, gf)); n != 0; n--)
-                pt_mode5_down(&cur);
-            pt_mode5_right(&cur, &mask);
-        }
-    } else {
-        for (uint8_t c = p->x0; c < p->x1; c++) {
-            pt_mode5_eor(fb, cur, mask, pat);
-            for (uint8_t n = (uint8_t)(gi + borrow_up(&f, gf)); n != 0; n--)
-                pt_mode5_up(&cur);
-            pt_mode5_right(&cur, &mask);
-        }
-    }
-}
+// ---- plotting ----
 
 // Toggle a pixel pair in a line's colour (none, for 0).
 static void toggle(pt_render *r, uint8_t c, uint8_t row, pt_pattern col)
@@ -480,11 +250,13 @@ static void plot_run(pt_render *r, const pt_line *L, uint8_t x0, uint8_t x1, uin
         return;
     pt_run p = {.x0 = x0, .x1 = x1, .y0 = (uint8_t)(y >> 8), .yf = (uint8_t)y, .g = L->g};
     if (pt_g_mag(L->g) < 0x100)
-        plot_shallow(r->fb, &p, pat);
+        pt_plot_shallow(r->fb, &p, pat);
     else
-        plot_steep(r->fb, &p, pat);
+        pt_plot_steep(r->fb, &p, pat);
 }
 
+
+// ---- the scan ----
 
 // Is a row strictly inside the bounds' extents, below every top and above
 // every bottom?
@@ -541,10 +313,8 @@ typedef struct pt_hrun {
 
 static void hrun_end(pt_render *r, pt_hrun *h, uint8_t x1)
 {
-    if (h->x0 != 0xFF && h->row < PT_SCREEN_HEIGHT && (h->pat.e | h->pat.o) != 0) {
-        pt_run p = {.x0 = h->x0, .x1 = x1, .y0 = h->row, .yf = 128, .g = 0};
-        plot_shallow(r->fb, &p, h->pat);
-    }
+    if (h->x0 != 0xFF && h->row < PT_SCREEN_HEIGHT && (h->pat.e | h->pat.o) != 0)
+        pt_plot_flat(r->fb, h->x0, x1, h->row, h->pat);
     h->x0 = 0xFF;
 }
 
@@ -559,10 +329,8 @@ static void hrun_add(pt_render *r, pt_hrun *h, uint8_t c, uint8_t row, pt_patter
 // A flat run of toggles on row 0, over [x0, x1), if any.
 static void flat_top(pt_render *r, uint8_t x0, uint8_t x1, pt_pattern pat)
 {
-    if (x0 < x1 && (pat.e | pat.o) != 0) {
-        pt_run p = {.x0 = x0, .x1 = x1, .y0 = 0, .yf = 128, .g = 0};
-        plot_shallow(r->fb, &p, pat);
-    }
+    if (x0 < x1 && (pat.e | pat.o) != 0)
+        pt_plot_flat(r->fb, x0, x1, 0, pat);
 }
 
 // The part of [xa, xb) the screen's pre-clip left a line, [*l, *rr): empty
@@ -876,10 +644,10 @@ static void close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, 
 }
 
 // The child: the first run of open columns, [*ol, *orr), empty when none.
-// Every portal opening is convex on the screen (spec 7.9.4), so there
-// should be one run; a crossing's rounding could pinch a sliver-thin
-// opening shut in the middle, and any later run is closed after the fact.
-// With nothing closed, it's the edge's whole span, with no scan.
+// Every portal opening is convex on the screen, so there should be one run;
+// a crossing's rounding could pinch a sliver-thin opening shut in the
+// middle, and any later run is closed after the fact. With nothing closed,
+// it's the edge's whole span, with no scan.
 static void open_run(pt_render *r, const pt_open *op, pt_pattern cbfb, bool bz, uint8_t *ol,
                      uint8_t *orr)
 {
@@ -992,12 +760,12 @@ static uint8_t visit_of(pt_render *r, uint8_t cell)
 }
 
 // Enter visit vi over [xl, xr), its bounds already written: the cursor goes
-// to the first edge whose end is strictly right of xl (spec 7.4). A first
-// walk looks from the edge after the twin (the side the walk came in by,
-// at ring position twin), in a window centred on the middle of the portal
-// (from's current side); a later one resumes from the edge its last walk
-// ended on - every earlier edge ends left of that walk's xr, which is at or
-// left of xl. 0 for a degenerate ring (not entered).
+// to the first edge whose end is strictly right of xl. A first walk looks
+// from the edge after the twin (the side the walk came in by, at ring
+// position twin), in a window centred on the middle of the portal (from's
+// current side); a later one resumes from the edge its last walk ended on
+// - every earlier edge ends left of that walk's xr, which is at or left of
+// xl. 0 for a degenerate ring (not entered).
 static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_visit *from, uint8_t xl,
                      uint8_t xr, uint8_t tmax, uint8_t bmin)
 {
@@ -1025,7 +793,7 @@ static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_visit *fro
     return vi;
 }
 
-// ---- one edge of the walk (spec 7.8) ----
+// ---- one edge of the walk ----
 
 // An edge's lines are made from its ends, worked out once for all of them.
 // An end in the view is its vertex: its column by angle, and its depth's
@@ -1209,7 +977,7 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     return enter(r, ci, pt_side_twin(sd), vs, ol, orr, ctmax, cbmin);
 }
 
-// ---- the walk (spec 7.5) ----
+// ---- the walk ----
 
 static void walk(pt_render *r, uint8_t vi, uint8_t depth);
 
@@ -1261,7 +1029,7 @@ static void walk(pt_render *r, uint8_t vi, uint8_t depth)
     }
 }
 
-// ---- the frame (spec 7.1, 7.4) ----
+// ---- the frame ----
 
 // The camera's cell's visit, begun on the root portal, the whole screen: its
 // first edge is the side whose angles straddle the view's left edge (-128),
@@ -1316,8 +1084,6 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
         r->cell_visit[r->visits[i].cell] = 0;
     r->num_visits = 1;
 
-    // the cell the angles put the eye in (the camera's own already is)
-    cell = pt_vcache_locate(r->vc, m, cell);
     r->cam_cell = cell;
     r->cam4 = (uint16_t)(angle << 2);
     RC_ASSERT(m->cells[cell].floor_z >= PT_CAM_HEIGHT);
@@ -1329,8 +1095,7 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // under the strip of the camera cell's ceiling colour that seeds the
     // fill and the bottom in the junk row below it: its extents say so, and
     // top[] and bot[] needn't hold them
-    pt_run strip = {.x0 = 0, .x1 = PT_SCREEN_WIDTH, .y0 = 0, .yf = 128, .g = 0};
-    plot_shallow(r->fb, &strip, pt_shade(m->cells[cell].ceil));
+    pt_plot_flat(r->fb, 0, PT_SCREEN_WIDTH, 0, pt_shade(m->cells[cell].ceil));
 
     walk(r, root_visit(r), 1);
     pt_mode5_fill(r->fb);
@@ -1339,24 +1104,22 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
         r->visits_high = r->num_visits;
 }
 
-void pt_render_init(pt_render *r, const pt_map *m)
+void pt_render_init(pt_render *r, const pt_map *m, pt_vcache *vc)
 {
     *r = (pt_render) {0};
     r->map = m;
+    r->vc = vc;
     r->fb = r->fbmem + PT_FB_GUARD;
     r->sprites = true;
-    pt_vcache_reset(&r->own_vc, 0, 0);
+}
+
+void pt_render_view(pt_render *r, uint8_t angle, uint8_t cell)
+{
+    frame(r, angle, cell);
 }
 
 void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle, uint8_t cell)
 {
-    pt_vcache_move(&r->own_vc, cam_x, cam_y);
-    r->vc = &r->own_vc;
-    frame(r, angle, cell);
-}
-
-void pt_render_view(pt_render *r, pt_vcache *vc, uint8_t angle, uint8_t cell)
-{
-    r->vc = vc;
-    frame(r, angle, cell);
+    pt_vcache_move(r->vc, cam_x, cam_y);
+    frame(r, angle, pt_vcache_locate(r->vc, r->map, cell));
 }

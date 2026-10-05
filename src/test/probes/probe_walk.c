@@ -3,7 +3,7 @@
 // and render every post-tick state at 8 spread facings with the walk's
 // internal asserts live: no reachable state may break the walk - including
 // rest states on or within rounding of a portal line, which the walk's
-// structural guards and push_root's exact retry must handle outright.
+// structural guards must handle outright.
 
 #include <math.h>
 
@@ -15,12 +15,14 @@
 
 static pt_map map_;
 static pt_render render_;
+static pt_vcache vc_;
 
 RC_TEST(probe, walk_from_reachable_states)
 {
     pt_arith_init();
     pt_scene_init(&map_);
-    pt_render_init(&render_, &map_);
+    pt_vcache_init(&vc_);
+    pt_render_init(&render_, &map_, &vc_);
     const pt_map *m = &map_;
 
     uint8_t open[PT_MAX_VERTS];
@@ -54,9 +56,9 @@ RC_TEST(probe, walk_from_reachable_states)
             if (pt_map_find_cell(m, (uint16_t)sx, (uint16_t)sy) == 0)
                 continue;
             pt_camera cam;
-            pt_camera_init(&cam, m, (uint16_t)sx, (uint16_t)sy, (uint8_t)a);
+            pt_camera_init(&cam, m, &vc_, (uint16_t)sx, (uint16_t)sy, (uint8_t)a);
             for (int t = 0; t < 6; t++) {
-                pt_camera_tick(&cam, m, PT_IN_FWD);
+                pt_camera_tick(&cam, m, &vc_, PT_IN_FWD);
                 uint16_t px = (uint16_t)(cam.x >> 8);
                 uint16_t py = (uint16_t)(cam.y >> 8);
                 for (unsigned r = 0; r < 8; r++)

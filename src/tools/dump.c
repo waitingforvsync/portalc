@@ -20,6 +20,7 @@ typedef struct pose {
 
 static pt_map map;
 static pt_render render;
+static pt_vcache vc;
 static uint8_t rgba[PT_SCREEN_WIDTH * PT_SCREEN_SCANLINES * 4];
 
 static void write_ppm(const char *path)
@@ -46,7 +47,8 @@ int main(int argc, char **argv)
 
     pt_arith_init();
     pt_scene_init(&map);
-    pt_render_init(&render, &map);
+    pt_vcache_init(&vc);
+    pt_render_init(&render, &map, &vc);
 
     static const pose poses[] = {
         {1756, 1536, 128, 2, "ring_facing_pit"},    // over the pit toward the corridor

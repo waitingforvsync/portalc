@@ -1,10 +1,9 @@
 // render.h - the portal renderer: the capture walk over the cells, which
-// finds its way by the angles of their vertices from the eye (the vertex
-// cache), its lines clipped against bounds held a row per screen column and
-// toggled straight into the back buffer as they're made, and the EOR fill.
-// Added and subtracted values are two's complement; multiplies and divides
-// run on unsigned magnitudes with the sign held in a branch, and gradients
-// pack abs(g) | (is_negative << 15).
+// finds its way by the angles of their vertices from the eye (the app's
+// vertex cache, shared with the camera); its lines, made from those
+// vertices' logs, clipped against bounds held a row per screen column and
+// toggled straight into the back buffer as they're made (plot.h); and the
+// EOR fill.
 
 #ifndef PT_RENDER_H_
 #define PT_RENDER_H_
@@ -22,24 +21,6 @@
                               // recursion, which keeps only a visit index)
 #define PT_MAX_VISITS PT_MAX_CELLS    // distinct cells one frame may visit; entry 0 is null
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
-
-// A gradient is a u7.8 magnitude with the sign in bit 15 (not two's
-// complement); zero is always stored positive.
-static inline uint16_t pt_g_make(uint16_t mag, uint8_t neg)
-{
-    RC_ASSERT(mag <= 0x7FFF);
-    return (neg && mag) ? (uint16_t)(mag | 0x8000u) : mag;
-}
-
-static inline uint16_t pt_g_mag(uint16_t g)
-{
-    return (uint16_t)(g & 0x7FFFu);
-}
-
-static inline uint8_t pt_g_isneg(uint16_t g)
-{
-    return (uint8_t)(g >> 15);
-}
 
 // A height as an edge's lines see it.
 typedef struct pt_height {
@@ -90,8 +71,7 @@ typedef struct pt_render {
     uint8_t eye_z;           // in 8-unit z steps, like the cell heights
     uint16_t cam4;           // facing, in 1024ths of a turn (the camera's 256ths, x4)
     uint8_t cam_cell;
-    pt_vcache *vc;           // the vertices' polar forms from the eye, this frame
-    pt_vcache own_vc;        // the cache for a frame from a bare pose
+    pt_vcache *vc;           // the app's vertex cache, shared with the camera
 
     // the bounds, a row per screen column: the top bound's row (the first
     // row inside) and the bottom bound's (the first row below). The walk
@@ -111,16 +91,17 @@ typedef struct pt_render {
     bool sprites;                    // draw sprites (none yet: phase 5)
 } pt_render;
 
-// Bind the renderer to a map.
-void pt_render_init(pt_render *r, const pt_map *m);
+// Bind the renderer to a map and the app's vertex cache.
+void pt_render_init(pt_render *r, const pt_map *m, pt_vcache *vc);
 
-// Render one frame into r->fb from a bare pose, with the renderer's own
-// vertex cache: clear, capture walk, fill.
+// Render one frame into r->fb from the camera: the vertex cache looks from
+// its eye, and cell is the one the cache's angles put it in, as the
+// camera's tick left them. Clear, capture walk, fill.
+void pt_render_view(pt_render *r, uint8_t angle, uint8_t cell);
+
+// Render one frame from a bare pose (the tools' and tests'): the vertex
+// cache is moved to look from (cam_x, cam_y), and the eye's cell found from
+// cell by its angles, then as pt_render_view.
 void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle, uint8_t cell);
-
-// Render one frame from a vertex cache already looking from the eye (the
-// camera's, filled by its collision), without working its vertices out
-// again.
-void pt_render_view(pt_render *r, pt_vcache *vc, uint8_t angle, uint8_t cell);
 
 #endif

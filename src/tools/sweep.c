@@ -13,6 +13,7 @@
 
 static pt_map map;
 static pt_render render;
+static pt_vcache vc;
 
 int main(int argc, char **argv)
 {
@@ -23,7 +24,8 @@ int main(int argc, char **argv)
 
     pt_arith_init();
     pt_scene_init(&map);
-    pt_render_init(&render, &map);
+    pt_vcache_init(&vc);
+    pt_render_init(&render, &map, &vc);
     FILE *fp = fopen(argv[1], "wb");
     if (!fp) {
         fprintf(stderr, "cannot write %s\n", argv[1]);
@@ -46,7 +48,7 @@ int main(int argc, char **argv)
     }
 
     pt_camera cam;
-    pt_camera_init(&cam, &map, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
+    pt_camera_init(&cam, &map, &vc, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
     unsigned seed = 12345;
     uint8_t input = PT_IN_FWD;
     for (uint32_t tick = 0; tick < 4000; tick++) {
@@ -57,10 +59,9 @@ int main(int argc, char **argv)
                               | ((r & 2) ? PT_IN_TURNR : 0) | ((r & 4) ? PT_IN_LEFT : 0)
                               | ((r & 8) ? PT_IN_BACK : 0));
         }
-        pt_camera_tick(&cam, &map, input);
+        pt_camera_tick(&cam, &map, &vc, input);
         if ((tick & 7) == 0) {
-            pt_render_frame(&render, (uint16_t)(cam.x >> 8), (uint16_t)(cam.y >> 8), cam.angle,
-                            cam.cell);
+            pt_render_view(&render, cam.angle, cam.cell);
             fwrite(render.fb, 1, PT_FB_BYTES, fp);
         }
     }

@@ -1,19 +1,19 @@
 // camera.c - movement with sliding collision against solid walls, and cell
-// transitions through portals (spec section 10). Positions are unsigned
-// u16.8; distances and dot products are two's complement s16.8 sums whose
-// multiplies branch on the sign and run as unsigned byte chains.
+// transitions through portals. Positions are unsigned u16.8; distances and
+// dot products are two's complement s16.8 sums whose multiplies branch on
+// the sign and run as unsigned byte chains.
 //
 // Walls collide as exactly capped segments, and every solid wall endpoint
 // is a point obstacle: when the circle overlaps one and the move approaches
 // it, the move loses its radial component, leaving it tangent to the circle
 // round the corner, so the camera deflects past a doorway jamb. A wall's
-// infinite line (spec 10.2) or an extended cap would instead wedge movement
-// aimed at the corner, since its slide direction is parallel to the wall.
+// infinite line or an extended cap would instead wedge movement aimed at
+// the corner, since its slide direction is parallel to the wall.
 //
 // Which cell holds the camera is decided by angles alone: from where it
-// stands, a cell's ring vertices run clockwise round it. They're the vertex
-// cache's angles, which the frame's capture looks with too, so the camera's
-// cell and the capture's view of it can never disagree.
+// stands, a cell's ring vertices run clockwise round it. They're the app's
+// vertex cache's angles, which the frame's capture looks with too, so the
+// camera's cell and the capture's view of it can never disagree.
 
 #include "camera.h"
 
@@ -152,7 +152,18 @@ static uint32_t apply(uint32_t p, int16_t d)
     return p + pt_u16(d);
 }
 
-void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8_t angle)
+// Wherever the tick leaves the camera: the vertex cache looks from there
+// (emptied if that's a new whole-unit position), and the cell is the one
+// its angles put the centre in, hopping across any portal side it has
+// crossed. The frame's capture then looks with the same cache.
+static void transition(pt_camera *c, const pt_map *m, pt_vcache *vc)
+{
+    pt_vcache_move(vc, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
+    c->cell = pt_vcache_locate(vc, m, c->cell);
+}
+
+void pt_camera_init(pt_camera *c, const pt_map *m, pt_vcache *vc, uint16_t x, uint16_t y,
+                    uint8_t angle)
 {
     uint8_t cell = pt_map_find_cell(m, x, y);
     RC_ASSERT(cell != 0);
@@ -163,10 +174,10 @@ void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8
         .angle = angle,
         .cell = cell,
     };
-    pt_vcache_reset(&c->vc, x, y);
+    pt_vcache_move(vc, x, y);
 }
 
-void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
+void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
 {
     if (input & PT_IN_TURNL)
         c->angle = (uint8_t)(c->angle - PT_CAM_TURN_SPEED);
@@ -253,8 +264,10 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         mx = pt_i16((int32_t)mx + fy);
         my = pt_i16((int32_t)my - fx);
     }
-    if (mx == 0 && my == 0)
+    if (mx == 0 && my == 0) {
+        transition(c, m, vc);    // the resolve may still have pushed it
         return;
+    }
 
     // 2. move with sliding: the worst violated wall claims the move and
     // keeps only its tangent component. A wall counts only if the move
@@ -317,9 +330,6 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     c->x = apply(c->x, mx);
     c->y = apply(c->y, my);
 
-    // 3. transition: the centre has crossed a portal side, judged by the
-    // angles of the vertices from its new place (the vertex cache, which
-    // the frame's capture then looks with)
-    pt_vcache_move(&c->vc, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
-    c->cell = pt_vcache_locate(&c->vc, m, c->cell);
+    // 3. transition
+    transition(c, m, vc);
 }

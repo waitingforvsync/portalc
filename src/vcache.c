@@ -6,9 +6,16 @@
 
 #include "richc/macros.h"
 
+void pt_vcache_init(pt_vcache *vc)
+{
+    // only the null entry made, and no vertex has one
+    *vc = (pt_vcache) {.num = 1};
+}
+
 void pt_vcache_reset(pt_vcache *vc, uint16_t x, uint16_t y)
 {
     // each entry clears its own vertex's slot, as the visits do
+    RC_ASSERT(vc->num >= 1);
     for (uint8_t i = 1; i < vc->num; i++)
         vc->slot[vc->vert[i]] = 0;
     vc->num = 1;
@@ -24,6 +31,7 @@ void pt_vcache_move(pt_vcache *vc, uint16_t x, uint16_t y)
 
 const pt_polar *pt_vcache_vert(pt_vcache *vc, const pt_map *m, uint8_t v)
 {
+    RC_ASSERT(vc->num >= 1);
     uint8_t e = vc->slot[v];
     if (e != 0)
         return &vc->polar[e];

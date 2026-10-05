@@ -66,6 +66,7 @@ static struct {
     pt_map map;
     pt_render render;
     pt_camera camera;
+    pt_vcache vcache;    // the camera's and the renderer's, shared
     uint8_t rgba[PT_SCREEN_WIDTH * PT_SCREEN_SCANLINES * 4];
     double tick_acc;
     bool keys[512];
@@ -126,7 +127,7 @@ static void on_update(void *ctx, double dt)
         state.tick_acc = 0.25;
     while (state.tick_acc >= TICK_SECONDS) {
         state.tick_acc -= TICK_SECONDS;
-        pt_camera_tick(&state.camera, &state.map, gather_input());
+        pt_camera_tick(&state.camera, &state.map, &state.vcache, gather_input());
     }
 }
 
@@ -134,8 +135,7 @@ static void on_render(void *ctx, rc_vec2i size)
 {
     (void)ctx;
 
-    pt_render_frame(&state.render, (uint16_t)(state.camera.x >> 8),
-                    (uint16_t)(state.camera.y >> 8), state.camera.angle, state.camera.cell);
+    pt_render_view(&state.render, state.camera.angle, state.camera.cell);
     pt_mode5_to_rgba(state.render.fb, state.rgba);
 
     rc_gfx_begin_frame(size);
@@ -278,8 +278,9 @@ int main(void)
 
     pt_arith_init();
     pt_scene_init(&state.map);
-    pt_render_init(&state.render, &state.map);
-    pt_camera_init(&state.camera, &state.map, PT_CAM_START_X, PT_CAM_START_Y,
+    pt_vcache_init(&state.vcache);
+    pt_render_init(&state.render, &state.map, &state.vcache);
+    pt_camera_init(&state.camera, &state.map, &state.vcache, PT_CAM_START_X, PT_CAM_START_Y,
                    PT_CAM_START_ANGLE);
 
     rc_app_init(&(rc_app_desc) {

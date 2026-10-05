@@ -1,12 +1,12 @@
 // vcache.h - the vertex cache: the polar forms (angle and log length) of
 // vertices as seen from one position, the camera's, each made the first
-// time it's needed, like the walk's visits. A vertex has its entry's index
-// (0 for none), and an entry its vertex, so emptying the cache clears just
-// the vertices it holds.
-//
-// Collision fills it from where the camera moves to, and the frame's
-// capture looks from there too, so they share it. It stays good while the
-// camera stands still: turning on the spot costs no vertex work at all.
+// time it's needed, like the walk's visits. There's one, the app's, and the
+// camera and the renderer share it: the camera looks for its cell with it
+// after each move, and the frame's capture then looks from the same place,
+// with the same angles. A vertex has its entry's index (0 for none), and an
+// entry its vertex, so emptying the cache clears just the vertices it
+// holds. It's emptied when the position changes, so turning on the spot
+// costs no vertex work at all.
 
 #ifndef PT_VCACHE_H_
 #define PT_VCACHE_H_
@@ -26,7 +26,10 @@ typedef struct pt_vcache {
     pt_polar polar[PT_VC_MAX];
 } pt_vcache;
 
-// Empty it, and look from (x, y).
+// Make it, empty, looking from (0, 0).
+void pt_vcache_init(pt_vcache *vc);
+
+// Empty it, and look from (x, y), in whole units.
 void pt_vcache_reset(pt_vcache *vc, uint16_t x, uint16_t y);
 
 // Look from (x, y): a new position empties it, the same one keeps it.

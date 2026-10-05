@@ -1,7 +1,8 @@
-// camera.h - camera state, movement and sliding collision (spec section 10).
-// The camera is a circle of radius PT_CAM_RADIUS at an unsigned u16.8 world
-// position, always assigned to the cell containing its centre, as the
-// angles of the cells' vertices from there tell it.
+// camera.h - camera state, movement and sliding collision. The camera is a
+// circle of radius PT_CAM_RADIUS at an unsigned u16.8 world position,
+// always assigned to the cell containing its centre, as the angles of the
+// cells' vertices from there tell it: the app's vertex cache, which the
+// frame's capture then shares.
 
 #ifndef PT_CAMERA_H_
 #define PT_CAMERA_H_
@@ -38,13 +39,15 @@ typedef struct pt_camera {
     uint32_t y;       // u16.8
     uint8_t angle;    // 256ths of a turn; 0 faces world +x
     uint8_t cell;
-    pt_vcache vc;     // the vertices' polar forms from where it stands
 } pt_camera;
 
-// Place the camera; the position must lie inside some cell.
-void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8_t angle);
+// Place the camera, and have the vertex cache look from there; the position
+// must lie inside some cell.
+void pt_camera_init(pt_camera *c, const pt_map *m, pt_vcache *vc, uint16_t x, uint16_t y,
+                    uint8_t angle);
 
-// Advance one fixed tick: turn, move with sliding collision, cross portals.
-void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input);
+// Advance one fixed tick: turn, move with sliding collision, cross portals
+// (by the vertex cache's angles, from where it ends up).
+void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input);
 
 #endif

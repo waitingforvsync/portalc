@@ -1,6 +1,6 @@
-// sprite.h - scaled sprite art (spec section 9.1): columns of colour change
-// points, top-down, over a palette of up to seven catalogue shades plus
-// transparent. The runtime format is the Baron sprite demo's, read top-down:
+// sprite.h - scaled sprite art: columns of colour change points, top-down,
+// over a palette of up to seven catalogue shades plus transparent. The
+// runtime format is the Baron sprite demo's, read top-down:
 //
 //   byte 0         width in columns (1..PT_SPRITE_MAX_COLS)
 //   byte 1         height in rows (1..PT_SPRITE_MAX_ROWS)

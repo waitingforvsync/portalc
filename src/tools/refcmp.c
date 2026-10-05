@@ -36,6 +36,7 @@
 
 static pt_map map;
 static pt_render render;
+static pt_vcache vc;
 static uint8_t ref[PT_SCREEN_HEIGHT][PT_SCREEN_WIDTH];    // shade + 1, 0 = no hit
 
 // ---- the reference ----
@@ -335,7 +336,8 @@ int main(int argc, char **argv)
         pt_stress_scene_init(&map);
     else
         pt_scene_init(&map);
-    pt_render_init(&render, &map);
+    pt_vcache_init(&vc);
+    pt_render_init(&render, &map, &vc);
     render.sprites = false;
 
     if (argc == 7) {

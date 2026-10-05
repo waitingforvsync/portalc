@@ -15,6 +15,7 @@
 #include "richc/test.h"
 
 static pt_map map_;
+static pt_vcache vc_;
 
 // Exact distance from a point to the segment of the side at position k.
 static double seg_dist(const pt_map *m, const pt_cell *c, uint8_t k, double x, double y)
@@ -39,10 +40,11 @@ RC_TEST(probe, collision_distance)
 {
     pt_arith_init();
     pt_scene_init(&map_);
+    pt_vcache_init(&vc_);
     const pt_map *m = &map_;
 
     pt_camera cam;
-    pt_camera_init(&cam, m, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
+    pt_camera_init(&cam, m, &vc_, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
 
     unsigned seed = 12345;
     uint8_t input = PT_IN_FWD;
@@ -55,7 +57,7 @@ RC_TEST(probe, collision_distance)
                               | ((r & 2) ? PT_IN_TURNR : 0) | ((r & 4) ? PT_IN_LEFT : 0)
                               | ((r & 8) ? PT_IN_BACK : 0));
         }
-        pt_camera_tick(&cam, m, input);
+        pt_camera_tick(&cam, m, &vc_, input);
 
         double x = cam.x / 256.0;
         double y = cam.y / 256.0;

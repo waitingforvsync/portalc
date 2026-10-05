@@ -8,6 +8,7 @@ add_library(portal STATIC
     map.c
     mode5.c
     palette.c
+    plot.c
     render.c
     sprite.c
     vcache.c
@@ -16,6 +17,7 @@ add_library(portal STATIC
     map.h
     mode5.h
     palette.h
+    plot.h
     render.h
     sprite.h
     vcache.h

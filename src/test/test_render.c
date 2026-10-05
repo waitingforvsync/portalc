@@ -13,6 +13,7 @@
 
 static pt_map map_;
 static pt_render render_;
+static pt_vcache vc_;
 
 static void centroid(const pt_map *m, uint8_t cell, uint16_t *x, uint16_t *y)
 {
@@ -31,7 +32,8 @@ RC_TEST(render, all_cells_all_angles)
 {
     pt_arith_init();
     pt_scene_init(&map_);
-    pt_render_init(&render_, &map_);
+    pt_vcache_init(&vc_);
+    pt_render_init(&render_, &map_, &vc_);
 
     for (uint8_t cell = 1; cell < map_.num_cells; cell++) {
         uint16_t x;
@@ -49,7 +51,8 @@ RC_TEST(render, deterministic)
 {
     pt_arith_init();
     pt_scene_init(&map_);
-    pt_render_init(&render_, &map_);
+    pt_vcache_init(&vc_);
+    pt_render_init(&render_, &map_, &vc_);
 
     static uint8_t fb0[PT_FB_BYTES];
     pt_render_frame(&render_, 1756, 1536, 128, 2);
@@ -62,10 +65,11 @@ RC_TEST(render, random_walkthrough)
 {
     pt_arith_init();
     pt_scene_init(&map_);
-    pt_render_init(&render_, &map_);
+    pt_vcache_init(&vc_);
+    pt_render_init(&render_, &map_, &vc_);
 
     pt_camera cam;
-    pt_camera_init(&cam, &map_, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
+    pt_camera_init(&cam, &map_, &vc_, PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE);
 
     rc_random rng = rc_random_make(12345);
     uint8_t input = PT_IN_FWD;
@@ -77,12 +81,12 @@ RC_TEST(render, random_walkthrough)
                               | ((r & 2) ? PT_IN_TURNR : 0) | ((r & 4) ? PT_IN_LEFT : 0)
                               | ((r & 8) ? PT_IN_BACK : 0));
         }
-        pt_camera_tick(&cam, &map_, input);
+        pt_camera_tick(&cam, &map_, &vc_, input);
         RC_CHECK(cam.cell, >=, (uint8_t)1);
         RC_CHECK(cam.cell, <, map_.num_cells);
 
         if ((tick & 7) == 0) {
-            pt_render_view(&render_, &cam.vc, cam.angle, cam.cell);
+            pt_render_view(&render_, cam.angle, cam.cell);
             RC_CHECK(render_.num_visits, <=, (uint8_t)PT_MAX_VISITS);
         }
     }

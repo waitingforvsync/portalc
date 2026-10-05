@@ -23,6 +23,9 @@ tried and kept or tried and dropped.
 - **The review, done (awaiting commit).** Work done twice, done once; the
   vertex cache by vertex; the side's quadrant stored; every type explicit.
   Pixels unchanged.
+- **A structural pass, done (awaiting commit).** One vertex cache, the
+  app's, shared by the camera and the renderer; the plotters in `plot.c`;
+  the old spec gone. Pixels unchanged.
 - **Next, phase 4.** The toggle buffer, and clearing it from the clips'
   records.
 
@@ -243,9 +246,14 @@ its vertex is needed, nothing eagerly. It went cell by cell at first, an
 entry a cell's ring, and on map 0 a frame worked out 21.6 polar forms for
 12.7 distinct vertices: every vertex a cell shares, again. By vertex it's
 11.8 (only the ones used), at 4 bytes an entry, 260 bytes for 64
-vertices. Collision fills it first: the move is tested from the new
-position, which is where the frame's capture then looks from, so the two
-share the angles.
+vertices.
+
+There's one cache, the app's, like the map, the camera and the renderer,
+and the camera and the renderer share it. The camera moves it at the end of
+each tick and looks for its cell with it, and the frame's capture then
+looks from the same place with the same angles: `pt_render_view` takes the
+camera's cell as it is. `pt_render_frame`, for the tools and tests, moves
+the cache to a bare pose and looks for the cell itself.
 
 ### No column-to-angle
 
@@ -481,10 +489,15 @@ slide iterations, the hop walk) with new pieces:
   level tying as well at first, and an eye on the line of a portal's
   neighbour hopped into a cell it was outside of.
 - **The vertex cache,** by vertex: an entry the first time a vertex is
-  needed, its polar form from where the camera stands. The camera owns
-  it, and fills it after each move; the capture reads it. A move that
-  doesn't change the whole-unit position keeps it, so turning on the spot
-  costs nothing.
+  needed, its polar form from where the camera stands. It's the app's,
+  emptied when it's made; the camera moves it at the end of every tick,
+  and the capture reads it. A move that doesn't change the whole-unit
+  position keeps it, so turning on the spot costs nothing.
+- **Every tick ends with the transition.** A tick with no move (forward
+  and back together) used to return straight after the resolve, which can
+  still push the camera off a wall: the cell, and now the cache, were left
+  where it had been. Sharing the cache showed it up, as frames from the
+  camera that differed from frames from its pose.
 - **Dot products for walls.** A side's frame is two dot products against
   its direction (the side's stored quadrant, over its edge's byte):
   across it first, along it only when close. Two sine-table
@@ -998,7 +1011,7 @@ fraction's add and `ADC #0` into the row byte.
 
 ### The plotters
 
-All of them move a screen cursor (a character block's address and Y),
+They're in `plot.c`. All of them move a screen cursor (a character block's address and Y),
 placed once at the run's first pixel and then only moved: a row down or
 up, a byte right, a pixel right. A toggle EORs both scanlines of its row,
 the even and the odd pattern.
@@ -1319,7 +1332,8 @@ have nothing wrong, against 6,210.
    cleared from the records.
 5. **Sprites.** After the fill, spritescale's pixels exactly, clipped by
    the saved rows.
-6. **Measure and write up.** Against `main`, then the journal and the spec.
+6. **Measure and write up.** Against `main`, then the journal. The old spec
+   (`docs/portal-spec.md`, `main`'s design) is gone; NOTES.md is the design.
 
 The tests are rewritten as each part lands. `beeb/` stays as it is, and
 won't build on `polar` until the port. The C comes first, looking right,

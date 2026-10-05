@@ -42,15 +42,10 @@ static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
     posts[(*np)++] = v;
 }
 
-// A side's direction: its edge's angle byte, in the quadrant its own
-// vertices' signs give.
+// A side's direction: its stored quadrant over its edge's angle byte.
 static uint16_t side_angle(const pt_map *m, const pt_cell *c, uint8_t k)
 {
-    const pt_side *sd = pt_map_side(m, c, k);
-    pt_vertex a = m->verts[sd->v];
-    pt_vertex b = m->verts[pt_map_side_v1(m, c, k)];
-    uint8_t q = pt_quadrant((int16_t)(b.x - a.x), (int16_t)(b.y - a.y));
-    return (uint16_t)(q << 8 | m->edges[sd->edge].angle);
+    return pt_map_side_angle(m, pt_map_side(m, c, k));
 }
 
 // Every wall interaction happens in the side's own frame, in whole world
@@ -65,28 +60,28 @@ static int16_t side_across(const pt_map *m, const pt_cell *c, uint8_t k, uint16_
                            uint16_t x, uint16_t y)
 {
     pt_vertex v = m->verts[pt_map_side(m, c, k)->v];
-    return pt_dot_dir((int16_t)(x - v.x), (int16_t)(y - v.y), (uint16_t)(a + 256));
+    return pt_dot_dir(pt_i16((int32_t)x - v.x), pt_i16((int32_t)y - v.y), (uint16_t)(a + 256u));
 }
 
 static int16_t side_along(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t a, uint16_t x,
                           uint16_t y)
 {
     pt_vertex v = m->verts[pt_map_side(m, c, k)->v];
-    return pt_dot_dir((int16_t)(x - v.x), (int16_t)(y - v.y), a);
+    return pt_dot_dir(pt_i16((int32_t)x - v.x), pt_i16((int32_t)y - v.y), a);
 }
 
 // The foot of the perpendicular lies on the segment (capped a few units
 // short at the far end: the endpoint regions belong to the posts).
 static bool foot_in_range(const pt_map *m, const pt_cell *c, uint8_t k, int16_t t)
 {
-    return t >= 0 && t <= (int16_t)((uint16_t)m->edges[pt_map_side(m, c, k)->edge].len8 << 3);
+    return t >= 0 && t <= pt_i16((int32_t)m->edges[pt_map_side(m, c, k)->edge].len8 << 3);
 }
 
-// a * b mod 2^16 for a byte b: two lookups, the high partial's own high
-// byte dropped. Exact whenever the product is known to fit.
+// a * b for a byte b, known to fit 16 bits: two lookups, the high
+// partial's own high byte (zero) dropped.
 static uint16_t mulu16x8_lo(uint16_t a, uint8_t b)
 {
-    return (uint16_t)(pt_mulu8((uint8_t)a, b) + (pt_mulu8((uint8_t)(a >> 8), b) << 8));
+    return pt_u16((int32_t)pt_mulu8((uint8_t)a, b) + ((int32_t)pt_mulu8((uint8_t)(a >> 8), b) << 8));
 }
 
 // The posts' division: 1.25 * 2^15 / d2 at the start of each 8 of d2,
@@ -101,17 +96,17 @@ static bool rpost_built_;
 static void build_rpost(void)
 {
     for (uint16_t i = 256 / 8; i < PT_CAM_RADIUS * PT_CAM_RADIUS / 8; i++) {
-        uint16_t d = (uint16_t)(8 * i);
-        uint16_t n = (uint16_t)(40960 + d - 1);    // rounded up
+        uint16_t d = pt_u16(8 * (int32_t)i);
+        uint16_t n = pt_u16(40960 + (int32_t)d - 1);    // rounded up
         uint16_t rem = n >> 8;                     // under d: the quotient is a byte
         uint8_t lo = (uint8_t)n;
         uint8_t q = 0;
         for (uint8_t b = 0; b < 8; b++) {
-            rem = (uint16_t)(rem << 1 | lo >> 7);
+            rem = pt_u16((int32_t)rem << 1 | lo >> 7);
             lo = (uint8_t)(lo << 1);
             q = (uint8_t)(q << 1);
             if (rem >= d) {
-                rem = (uint16_t)(rem - d);
+                rem = pt_u16((int32_t)rem - d);
                 q |= 1;
             }
         }
@@ -129,14 +124,13 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
                            int16_t *mx, int16_t *my)
 {
     // whole units are plenty here: the offset only matters within the radius
-    int16_t ux = (int16_t)((uint16_t)(px >> 8) - m->verts[v].x);
-    int16_t uy = (int16_t)((uint16_t)(py >> 8) - m->verts[v].y);
-    uint16_t ax = (uint16_t)(ux < 0 ? -ux : ux);
-    uint16_t ay = (uint16_t)(uy < 0 ? -uy : uy);
+    int16_t ux = pt_i16((int32_t)(px >> 8) - m->verts[v].x);
+    int16_t uy = pt_i16((int32_t)(py >> 8) - m->verts[v].y);
+    uint16_t ax = pt_u16(ux < 0 ? -(int32_t)ux : ux);
+    uint16_t ay = pt_u16(uy < 0 ? -(int32_t)uy : uy);
     if (ax >= PT_CAM_RADIUS || ay >= PT_CAM_RADIUS)
         return false;
-    uint16_t d2 = (uint16_t)(pt_mulu8((uint8_t)ax, (uint8_t)ax)
-                             + pt_mulu8((uint8_t)ay, (uint8_t)ay));
+    uint16_t d2 = pt_u16((int32_t)pt_mulu8(pt_u8(ax), pt_u8(ax)) + pt_mulu8(pt_u8(ay), pt_u8(ay)));
     if (d2 >= (uint16_t)(PT_CAM_RADIUS * PT_CAM_RADIUS) || d2 < 256)
         return false;    // clear of the vertex, or degenerately on top of it
 
@@ -146,20 +140,20 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
     // units makes it 10 bits, times a byte), and so does the sum: by
     // Cauchy-Schwarz it is at most |M| * |v| / 4 < 1024 * 40
     RC_ASSERT(*mx > -4096 && *mx < 4096 && *my > -4096 && *my < 4096);
-    uint16_t wx = mulu16x8_lo((uint16_t)((*mx < 0 ? -*mx : *mx) >> 2), (uint8_t)ax);
-    uint16_t wy = mulu16x8_lo((uint16_t)((*my < 0 ? -*my : *my) >> 2), (uint8_t)ay);
+    uint16_t wx = mulu16x8_lo(pt_u16((*mx < 0 ? -(int32_t)*mx : *mx) >> 2), pt_u8(ax));
+    uint16_t wy = mulu16x8_lo(pt_u16((*my < 0 ? -(int32_t)*my : *my) >> 2), pt_u8(ay));
     bool nx = (*mx < 0) != (ux < 0);
     bool ny = (*my < 0) != (uy < 0);
     uint16_t mag;
     bool toward;
     if (nx == ny) {
-        mag = (uint16_t)(wx + wy);
+        mag = pt_u16((int32_t)wx + wy);
         toward = nx;
     } else if (wx >= wy) {
-        mag = (uint16_t)(wx - wy);
+        mag = pt_u16((int32_t)wx - wy);
         toward = nx;
     } else {
-        mag = (uint16_t)(wy - wx);
+        mag = pt_u16((int32_t)wy - wx);
         toward = ny;
     }
     if (!toward || mag == 0)
@@ -170,11 +164,11 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
     // one byte, rpost_, and a fractional multiply. The correction along v
     // is f * a / 64 in s.8, one fractional multiply by 4a (a < 40, so a
     // byte)
-    uint16_t f = (uint16_t)(pt_mulu16_frac(mag, rpost_[d2 >> 3]) << 1);
-    int16_t cx = (int16_t)pt_mulu16_frac(f, (uint8_t)(ax << 2));
-    int16_t cy = (int16_t)pt_mulu16_frac(f, (uint8_t)(ay << 2));
-    *mx = (int16_t)(ux < 0 ? *mx - cx : *mx + cx);
-    *my = (int16_t)(uy < 0 ? *my - cy : *my + cy);
+    uint16_t f = pt_u16((int32_t)pt_mulu16_frac(mag, rpost_[d2 >> 3]) << 1);
+    int16_t cx = pt_i16(pt_mulu16_frac(f, pt_u8((int32_t)ax << 2)));
+    int16_t cy = pt_i16(pt_mulu16_frac(f, pt_u8((int32_t)ay << 2)));
+    *mx = pt_i16(ux < 0 ? (int32_t)*mx - cx : (int32_t)*mx + cx);
+    *my = pt_i16(uy < 0 ? (int32_t)*my - cy : (int32_t)*my + cy);
     return true;
 }
 
@@ -182,10 +176,11 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
 static uint32_t apply(uint32_t p, int16_t d)
 {
     if (d < 0) {
-        RC_ASSERT(p >= (uint32_t)(uint16_t)-d);
-        return p - (uint16_t)-d;
+        uint16_t u = pt_u16(-(int32_t)d);
+        RC_ASSERT(p >= u);
+        return p - u;
     }
-    return p + (uint16_t)d;
+    return p + pt_u16(d);
 }
 
 void pt_camera_init(pt_camera *c, const pt_map *m, uint16_t x, uint16_t y, uint8_t angle)
@@ -212,8 +207,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         c->angle = (uint8_t)(c->angle + PT_CAM_TURN_SPEED);
 
     const pt_cell *cc = &m->cells[c->cell];
-    uint16_t px = (uint16_t)(c->x >> 8);
-    uint16_t py = (uint16_t)(c->y >> 8);
+    uint16_t px = pt_u16((int32_t)(c->x >> 8));
+    uint16_t py = pt_u16((int32_t)(c->y >> 8));
 
     // 0. candidate walls (ours, plus every overlapped neighbour's) and the
     // corner vertices at their endpoints, collected while the ring (and so
@@ -252,18 +247,18 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         const pt_cell *wc = &m->cells[cands[i].cell];
         uint8_t k = cands[i].k;
         uint16_t a = cands[i].angle;
-        int16_t across = side_across(m, wc, k, a, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
+        int16_t across = side_across(m, wc, k, a, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
         if (across >= PT_CAM_RADIUS)
             continue;
         if (cands[i].capped && across < 0)
             continue;
         if (!foot_in_range(m, wc, k,
-                           side_along(m, wc, k, a, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8))))
+                           side_along(m, wc, k, a, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)))))
             continue;
         // the push: whole units shifted to s.8 along the inward normal, the
         // direction a quarter turn on from the side's
         RC_ASSERT(PT_CAM_RADIUS - across <= 127);
-        pt_xy pv = pt_dir((int16_t)((PT_CAM_RADIUS - across) << 8), (uint16_t)(a + 256));
+        pt_xy pv = pt_dir(pt_i16((PT_CAM_RADIUS - (int32_t)across) << 8), (uint16_t)(a + 256u));
         c->x = apply(c->x, pv.x);
         c->y = apply(c->y, pv.y);
     }
@@ -275,21 +270,21 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     int16_t mx = 0;    // s.8, under 12 units in any direction
     int16_t my = 0;
     if (input & PT_IN_FWD) {
-        mx = (int16_t)(mx + fx);
-        my = (int16_t)(my + fy);
+        mx = pt_i16((int32_t)mx + fx);
+        my = pt_i16((int32_t)my + fy);
     }
     if (input & PT_IN_BACK) {
-        mx = (int16_t)(mx - fx);
-        my = (int16_t)(my - fy);
+        mx = pt_i16((int32_t)mx - fx);
+        my = pt_i16((int32_t)my - fy);
     }
     if (input & PT_IN_RIGHT) {
         // right of facing is the direction a quarter turn on: (-sin, cos)
-        mx = (int16_t)(mx - fy);
-        my = (int16_t)(my + fx);
+        mx = pt_i16((int32_t)mx - fy);
+        my = pt_i16((int32_t)my + fx);
     }
     if (input & PT_IN_LEFT) {
-        mx = (int16_t)(mx + fy);
-        my = (int16_t)(my - fx);
+        mx = pt_i16((int32_t)mx + fy);
+        my = pt_i16((int32_t)my - fx);
     }
     if (mx == 0 && my == 0)
         return;
@@ -307,8 +302,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
         cur_y[i] = INT16_MIN;
     bool blocked = false;
     for (uint8_t iter = 0; iter < 3; iter++) {
-        uint16_t qx = (uint16_t)(apply(c->x, mx) >> 8);
-        uint16_t qy = (uint16_t)(apply(c->y, my) >> 8);
+        uint16_t qx = pt_u16((int32_t)(apply(c->x, mx) >> 8));
+        uint16_t qy = pt_u16((int32_t)(apply(c->y, my) >> 8));
         int16_t worst = PT_CAM_RADIUS;
         uint16_t hit = 0;
         bool have_hit = false;
@@ -324,7 +319,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
             if (!foot_in_range(m, wc, k, side_along(m, wc, k, a, qx, qy)))
                 continue;
             if (cur_y[i] == INT16_MIN)
-                cur_y[i] = side_across(m, wc, k, a, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
+                cur_y[i] = side_across(m, wc, k, a, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
             if (across + HIT_EPS >= cur_y[i])
                 continue;
             worst = across;
@@ -358,6 +353,6 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     // 3. transition: the centre has crossed a portal side, judged by the
     // angles of the vertices from its new place (the vertex cache, which
     // the frame's capture then looks with)
-    pt_vcache_move(&c->vc, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
+    pt_vcache_move(&c->vc, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
     c->cell = pt_vcache_locate(&c->vc, m, c->cell);
 }

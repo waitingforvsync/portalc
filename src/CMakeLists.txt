@@ -27,7 +27,8 @@ target_include_directories(portal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(MSVC)
     target_compile_options(portal PRIVATE /W3)
 else()
-    target_compile_options(portal PRIVATE -Wall -Wextra)
+    # -Wconversion: every narrowing written out, in the type the 6502 holds
+    target_compile_options(portal PRIVATE -Wall -Wextra -Wconversion)
 endif()
 
 # ---- windowed app ----

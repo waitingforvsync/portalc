@@ -38,12 +38,12 @@ static void check_structure(const pt_map *m)
                 continue;
             }
             const pt_cell *d = &m->cells[sd->adj];
-            const pt_side *t = pt_map_side(m, d, sd->twin);
+            const pt_side *t = pt_map_side(m, d, pt_side_twin(sd));
             RC_CHECK(t->edge, ==, sd->edge);
             RC_CHECK(t->adj, ==, c);
             RC_CHECK(t->v, ==, pt_map_side_v1(m, cell, k));
-            RC_CHECK(pt_map_side_v1(m, d, sd->twin), ==, sd->v);
-            RC_CHECK(pt_map_twin(m, half_of(cell, k)), ==, half_of(d, sd->twin));
+            RC_CHECK(pt_map_side_v1(m, d, pt_side_twin(sd)), ==, sd->v);
+            RC_CHECK(pt_map_twin(m, half_of(cell, k)), ==, half_of(d, pt_side_twin(sd)));
         }
     }
     RC_CHECK(total, ==, (uint16_t)m->num_sides);

@@ -200,11 +200,16 @@ static void end_map(builder *b)
         for (uint8_t k = 0; k <= c->num; k++) {
             uint8_t i = (uint8_t)(c->first + k);
             const pt_half *h = &m->halves[i];
+            pt_vertex a = m->verts[h->v0];
+            pt_vertex q = m->verts[half_v1(m, c, i)];
+            uint8_t quad = pt_quadrant((int16_t)((int32_t)q.x - a.x), (int16_t)((int32_t)q.y - a.y));
+            uint8_t twin = h->adj == 0 ? 0 : half_pos(&m->cells[h->adj], h->twin);
+            RC_ASSERT(twin < 64);
             m->sides[c->first + half_pos(c, i)] = (pt_side) {
                 .v = h->v0,
                 .edge = edge_of[i],
                 .adj = h->adj,
-                .twin = h->adj == 0 ? 0 : half_pos(&m->cells[h->adj], h->twin),
+                .qt = (uint8_t)(quad | twin << 2),
             };
         }
     }
@@ -231,11 +236,11 @@ static bool rings_valid(const pt_map *m)
             wall[sd->edge] = sd->adj == 0;
             if (sd->adj != 0) {
                 const pt_cell *d = &m->cells[sd->adj];
-                if (sd->twin > d->num)
+                if (pt_side_twin(sd) > d->num)
                     return false;
-                const pt_side *t = pt_map_side(m, d, sd->twin);
+                const pt_side *t = pt_map_side(m, d, pt_side_twin(sd));
                 if (t->edge != sd->edge || t->adj != ci || t->v != pt_map_side_v1(m, c, k)
-                    || pt_map_side_v1(m, d, sd->twin) != sd->v)
+                    || pt_map_side_v1(m, d, pt_side_twin(sd)) != sd->v)
                     return false;
             }
 
@@ -243,7 +248,7 @@ static bool rings_valid(const pt_map *m)
             const pt_half *h = &m->halves[c->first + c->num - k];
             if (h->v0 != sd->v || h->adj != sd->adj)
                 return false;
-            if (h->adj != 0 && half_pos(&m->cells[h->adj], h->twin) != sd->twin)
+            if (h->adj != 0 && half_pos(&m->cells[h->adj], h->twin) != pt_side_twin(sd))
                 return false;
         }
     }
@@ -253,19 +258,21 @@ static bool rings_valid(const pt_map *m)
     return true;
 }
 
-// A side's direction against its edge's angle byte: with the quadrant from
-// the direction's signs, the byte is the true angle's 1024th.
+// A side's direction against its stored angle: its quadrant is its
+// direction's signs', and with its edge's byte it's the true angle's 1024th.
 static bool angle_valid(const pt_map *m, const pt_cell *c, uint8_t k)
 {
-    pt_vertex a = m->verts[pt_map_side(m, c, k)->v];
+    const pt_side *sd = pt_map_side(m, c, k);
+    pt_vertex a = m->verts[sd->v];
     pt_vertex b = m->verts[pt_map_side_v1(m, c, k)];
     int32_t dx = (int32_t)b.x - a.x;
     int32_t dy = (int32_t)b.y - a.y;
-    uint16_t q = pt_quadrant((int16_t)dx, (int16_t)dy);
+    if (pt_side_quadrant(sd) != pt_quadrant((int16_t)dx, (int16_t)dy))
+        return false;
     double t = atan2((double)dy, (double)dx) * (512.0 / 3.14159265358979323846);
     if (t < 0)
         t += 1024.0;
-    double d = (q << 8 | m->edges[pt_map_side(m, c, k)->edge].angle) - t;
+    double d = pt_map_side_angle(m, sd) - t;
     if (d > 512.0)
         d -= 1024.0;
     return d >= -1.0 - 1e-9 && d <= 1e-9;

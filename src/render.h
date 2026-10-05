@@ -41,7 +41,16 @@ static inline uint8_t pt_g_isneg(uint16_t g)
     return (uint8_t)(g >> 15);
 }
 
-// A visited cell, made when an edge into it is first clipped and shared by
+// A height as an edge's lines see it.
+typedef struct pt_height {
+    uint8_t m;            // |z - eye_z|, in the map's 8-unit z steps
+    uint8_t below;        // z below the eye (z increases downwards)
+    int16_t l;            // 256 log2(64 * 8m) + 8 * 256: less a depth's log,
+                          // the log of a row's offset from the middle, u8.8
+                          // (0 for m = 0, the eye's own height)
+} pt_height;
+
+// A visited cell, made when an edge into it is first met and shared by
 // every later visit that frame. Visits of one cell run in increasing x and
 // never nest (a ray crosses a convex cell once), so the visit record holds
 // the portal being walked as well as the ring cursor: a later visit resumes
@@ -54,10 +63,21 @@ typedef struct pt_visit {
     uint8_t x;            // where the next edge's span starts: the end of the
                           // last one (the portal's left column to begin with)
     uint8_t xr;           // the portal's right column; 0 until first walked
-    uint8_t tmax, bmin;   // the bounds' extents over the portal: the lowest
-                          // top row and the highest bottom row
-    int16_t lo;           // the cell's window: its vertices' view angles are
-                          // read in [lo, lo + 1024), set when first walked
+    uint8_t tmax, bmin;   // the bounds' extents over the portal: at least the
+                          // lowest top row, at most the highest bottom row.
+                          // 0 and 64 say the bound is the screen's edge all
+                          // along, and its rows aren't kept in top[] or bot[]
+    uint16_t lo;          // the cell's window, set when first walked: its
+                          // start, a world angle (10 bits). A vertex's place
+                          // in it is t = (angle - lo) & 1023
+    uint16_t tl;          // the view's left edge's place in the window, 0..768;
+                          // its right edge is 256 on
+    uint8_t lo8;          // the low byte of the window start's view angle: an
+                          // in-view t's view angle is the byte t + lo8
+    uint16_t t0, t1;      // the current side's ends' places (t1 a turn on, up
+                          // to 1,535, for the eye's own cell's last side)
+    uint8_t c0, c1;       // and their columns
+    pt_height hc, hf;     // the cell's ceiling and floor, as its lines see them
 } pt_visit;
 
 typedef struct pt_render {
@@ -67,7 +87,6 @@ typedef struct pt_render {
     uint8_t *fb;             // the back buffer proper, within fbmem
 
     // camera for the frame being rendered
-    uint16_t cam_x, cam_y;   // whole units
     uint8_t eye_z;           // in 8-unit z steps, like the cell heights
     uint16_t cam4;           // facing, in 1024ths of a turn (the camera's 256ths, x4)
     uint8_t cam_cell;
@@ -80,7 +99,8 @@ typedef struct pt_render {
     // never needing the portal's there again
     uint8_t top[PT_SCREEN_WIDTH];
     uint8_t bot[PT_SCREEN_WIDTH];
-    uint8_t open[PT_SCREEN_WIDTH];    // an edge's scratch: the child's open columns
+    uint8_t open[PT_SCREEN_WIDTH];    // an edge's scratch: the child's open columns,
+                                      // kept only once one closes (pt_open)
 
     pt_visit visits[PT_MAX_VISITS];
     uint8_t num_visits;

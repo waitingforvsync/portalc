@@ -188,7 +188,7 @@ static uint16_t log2_(uint16_t x)
         c = lo & 1;
         lo = (uint8_t)(lo >> 1);
     }
-    uint16_t j = (uint16_t)(((uint8_t)(nrm_[hi] << 1) | lo) + c);
+    uint16_t j = pt_u16((int32_t)((uint8_t)(nrm_[hi] << 1) | lo) + c);
     if (j == 256)
         return (uint16_t)((8 + k) << 8);
     return (uint16_t)((7 + k) << 8 | logf_[j]);
@@ -218,7 +218,7 @@ void pt_arith_init(void)
     // sq1 mirrored about 255
     sq1_[0] = 0;
     for (uint32_t i = 0; i < 511; i++)
-        sq1_[i + 1] = (uint16_t)(sq1_[i] + (i + 1) / 2);
+        sq1_[i + 1] = pt_u16((int32_t)sq1_[i] + (int32_t)(i + 1) / 2);
     for (uint32_t i = 0; i < 512; i++)
         sq2_[i] = sq1_[i >= 255 ? i - 255 : 255 - i];
 
@@ -258,7 +258,7 @@ void pt_arith_init(void)
     for (uint32_t i = 0; i < 128; i++)
         lsec16_[i] = lsec_[i];
     for (uint32_t j = 0; j < 128; j++)
-        lsec16_[255 - j] = (uint16_t)(PT_LOG_STEP - log2_((uint16_t)(2 * j + 1)) + lsx_[j]);
+        lsec16_[255 - j] = pt_u16(PT_LOG_STEP - (int32_t)log2_(pt_u16(2 * (int32_t)j + 1)) + lsx_[j]);
 
     inited_ = true;
 }
@@ -277,19 +277,45 @@ uint16_t pt_log2(uint16_t x)
     return log2_(x);
 }
 
+// 2^(l / 256) for l under 8 * 256: 1.f shifted right 8 - n, rounded, a
+// byte. 1.f is 9 bits, but its 1 comes in from the carry on the first shift
+// (SEC : ROR A), the rest are LSR A, and the last bit out rounds (ADC #0).
+// The rounding's carry out of the byte is 256: *carry.
+//   LDA expf,X : SEC : ROR A
+//   (LSR A, 7 - n times)
+//   ADC #0
+static uint8_t exp2_byte(uint16_t l, uint8_t *carry)
+{
+    RC_ASSERT(l < 8 * 256);
+    uint8_t n = (uint8_t)(l >> 8);
+    uint8_t a = expf_[(uint8_t)l];
+    uint8_t c = (uint8_t)(a & 1u);
+    a = (uint8_t)(0x80u | (uint8_t)(a >> 1));
+    for (uint8_t s = (uint8_t)(7u - n); s != 0; s--) {
+        c = (uint8_t)(a & 1u);
+        a = (uint8_t)(a >> 1);
+    }
+    uint16_t sum = (uint16_t)(a + c);
+    *carry = (uint8_t)(sum >> 8);
+    return (uint8_t)sum;
+}
+
 uint16_t pt_exp2(uint16_t l)
 {
     RC_ASSERT(inited_);
 
-    // 1.f in 9 bits, shifted by the whole part less 8: left exactly, or
-    // right with the last shift's carry rounding
+    // 1.f in 9 bits, shifted by the whole part less 8: right into a byte
+    // (exp2_byte), or left exactly
     uint8_t n = (uint8_t)(l >> 8);
-    uint16_t m = (uint16_t)(256 + expf_[l & 0xFF]);
     if (n >= 16)
         return 0xFFFF;
-    if (n >= 8)
-        return (uint16_t)(m << (n - 8));
-    return (uint16_t)(((m >> (7 - n)) + 1) >> 1);
+    if (n < 8) {
+        uint8_t carry;
+        uint8_t b = exp2_byte(l, &carry);
+        return carry ? 256u : b;
+    }
+    uint16_t m = (uint16_t)(256u + expf_[(uint8_t)l]);
+    return pt_u16((int32_t)m << (n - 8u));
 }
 
 uint8_t pt_quadrant(int16_t dx, int16_t dy)
@@ -310,29 +336,35 @@ pt_polar pt_polar_of(int16_t dx, int16_t dy)
 
     uint8_t q = pt_quadrant(dx, dy);
     bool odd = q & 1;
-    uint16_t ux = (uint16_t)(dx < 0 ? -dx : dx);
-    uint16_t uy = (uint16_t)(dy < 0 ? -dy : dy);
+    uint16_t ux = pt_u16(dx < 0 ? -(int32_t)dx : dx);
+    uint16_t uy = pt_u16(dy < 0 ? -(int32_t)dy : dy);
 
     // the minor component over the major as a byte, from the logs'
-    // difference: 2^8 * minor / major, 256 meaning equal. The major's log
-    // is the length's too, less a factor
+    // difference: 2^8 * minor / major. It's a byte exp (the major's never
+    // the smaller), and its carry out, or a difference of 0, means equal:
+    // 45 degrees. The major's log is the length's too, less a factor
     bool steep = uy > ux;
     uint16_t maj = steep ? uy : ux;
     uint16_t mnr = steep ? ux : uy;
     uint16_t lmaj = pt_log2(maj);
-    uint16_t r = 0;
+    uint8_t r = 0;
+    uint8_t equal = 0;
     if (mnr != 0) {
-        int32_t l = 8 * 256 + pt_log2(mnr) - lmaj;
-        r = l < 0 ? 0 : pt_exp2((uint16_t)l);
+        int16_t l = pt_i16((int32_t)pt_log2(mnr) - lmaj + 8 * 256);
+        RC_ASSERT(l <= 8 * 256);
+        if (l == 8 * 256)
+            equal = 1;
+        else if (l >= 0)
+            r = exp2_byte((uint16_t)l, &equal);
     }
-    uint8_t phi = r == 256 ? 128 : atan_[r];
-    uint8_t lh = r == 256 ? 128 : lhyp_[r];
+    uint8_t phi = equal ? 128 : atan_[r];
+    uint8_t lh = equal ? 128 : lhyp_[r];
 
     // phi runs from the major axis: within the quadrant, from its first
     // axis or its second, as steep and odd differ. 255 - phi rather than
     // 256 - phi: atan_ floors, so both octants hold the step the angle is in
     uint8_t a = (steep != odd) ? (uint8_t)~phi : phi;
-    return (pt_polar) {.angle = (uint16_t)(q << 8 | a), .lr = (uint16_t)(lmaj + lh)};
+    return (pt_polar) {.angle = (uint16_t)((uint16_t)(q << 8) | a), .lr = pt_i16((int32_t)lmaj + lh)};
 }
 
 uint8_t pt_lsec(int8_t v)
@@ -356,7 +388,7 @@ int16_t pt_logsin(uint16_t a)
     uint16_t j = a & 511;
     if (j >= 256)
         j = 511 - j;
-    return (int16_t)-lsec16_[255 - j];
+    return pt_i16(-(int32_t)lsec16_[255 - j]);
 }
 
 uint8_t pt_view_col(int8_t v)
@@ -392,9 +424,9 @@ int16_t pt_mul_sin(int16_t v, uint16_t a)
     RC_ASSERT(v != INT16_MIN);
     bool neg;
     uint16_t s = sin_mag(a, &neg);
-    uint16_t uv = (uint16_t)(v < 0 ? -v : v);
+    uint16_t uv = pt_u16(v < 0 ? -(int32_t)v : v);
     uint16_t p = s == 256 ? uv : s == 0 ? 0 : mulu16_frac_round(uv, (uint8_t)s);
-    return (v < 0) != neg ? (int16_t)-p : (int16_t)p;
+    return (v < 0) != neg ? pt_i16(-(int32_t)p) : pt_i16(p);
 }
 
 int16_t pt_mul_cos(int16_t v, uint16_t a)
@@ -404,7 +436,7 @@ int16_t pt_mul_cos(int16_t v, uint16_t a)
 
 int16_t pt_dot_dir(int16_t ux, int16_t uy, uint16_t a)
 {
-    return (int16_t)(pt_mul_cos(ux, a) + pt_mul_sin(uy, a));
+    return pt_i16((int32_t)pt_mul_cos(ux, a) + pt_mul_sin(uy, a));
 }
 
 pt_xy pt_dir(int16_t mag, uint16_t a)
@@ -415,7 +447,7 @@ pt_xy pt_dir(int16_t mag, uint16_t a)
 uint16_t pt_mulu8(uint8_t a, uint8_t b)
 {
     RC_ASSERT(inited_);
-    return (uint16_t)(sq1_[(uint32_t)a + b] - sq2_[(uint32_t)a - b + 255]);
+    return pt_u16((int32_t)sq1_[(uint32_t)a + b] - sq2_[(uint32_t)a - b + 255]);
 }
 
 uint16_t pt_mulu16_frac(uint16_t a, uint8_t f)
@@ -424,7 +456,7 @@ uint16_t pt_mulu16_frac(uint16_t a, uint8_t f)
     // exact, and the sum cannot carry out of 16 bits
     uint16_t lo = (uint16_t)(pt_mulu8((uint8_t)a, f) >> 8);
     uint16_t hi = pt_mulu8((uint8_t)(a >> 8), f);
-    return (uint16_t)(lo + hi);
+    return pt_u16((int32_t)lo + hi);
 }
 
 uint16_t pt_mulg_u16(uint16_t g, uint8_t dx)
@@ -441,8 +473,8 @@ uint16_t pt_mulg_u16(uint16_t g, uint8_t dx)
 // before its shift (one add-with-carry on the 6502).
 static uint16_t mulu16_frac_round(uint16_t a, uint8_t f)
 {
-    uint16_t lo = (uint16_t)((uint16_t)(pt_mulu8((uint8_t)a, f) + 128) >> 8);
+    uint16_t lo = (uint16_t)(pt_u16((int32_t)pt_mulu8((uint8_t)a, f) + 128) >> 8);
     uint16_t hi = pt_mulu8((uint8_t)(a >> 8), f);
-    return (uint16_t)(lo + hi);
+    return pt_u16((int32_t)lo + hi);
 }
 

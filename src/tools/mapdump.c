@@ -23,12 +23,9 @@ int main(void)
                cc->first, cc->num, cc->floor_z, cc->ceil_z, f.e, f.o, ce.e, ce.o);
         for (uint8_t k = 0; k <= cc->num; k++) {
             const pt_side *sd = pt_map_side(&m, cc, k);
-            pt_vertex a = m.verts[sd->v];
-            pt_vertex b = m.verts[pt_map_side_v1(&m, cc, k)];
-            uint8_t q = pt_quadrant((int16_t)(b.x - a.x), (int16_t)(b.y - a.y));
             printf("  side %d: v%d -> v%d edge %d adj %d twin %d angle %d\n", k, sd->v,
-                   pt_map_side_v1(&m, cc, k), sd->edge, sd->adj, sd->twin,
-                   q << 8 | m.edges[sd->edge].angle);
+                   pt_map_side_v1(&m, cc, k), sd->edge, sd->adj, pt_side_twin(sd),
+                   pt_map_side_angle(&m, sd));
         }
     }
 

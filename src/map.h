@@ -50,9 +50,22 @@ typedef struct pt_side {
     uint8_t v;           // the start vertex
     uint8_t edge;
     uint8_t adj;         // the cell across it, 0 = solid wall
-    uint8_t twin;        // the edge's position in adj's ring, 0..num: the
-                         // child's walk starts from there
+    uint8_t qt;          // quadrant | (twin << 2): the quadrant of the side's
+                         // direction (with its edge's byte, its world angle),
+                         // and the edge's position in adj's ring, 0..num (the
+                         // child's walk starts from there; 0 for a wall)
 } pt_side;
+
+// The quadrant of a side's direction, and its twin's ring position.
+static inline uint8_t pt_side_quadrant(const pt_side *sd)
+{
+    return (uint8_t)(sd->qt & 3u);
+}
+
+static inline uint8_t pt_side_twin(const pt_side *sd)
+{
+    return (uint8_t)(sd->qt >> 2);
+}
 
 // The old renderer's view of a side, kept until phase 3 rewrites it. A
 // cell's halves fill the same range as its sides, clockwise where its
@@ -104,6 +117,12 @@ typedef struct pt_map {
     uint8_t num_sprites;
     uint8_t num_arts;
 } pt_map;
+
+// A side's direction, a world angle: its quadrant over its edge's byte.
+static inline uint16_t pt_map_side_angle(const pt_map *m, const pt_side *sd)
+{
+    return (uint16_t)((uint16_t)((uint16_t)pt_side_quadrant(sd) << 8) | m->edges[sd->edge].angle);
+}
 
 // The side at position k (0..num) of cell c's ring.
 static inline const pt_side *pt_map_side(const pt_map *m, const pt_cell *c, uint8_t k)

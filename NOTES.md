@@ -20,6 +20,9 @@ tried and kept or tried and dropped.
 - **Phase 3b, done (awaiting commit).** The lines from the logs: an end in
   view by `lsec`, one out of it by Doom's clipper, the near clip in screen
   space. View space is gone.
+- **The review, done (awaiting commit).** Work done twice, done once; the
+  vertex cache by vertex; the side's quadrant stored; every type explicit.
+  Pixels unchanged.
 - **Next, phase 4.** The toggle buffer, and clearing it from the clips'
   records.
 
@@ -181,6 +184,19 @@ Under 256 it's exact: `nrm`'s byte with its leading one shifted out. The
 offsets in half units are under 4,096, so a vertex's logs shift at most
 three times. Same answers as the shift loop, all 65,535 of them.
 
+`pt_exp2` under 8 * 256 gives a byte, and its 9-bit mantissa never needs
+a second one: the 1 comes in from the carry on the first shift.
+
+```
+    LDA expf,X : SEC : ROR A     ; 1.f >> 1, the 1 from the carry
+    LSR A                        ; 7 - n times
+    ADC #0                       ; the last bit out rounds
+```
+
+A carry out of that is 256. The ratio byte in `pt_polar_of` is always one
+(the minor never exceeds the major, and the carry, or a difference of 0,
+is 45 degrees), and so is a shallow line's gradient.
+
 | | worst error |
 |---|---|
 | `pt_log2`, all 16-bit values | 1.15 units (0.31%) |
@@ -220,14 +236,16 @@ camera stays put, and a frame that only turns does no polar work at all:
 the cached angle less the camera's, and a column lookup, about 25 cycles a
 vertex.
 
-The cache goes cell by cell, like the visit cache: an entry made the first
-time a cell is needed, holding its ring's vertices in ring order. So its
-size follows the cells a frame touches, not the map's size. A vertex in
-several cells gets worked out once for each, but a child's entry can copy
-the portal's two vertices from its parent's. Collision fills it first: the
-move is tested from the new position, which is where the frame's capture
-then looks from, so the two share the angles. Designed with collision, in
-phase 2b.
+The cache goes by vertex, the way the visit cache goes by cell: a vertex
+has its entry's index, 0 for none, and an entry its vertex, so emptying
+the cache clears just the ones it holds. An entry is made the first time
+its vertex is needed, nothing eagerly. It went cell by cell at first, an
+entry a cell's ring, and on map 0 a frame worked out 21.6 polar forms for
+12.7 distinct vertices: every vertex a cell shares, again. By vertex it's
+11.8 (only the ones used), at 4 bytes an entry, 260 bytes for 64
+vertices. Collision fills it first: the move is tested from the new
+position, which is where the frame's capture then looks from, so the two
+share the angles.
 
 ### No column-to-angle
 
@@ -353,6 +371,17 @@ restarting partway along wants an exact gradient times columns.
 `pt_div_q8` went too, with `recipf`, `sbyte` and the normaliser: the posts
 divide by a byte table now (Collision).
 
+## Types
+
+Every value is held in the type the 6502 will hold it in, and the C says
+so. `pt_u8`, `pt_u16` and `pt_i16` narrow with an assert that the value
+fits, so the tests, the sweep and the comparer check every narrowing at
+the width the port will have. A plain cast wraps on purpose: an angle's
+`& 1023`, a low byte. The library builds with `-Wconversion`, so no
+narrowing goes unwritten.
+
+The camera's position is u16.8, 24 bits, in a `uint32_t` in the C.
+
 ## The map
 
 ### Edges and sides
@@ -366,14 +395,16 @@ edge   angle    the direction's byte within its quadrant
 side   v        the start vertex; the end is the next side's
        edge
        adj      the cell across, 0 for a solid wall
-       twin     the edge's position in adj's ring, 0..num
+       qt       quadrant | (twin << 2)
 ```
 
-The angle byte needs no direction: either way round, the quadrant comes from
-the side's own vertices (`pt_quadrant`), and the byte is the same. `twin`
-is mine: it saves searching the child's ring for the way back in, every
-time the walk enters a cell, for a byte a side. An edge's length comes back
-if collision wants it.
+The angle byte needs no direction: either way round, it's the same byte,
+and only the quadrant differs. So the side keeps its own quadrant, in the
+low two bits of `qt`, and with the edge's byte that's its world angle,
+with no vertices fetched and no signs tested. The rest of `qt` is `twin`,
+the edge's position in adj's ring, which saves searching the child's ring
+for the way back in every time the walk enters a cell; it's under 8 here,
+and could be up to 63. An edge's length comes back if collision wants it.
 
 ### Rings stored backwards
 
@@ -449,14 +480,14 @@ slide iterations, the hop walk) with new pieces:
   and if the point is outside, the side round from that end says so. I had
   level tying as well at first, and an eye on the line of a portal's
   neighbour hopped into a cell it was outside of.
-- **The vertex cache,** cell by cell, like the visits: an entry the first
-  time a cell is needed, the ring's polar forms from where the camera
-  stands. The camera owns it, and fills it after each move; the capture
-  will read it. A move that doesn't change the whole-unit position keeps
-  it, so turning on the spot costs nothing.
+- **The vertex cache,** by vertex: an entry the first time a vertex is
+  needed, its polar form from where the camera stands. The camera owns
+  it, and fills it after each move; the capture reads it. A move that
+  doesn't change the whole-unit position keeps it, so turning on the spot
+  costs nothing.
 - **Dot products for walls.** A side's frame is two dot products against
-  its direction (the edge's byte, the quadrant from the side's own
-  vertices): across it first, along it only when close. Two sine-table
+  its direction (the side's stored quadrant, over its edge's byte):
+  across it first, along it only when close. Two sine-table
   multiplies each, against four through `pt_rot` before. If collision ever
   needs to be cheaper: the cache already holds each vertex's angle and log
   length, so the distance across a side is r sin(angle off the side), one
@@ -529,9 +560,18 @@ whole cell in one piece, and clockwise along the sides facing the eye the
 angles only go up. The eye's own cell spans the whole turn: its window
 starts where the walk does, at the side across the view's left edge.
 
-On the 6502, a vertex is a 10-bit subtract from the window's start, as a
-world angle, and two compares against where the view's edges sit in the
-window, both worked out once a visit. Then `pt_view_col`.
+The visit keeps its window as `lo`, its start, a world angle, so a
+vertex's place in it is one 10-bit subtract, t = (angle - lo) & 1023; and
+`tl`, where the view's left edge sits in it (the right is 256 on), so two
+compares give the column 0, the column 128, or the view angle, which is
+the byte t + `lo8`, and `pt_view_col`. A child's window comes from its
+parent's: `lo` moves by the portal's middle less 512, and `tl` and `lo8`
+the other way.
+
+A side's end is the next side's start, so the visit carries the current
+side's two places and columns, and moving on costs one vertex: its place
+and column. It used to work the columns out afresh each time it asked,
+2.8 times a side, two vertices each.
 
 ### Facing away
 
@@ -726,6 +766,13 @@ so no depth is needed. A near end past 256 rows saturates u8.8, and
 flattened the gradient of any wall ending a unit or two from the eye, so
 there the difference is taken in whole rows instead.
 
+An end's at or past the screen's edge when its offset's log reaches 13 *
+256, the high byte 13: `CMP #13`, and the carry says near, before any exp.
+ceil(delta) is the high byte plus one for any fraction: `CMP #1` on the
+low byte, `ADC #0` into the high. Delta is logs and can be a column over,
+so the count comes back to the last column whose row is still on the
+screen.
+
 The columns kept are whole ones, counted from the far end. A floor line
 whose far end is 20 rows below the middle at column 40, and whose near end
 is 80 rows below at column 70, has g = 2 and delta = 6. It keeps columns
@@ -864,29 +911,43 @@ Cheapest first:
    stay open there, lending the junk row, or close B on row 0; a ceiling
    line's merge into row 0, open or not. That leaves the line's on-screen
    columns.
-3. **The fast path.** If the line's rows at both ends of what's left are
-   strictly inside the visit's extents, it's visible in every column, and
-   plotted whole. A bound line stores its rows as it goes. The ceiling
+3. **The fast path.** If the line's row where what's left starts, and
+   `rl` at its far end, are strictly inside the visit's extents, it's
+   visible in every column, and plotted whole. A bound line stores its rows as it goes. The ceiling
    line's fast path also needs the floor line to have closed nothing, and
    tests against B's highest bottom.
 4. **The scan,** for the rest.
 
 ### The extents
 
-`tmax` is the lowest top row over the visit's portal, and `bmin` the
-highest bottom row. A row with `tmax < row < bmin` is inside in every
-column. A line's rows run from one end's to the other's, so two compares
-settle the lot.
+`tmax` is (at least) the lowest top row over the visit's portal, and
+`bmin` (at most) the highest bottom row. A row with `tmax < row < bmin` is
+inside in every column. A line's rows run from one end's to the other's,
+so two compares settle the lot: its row at the span's start, and `rl`, a
+row `make_line` keeps at or past its last column (the far end's, so no
+multiply).
 
-They're worked out once, when the child is entered: a pass over its open
-run, which the bound lines have just written. The root's are 0 and 64,
-and a child through a soft edge keeps its parent's. They stay true while
-the visit's edges are walked: a child only writes its bounds over columns
-its parent has finished with.
+The bound lines give them as they go: a scanned line keeps its extreme
+row, column by column, and a fast-path line's are its ends'. A level side
+or a soft edge passes on the parent's. They stay true while the visit's
+edges are walked: a child only writes its bounds over columns its parent
+has finished with.
 
 They're conservative. One deep notch in a portal's bottom takes the fast
 path away from every line in it. Measured, three quarters of the columns
 still go through it (below).
+
+**A bound at the screen's edge isn't kept.** `tmax` 0 says the top is row
+0 all along, and `bmin` 64 that the bottom is the junk row. The clips then
+use those, and don't read `top` or `bot`, so the root's bounds are never
+written, and nothing resets the arrays each frame (that was 256 stores).
+A bound line that lends its parent's bound writes it out, since the child
+may keep the rest of its bound in the array.
+
+**Open columns.** A child's open columns are all of them until a bound
+line closes one, and only then does `open[]` get filled and kept. Every
+column open is the usual case, and needs no `open[]`, and no scan for the
+child's run.
 
 ### The scan, by example
 
@@ -924,9 +985,15 @@ fraction as its own.
 A multiply only comes in where a span starts away from the line's anchor:
 `line_y` works out `y + g (c - x0)`, the sum the adds would make. That's a
 line split across two visits, or an edge starting left of its portal. The
-fast path's test at the far end multiplies too. On the 6502 it can test
-the end vertex's own row instead, which bounds the line's rows just as
-well.
+near clip's ends take one too. The fast path's test at the far end reads
+`rl` instead.
+
+The scan goes in three stretches: before the line's own columns and after
+them the row is beyond the screen, the same all along, and between them
+it steps. On the 6502 that's three loops, none comparing the column with
+the line's. `make_line` keeps a line's own rows on the screen, 0 to 64,
+so the step needs no saturating either: for a shallow line it's the
+fraction's add and `ADC #0` into the row byte.
 
 ### The plotters
 
@@ -988,6 +1055,40 @@ bounds. So:
 The pictures are byte-for-byte what they were. Scanning 57 columns a frame
 is about 1.7k cycles, so the per-byte early-out I had in reserve (the
 lowest top and highest bottom over each byte's columns) isn't needed.
+
+### The review, measured
+
+A sweep of the code for work done twice, types wider than they need, and
+carries and tables that could save a byte or a step. Per frame over map
+0's 20,000 random poses (map 9 in brackets), before and after:
+
+| | before | after |
+|---|---|---|
+| vertex places worked out | 57 (79) | 16.2 (25.4) |
+| polar forms, the camera having moved | 21.6 (29.4) | 11.8 (16.8) |
+| logs | 42.2 (53.9) | 32.0 (42.8) |
+| exps | 44.3 (57.3) | 39.7 (49.7) |
+| multiplies for a span's start or a fast-path test | 12.8 (10.8) | 5.9 (1.5), near clip's too |
+| columns passed over for a child's extents | 84.5 (17.0) | 0 |
+| columns scanned for a child's open run | 84.5 (34.7) | 0 (19.2) |
+| stores resetting `top` and `bot` | 256 | 0 |
+
+My guess at the 6502 is about 10k cycles a frame the camera has moved,
+nearer 7k when it has only turned. The pictures are byte-for-byte the
+same: the sweep's framebuffers, every comparer record, and the collision
+probe.
+
+What it took: the vertex cache by vertex; a side's ends carried along the
+walk; the extents from the bound lines; open columns kept only once one
+closes; screen-edge bounds not kept; `rl` for the fast path's far end; the
+scan in three stretches; a cell's heights and their logs once a visit, the
+columns' log once an edge; the near test on the log, the ceil on the
+carry; the byte exp. And the side's quadrant stored with its twin.
+
+Not worth it, measured: a row-address table for the steep plotter (about
+4 columns a frame are steep), per-side line colours in the map (2 KB for
+about 0.5k cycles), a log sine at whole steps (512 bytes for about 90
+cycles), and exp shift tables (2.5 KB).
 
 ## Buffers
 
@@ -1201,5 +1302,7 @@ Settled:
 - **Off-view ends** by Doom's clipper, measured against screen space above.
 - **Grazing walls:** a row or two of error, taken over anything slower.
   Performance comes first.
+- **The vertex cache** goes by vertex, made on need, like the visits.
+- **A side's quadrant** is stored, as quadrant | (twin << 2).
 - **The posts' division:** a byte table, the quickest, with error only on
   the side of more overcorrection.

@@ -30,7 +30,7 @@
 // Byte offset of (byte column, scanline) in the BBC character-cell layout.
 static inline uint16_t pt_mode5_offset(uint8_t bytecol, uint8_t scanline)
 {
-    return (uint16_t)(((scanline & 0xF8u) << 5) + ((uint16_t)bytecol << 3) + (scanline & 7u));
+    return (uint16_t)(((scanline & 0xF8u) << 5) + ((unsigned)bytecol << 3) + (scanline & 7u));
 }
 
 // Clear the whole buffer to zero.

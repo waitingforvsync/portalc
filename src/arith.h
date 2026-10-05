@@ -10,8 +10,31 @@
 
 #include <stdint.h>
 
+#include "richc/macros.h"
+
 // Build the tables; call once before anything else (idempotent).
 void pt_arith_init(void);
+
+// Narrowing, checked: every value is held in the type the 6502 will hold
+// it in, and these assert (in a debug build) that it fits. A narrowing
+// that wraps on purpose is a plain cast, with its mask where it has one.
+static inline uint8_t pt_u8(int32_t v)
+{
+    RC_ASSERT(v >= 0 && v <= 0xFF);
+    return (uint8_t)v;
+}
+
+static inline uint16_t pt_u16(int32_t v)
+{
+    RC_ASSERT(v >= 0 && v <= 0xFFFF);
+    return (uint16_t)v;
+}
+
+static inline int16_t pt_i16(int32_t v)
+{
+    RC_ASSERT(v >= INT16_MIN && v <= INT16_MAX);
+    return (int16_t)v;
+}
 
 // A vector.
 typedef struct pt_xy {
@@ -42,6 +65,9 @@ uint16_t pt_sinq(uint8_t j);
 uint16_t pt_log2(uint16_t x);
 
 // 2^(l / 256), rounded, saturating at 0xFFFF: pt_log2's inverse, within ~0.2%.
+// Under 8 * 256 the result is a byte (or 256, from the rounding's carry),
+// and the 9-bit mantissa never needs a second byte: its 1 comes in from the
+// carry on the first shift right.
 uint16_t pt_exp2(uint16_t l);
 
 // The quadrant of a direction other than (0, 0), from its signs: 0 for +x
@@ -53,8 +79,8 @@ uint8_t pt_quadrant(int16_t dx, int16_t dy);
 
 // A world offset in polar form.
 typedef struct pt_polar {
-    uint16_t angle;    // the world angle (the step it lies in)
-    uint16_t lr;       // 256 * log2 of the length
+    uint16_t angle;    // the world angle (the step it lies in), 10 bits
+    int16_t lr;        // 256 * log2 of the length
 } pt_polar;
 
 // The polar form of a world offset other than (0, 0), with no multiply or

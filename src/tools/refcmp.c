@@ -13,8 +13,15 @@
 // The poses: every cell's centroid at 64 angles, 20,000 at random, and the
 // eye 1 and 6 units off every vertex. A record is 8 bytes, little endian:
 // x, y (16 bits), angle, cell, wrong pixels (16 bits).
+//
+// The engine's eye is the middle of the pose's unit square, (x + 1/2,
+// y + 1/2), and the reference casts from there, in the cell holding it. A
+// pose with the eye there in no cell at all (half a unit inside a wall,
+// which only the poses off the vertices manage: the camera keeps 40 units
+// clear) is skipped, its wrong pixels 0xFFFF.
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -22,6 +29,10 @@
 #include "mode5.h"
 #include "render.h"
 #include "richc/random.h"
+
+// Where the engine's eye sits in the pose's unit square (the vertex cache's
+// middle; 0 for main's engine, at the corner).
+#define EYE_OFF 0.5
 
 static pt_map map;
 static pt_render render;
@@ -58,7 +69,10 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
             double tt = (ax * ey - ay * ex) / den;
             double u = (ax * dy - ay * dx) / den;
             int e = sd->edge;
-            if (tt > t + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9
+            // from an eye on a side (the eye on a portal), the ray leaves at
+            // once if it heads out through it
+            bool ahead = tt > t + 1e-9 || (entry < 0 && tt > -1e-9 && den > 0);
+            if (ahead && u >= -1e-9 && u <= 1 + 1e-9
                 && (tt < best || (tt == best && e < exit_e))) {
                 best = tt;
                 exit = k;
@@ -89,8 +103,34 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
     return 0;
 }
 
-static void ref_frame(uint16_t x, uint16_t y, uint8_t angle, uint8_t cell)
+// The first cell holding (px, py), 0 for none: inside or on every side,
+// whose interior is on its right going clockwise.
+static uint8_t holding_cell(double px, double py)
 {
+    for (uint8_t c = 1; c < map.num_cells; c++) {
+        const pt_cell *cl = &map.cells[c];
+        bool in = true;
+        for (uint8_t k = 0; k <= cl->num && in; k++) {
+            pt_vertex a = map.verts[pt_map_side(&map, cl, k)->v];
+            pt_vertex b = map.verts[pt_map_side_v1(&map, cl, k)];
+            double cr = ((double)b.x - a.x) * (py - a.y) - ((double)b.y - a.y) * (px - a.x);
+            in = cr >= 0;
+        }
+        if (in)
+            return c;
+    }
+    return 0;
+}
+
+// The reference frame from the engine's eye, in the cell holding it; false
+// when none does.
+static bool ref_frame(uint16_t x, uint16_t y, uint8_t angle)
+{
+    double px = x + EYE_OFF;
+    double py = y + EYE_OFF;
+    uint8_t cell = holding_cell(px, py);
+    if (cell == 0)
+        return false;
     double th = angle * (2 * M_PI / 256);
     double fx = cos(th), fy = sin(th);
     double rx = -sin(th), ry = cos(th);
@@ -98,8 +138,9 @@ static void ref_frame(uint16_t x, uint16_t y, uint8_t angle, uint8_t cell)
     for (int c = 0; c < PT_SCREEN_WIDTH; c++) {
         double ly = (c + 0.5 - 64) / 64;
         for (int r = 0; r < PT_SCREEN_HEIGHT; r++)
-            ref[r][c] = cast(x, y, cell, eye, fx + ly * rx, fy + ly * ry, (r + 0.5 - 32) / 64);
+            ref[r][c] = cast(px, py, cell, eye, fx + ly * rx, fy + ly * ry, (r + 0.5 - 32) / 64);
     }
+    return true;
 }
 
 // ---- comparing ----
@@ -158,9 +199,11 @@ static unsigned frames;
 
 static void frame(uint16_t x, uint16_t y, uint8_t angle, uint8_t cell)
 {
-    pt_render_frame(&render, x, y, angle, cell);
-    ref_frame(x, y, angle, cell);
-    uint16_t er = errors(render.fb);
+    uint16_t er = 0xFFFF;
+    if (ref_frame(x, y, angle)) {
+        pt_render_frame(&render, x, y, angle, cell);
+        er = errors(render.fb);
+    }
     uint8_t rec[8] = {(uint8_t)x, (uint8_t)(x >> 8), (uint8_t)y, (uint8_t)(y >> 8),
                       angle,      cell,             (uint8_t)er, (uint8_t)(er >> 8)};
     fwrite(rec, 1, sizeof rec, out);
@@ -300,8 +343,11 @@ int main(int argc, char **argv)
         uint16_t y = (uint16_t)atoi(argv[4]);
         uint8_t angle = (uint8_t)atoi(argv[5]);
         uint8_t cell = (uint8_t)atoi(argv[6]);
+        if (!ref_frame(x, y, angle)) {
+            fprintf(stderr, "refcmp: the eye is in no cell\n");
+            return 1;
+        }
         pt_render_frame(&render, x, y, angle, cell);
-        ref_frame(x, y, angle, cell);
         picture(argv[2]);
         printf("%u pixels wrong\n", errors(render.fb));
         return 0;

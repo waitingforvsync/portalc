@@ -82,20 +82,6 @@ static bool foot_in_range(const pt_map *m, const pt_cell *c, uint8_t k, int16_t 
     return t >= 0 && t <= (int16_t)((uint16_t)m->edges[pt_map_side(m, c, k)->edge].len8 << 3);
 }
 
-// Has the point crossed the side at position k of cell ci, into adj? Seen
-// from the point (pv: the cache's polar forms), the side's vertices run
-// clockwise from inside the cell: the angle from its start to its end is
-// under a half turn. Exactly a half turn (the point on the side) or none
-// (on its line, beyond), the lower-numbered cell keeps it, so both cells
-// always give the same answer.
-static bool side_crossed(const pt_polar *pv, const pt_cell *c, uint8_t k, uint8_t ci, uint8_t adj)
-{
-    uint16_t d = (uint16_t)((pv[pt_map_ring_next(c, k)].angle - pv[k].angle) & 1023);
-    if (d == 0 || d == 512)
-        return adj < ci;
-    return d > 512;
-}
-
 // a * b mod 2^16 for a byte b: two lookups, the high partial's own high
 // byte dropped. Exact whenever the product is known to fit.
 static uint16_t mulu16x8_lo(uint16_t a, uint8_t b)
@@ -337,24 +323,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, uint8_t input)
     c->y = apply(c->y, my);
 
     // 3. transition: the centre has crossed a portal side, judged by the
-    // angles of the vertices from its new place. The walk hops through any
-    // crossed portal and repeats; a move skimming a fan vertex may cross
-    // several cells, and can legally walk the long way round the fan, so
-    // the cap allows a full ring of hops.
+    // angles of the vertices from its new place (the vertex cache, which
+    // the frame's capture then looks with)
     pt_vcache_move(&c->vc, (uint16_t)(c->x >> 8), (uint16_t)(c->y >> 8));
-    for (uint8_t pass = 0; pass < 8; pass++) {
-        const pt_cell *cur = &m->cells[c->cell];
-        const pt_polar *pv = pt_vcache_cell(&c->vc, m, c->cell);
-        bool crossed = false;
-        for (uint8_t k = 0; k <= cur->num; k++) {
-            uint8_t adj = pt_map_side(m, cur, k)->adj;
-            if (adj != 0 && side_crossed(pv, cur, k, c->cell, adj)) {
-                c->cell = adj;
-                crossed = true;
-                break;
-            }
-        }
-        if (!crossed)
-            break;
-    }
+    c->cell = pt_vcache_locate(&c->vc, m, c->cell);
 }

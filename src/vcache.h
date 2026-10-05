@@ -31,8 +31,14 @@ void pt_vcache_reset(pt_vcache *vc, uint16_t x, uint16_t y);
 // Look from (x, y): a new position empties it, the same one keeps it.
 void pt_vcache_move(pt_vcache *vc, uint16_t x, uint16_t y);
 
-// The polar forms of a cell's ring vertices from the cache's position, by
-// ring position (the vertex starting each side), made on first need.
+// The polar forms of a cell's ring vertices from the cache's position (the
+// middle of its whole-unit square), by ring position (the vertex starting
+// each side), made on first need.
 const pt_polar *pt_vcache_cell(pt_vcache *vc, const pt_map *m, uint8_t cell);
+
+// The cell holding the cache's position, as the angles tell it: from cell,
+// hop through any portal side the position is beyond, and again. A point
+// on a side's line goes to the lower-numbered cell.
+uint8_t pt_vcache_locate(pt_vcache *vc, const pt_map *m, uint8_t cell);
 
 #endif

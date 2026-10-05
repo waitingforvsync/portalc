@@ -74,8 +74,8 @@ int main(int argc, char **argv)
         pt_mode5_to_rgba(render.fb, rgba);
         snprintf(path, sizeof(path), "%s/%02u_%s.ppm", dir, i, p->name);
         write_ppm(path);
-        printf("%s: pool %u pieces\n", path, render.pool_num - 1);
+        printf("%s: %u visits\n", path, render.num_visits - 1);
     }
-    printf("pool high water: %u\n", render.pool_high - 1);
+    printf("visits high water: %u\n", render.visits_high - 1);
     return 0;
 }

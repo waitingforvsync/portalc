@@ -6,7 +6,9 @@
 // only by as far as those angles' error reaches. A point d from a side's
 // line sees its two vertices d (1/r0 + 1/r1) radians off a half turn apart,
 // r0 and r1 its distances from them, and each angle is within 1.82 steps
-// of the truth, so it may lie up to 3.64 steps' worth beyond the side.
+// of the truth, so it may lie up to 3.64 steps' worth beyond the side, and
+// half a unit's diagonal more: the angles look from the middle of the
+// position's whole-unit square.
 
 #include <math.h>
 
@@ -80,7 +82,7 @@ RC_TEST(probe, fan_crossings)
                     double r0 = hypot(a.x - px, a.y - py);
                     double r1 = hypot(b.x - px, b.y - py);
                     double reach = 3.64 * (2 * 3.14159265358979323846 / 1024) * r0 * r1 / (r0 + r1);
-                    RC_CHECK(-d, <=, reach);
+                    RC_CHECK(-d, <=, reach + 0.71);    // the angles look from the square's middle
                 }
             }
         }

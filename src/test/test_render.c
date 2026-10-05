@@ -39,7 +39,7 @@ RC_TEST(render, all_cells_all_angles)
         centroid(&map_, cell, &x, &y);
         for (uint32_t a = 0; a < 256; a += 8) {
             pt_render_frame(&render_, x, y, (uint8_t)a, cell);
-            RC_CHECK(render_.pool_num, <=, (uint16_t)PT_POOL_SIZE);
+            RC_CHECK(render_.num_visits, <=, (uint8_t)PT_MAX_VISITS);
             RC_CHECK(render_.depth_high, <, (uint8_t)PT_MAX_DEPTH);    // never cut off
         }
     }
@@ -82,9 +82,8 @@ RC_TEST(render, random_walkthrough)
         RC_CHECK(cam.cell, <, map_.num_cells);
 
         if ((tick & 7) == 0) {
-            pt_render_frame(&render_, (uint16_t)(cam.x >> 8), (uint16_t)(cam.y >> 8), cam.angle,
-                            cam.cell);
-            RC_CHECK(render_.pool_num, <=, (uint16_t)PT_POOL_SIZE);
+            pt_render_view(&render_, &cam.vc, cam.angle, cam.cell);
+            RC_CHECK(render_.num_visits, <=, (uint8_t)PT_MAX_VISITS);
         }
     }
 }

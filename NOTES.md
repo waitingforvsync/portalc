@@ -13,9 +13,11 @@ tried and kept or tried and dropped.
   and the polar front end's primitives in `arith.c`.
 - **Phase 2a, done.** The map in the new format: shared edges, and rings
   of sides stored backwards.
-- **Phase 2b, done (awaiting commit).** Collision on the new map: the
-  cell tracked by angles, through the vertex cache.
-- **Next, phase 3.** The capture.
+- **Phase 2b, done.** Collision on the new map: the cell tracked by
+  angles, through the vertex cache.
+- **Phase 3a, done (awaiting commit).** The walk on the vertex cache's
+  angles and the per-column clip, still with `main`'s lines.
+- **Next, phase 3b.** The lines from the logs.
 
 The phases are at the end.
 
@@ -356,12 +358,13 @@ other isn't.
 
 ### The old view
 
-The old renderer reads the old per-side records, now `pt_half`: start
+The old renderer read the old per-side records, now `pt_half`: start
 vertex, cell across, twin and colour. The builder derives them exactly as
-before, in each cell's range of `sides[]` but clockwise, until phase 3
-rewrites it. So `main`'s pictures are byte-identical: the sweep's framebuffers
-match, and so does every comparer record but the reference's own changes
-(below).
+before, in each cell's range of `sides[]` but clockwise. So until phase 3a
+replaced it, `main`'s pictures were byte-identical: the sweep's
+framebuffers matched, and so did every comparer record but the
+reference's own changes (below). Now only a few tests, probes and tools
+read them, and `pt_half` goes when they move over.
 
 The Beeb port's host tools follow `main`'s map, so on `polar` they're off
 unless `PORTALC_BEEB_HOST` asks for them.
@@ -393,9 +396,12 @@ slide iterations, the hop walk) with new pieces:
   On `main` that took an exact cross product near each line, and
   `root_exact`'s retry.
 - **Ties to the lower cell.** Exactly a half turn apart (the point on the
-  side) or level (on its line, past an end), the lower-numbered cell keeps
-  the point. Both cells give the same answer, so the hop walk can't
-  ping-pong.
+  side), the lower-numbered cell keeps the point. Both cells give the same
+  answer, so the hop walk can't ping-pong. Level (the point on the side's
+  line, past an end) isn't a tie: that side isn't the one being crossed,
+  and if the point is outside, the side round from that end says so. I had
+  level tying as well at first, and an eye on the line of a portal's
+  neighbour hopped into a cell it was outside of.
 - **The vertex cache,** cell by cell, like the visits: an entry the first
   time a cell is needed, the ring's polar forms from where the camera
   stands. The camera owns it, and fills it after each move; the capture
@@ -426,10 +432,66 @@ sees its vertices d (1/r0 + 1/r1) radians off a half turn apart, and each
 angle is within 1.82 steps, so the point may lie up to 3.64 steps' worth
 beyond.
 
-Until phase 3, the old renderer still wants the cell that holds the eye
-exactly (its root search can find no edge to start from with the eye past
-its cell's line). So it checks, and looks the cell up when the camera's
-doesn't hold the eye.
+## The walk
+
+Phase 3a: the walk finds its way by the vertex cache's angles, and the
+clip is the per-column bounds. The lines themselves are still `main`'s,
+made in view space from rotated vertices, then clipped and plotted the new
+way. Phase 3b makes the on-screen ones from the logs.
+
+### Columns from angles
+
+An edge's columns are its vertices' view angles (the world angle less the
+camera's) through `pt_view_col`. Left of the view is 0, right of it 128.
+
+The catch is what's left and right once a vertex is behind the eye. My
+first go unwrapped each edge on its own, its end a clockwise turn on from
+its start. That breaks when a cell comes round the back of the eye. Stand
+close to a portal and the cell beyond can start behind you on the right
+and come round into the view on the left:
+
+```
+side   view angles    each edge on its own   in the window
+k=1    495 .. 511     128 .. 128             -529 .. -513   0 .. 0
+k=0    511 .. 661       0 .. 0               -513 .. -363   0 .. 0
+k=3   -363 .. -25       0 .. 54              -363 .. -25    0 .. 54
+```
+
+The walk went in at k=1, took it for the last edge (it ends at 128), and
+drew nothing.
+
+So each visit has a window, a whole turn, `[lo, lo + 1024)`, that its
+cell's angles are read in. A cell seen through a portal spans under a half
+turn, the portal's middle among it, so a window centred there holds the
+whole cell in one piece, and clockwise along the sides facing the eye the
+angles only go up. The eye's own cell spans the whole turn: its window
+starts where the walk does, at the side across the view's left edge.
+
+On the 6502, a vertex is a 10-bit subtract from the window's start, as a
+world angle, and two compares against where the view's edges sit in the
+window, both worked out once a visit. Then `pt_view_col`.
+
+### Facing away
+
+A cell seen through a portal has a chain of sides facing away from the eye,
+the portal among them. In the window, each one's end comes out at or left
+of its start, so it spans nothing. The ones just after the portal end at or
+left of its left column, so entering a visit skips them like any edge that
+ends left of the span.
+
+A side facing the eye turns by up to a half turn, and its end is taken as
+its start plus that. In a child's window that's where the end is anyway.
+In the eye's own cell, the walk's first vertex sits at both ends of the
+window, and the last edge has to run on round to it, a turn up, to reach
+the right of the view.
+
+### The eye in the middle of its square
+
+The vertex cache looks from the middle of the camera's whole-unit square,
+so no vertex is ever exactly at the eye. The lines' view space now does
+the same: offsets in odd half units, rotated, then rounded back to whole
+units. Before, the walk and the lines looked from points 0.71 of a unit
+apart. The comparer's reference moved too (below).
 
 ## The clip: bounds per column
 
@@ -496,6 +558,48 @@ My estimates, per column:
 
 That's about 13k on the typical frame against `main`'s 31k for clipping,
 row evaluations and plotting, and about 31k against 73k on the heavy one.
+
+### Off the screen, measured
+
+The worry: a line hidden behind a bound costs a compare and a toggle a
+column, and that could eat what the angles save. So I counted, over map
+0's 20,000 random poses. Per frame: 15.3 lines, 57% of them on the fast
+path, 230 columns scanned, and 185 hidden columns toggled one at a time.
+Of those 185:
+
+| | |
+|---|---|
+| in the junk row | 108 |
+| on row 0 | 60 |
+| on the same row as the column before | 7 |
+| no colour | 6 |
+| anything else | 3 |
+
+Nearly all of them are a line running off the screen against the root's
+bounds. So:
+
+- **Hidden runs.** Hidden columns on one row in one colour are gathered
+  like the visible ones, and go to the flat plotter as a run, a byte at a
+  time with the ends masked.
+- **The junk row is dropped.** Nothing there is ever seen.
+- **The screen's edge.** Where the visit's bound on a line's side is the
+  screen's edge all the way across (`tmax` 0, or `bmin` 64: the root, and
+  any visit that kept its bounds), the columns the screen pre-clip cut off
+  are known without a scan. Off the top, a flat run on row 0. Off the
+  bottom, nothing. A floor line's lend the junk row and stay open, or
+  close the child on row 0; a ceiling line's merge into row 0.
+
+| per frame | map 0 | map 9 |
+|---|---|---|
+| lines clipped (the rest all cut off) | 12.8 | 16.6 |
+| on the fast path | 72% | 77% |
+| columns plotted by the fast path | 167 | 111 |
+| columns scanned | 57 | 42 |
+| hidden runs plotted | 3.8 (5.7 bytes) | 4.9 (8.9 bytes) |
+
+The pictures are byte-for-byte what they were. Scanning 57 columns a frame
+is about 1.5k cycles, so the per-byte early-out I had in reserve (the
+lowest top and highest bottom over each byte's columns) isn't needed.
 
 ### Gradients, and rows off the portal
 
@@ -619,23 +723,61 @@ src/tools/refcmp.py OLD NEW                 # two runs against each other
 ```
 
 The poses are every cell's centroid at 64 angles, 20,000 at random, and the
-eye 1 and 6 units off every vertex; about a minute a map. The baselines,
-`main`'s engine against the reference on the new map format
-(`build/refcmp/base_0.bin` and `base_9.bin`):
+eye 1 and 6 units off every vertex; about a minute a map.
 
-| map | frames | pixels wrong |
-|---|---|---|
-| 0 | 22,768 | 1,892,314 |
-| 9 | 22,032 | 8,360,458 |
+The reference casts from the engine's eye. On `polar` that's the middle of
+the pose's unit square, (x + 1/2, y + 1/2) (`EYE_OFF` in `refcmp.c`), in
+whichever cell holds it. A pose with that point in no cell (half a unit
+into a wall: only the poses a unit off a vertex manage it, and the camera
+keeps 40 clear) is skipped, recorded as 0xFFFF, and `refcmp.py` leaves it
+out of both runs.
+
+An eye exactly on a portal broke the reference: a ray heading out through
+that side has to leave at once, at t = 0, and the cast only took exits
+ahead of it. So from the eye, a ray also leaves by a side at t = 0 if it's
+heading out through it. The first baseline had 117 whole frames like that
+on map 0 (the eye on x = 512 and so on), with an all-black reference.
+Rebuilt from `main`'s engine (commit c77115f, its eye at the square's
+corner, `EYE_OFF` 0) with the fixed cast, in `build/refcmp/base2_0.bin`
+and `base2_9.bin`:
+
+| map | frames | pixels wrong, first baseline | rebuilt |
+|---|---|---|---|
+| 0 | 22,768 | 1,892,314 | 1,048,940 |
+| 9 | 22,032 | 8,360,458 | 6,523,190 |
 
 Map 9's is high because of the R1 shelf, where the eye is above its
-ceiling. The new format moved it from 8,152,722, all in 346 frames with the
-eye in R1: from above a ceiling the reference sees faces from behind, and
-it now colours them with the edge's one colour. With the old per-side
-colours put back, it matches `main`'s records exactly.
+ceiling. The new map format moved it from 8,152,722, all in 346 frames
+with the eye in R1: from above a ceiling the reference sees faces from
+behind, and it now colours them with the edge's one colour. With the old
+per-side colours put back, it matches `main`'s records exactly.
 
 A ray exactly through a vertex ties two edges, so the reference breaks
 exact ties by the lower edge number, whatever order the ring is stored in.
+
+### Phase 3a
+
+On the frames both runs keep:
+
+| map | frames (skipped) | `main` | phase 3a |
+|---|---|---|---|
+| 0 | 22,706 (62) | 1,036,731 | 418,022 |
+| 9 | 22,017 (15) | 6,468,692 | 6,292,368 |
+
+On map 0 it's better in 12,807 frames and worse in 4,651, and the frames
+with nothing wrong went from 4,661 to 5,954. The regressions are small:
+5 frames worse by more than 128 pixels, and none by 1,024. Two kinds. A
+vertical edge a column out: atan's worst 1.32 steps is about half a column
+mid-screen, and the comparer forgives a row, not a column. And the eye
+within rounding of a portal between floors at different heights (one
+was 0.042 of a unit off, its turn 511.31 steps rounding to 512): the tie
+goes to the lower cell, and the whole view is two steps up or down.
+
+Map 9's big regressions are R1 again. Corridor poses on its portal line,
+x = 1192, which `main` kept in the corridor, have their middle-of-the-
+square eye in R1, above its ceiling. The camera has no step rule, so
+nothing stops a walk in there either, but the map was never meant to be
+walked.
 
 ## The phases
 
@@ -646,10 +788,11 @@ exact ties by the lower edge number, whatever order the ring is stored in.
    rings of sides stored backwards, the builder and checks, the comparer's
    reference; collision on dot products, the cell by angles, and the
    vertex cache.
-3. **Capture and lines.** Each vertex's polar form, column and log depth,
-   with the vertex cache. The walk; `top` and `bot`; the ceiling strip; lines
-   clamped and toggled into T as they're made, with the fast path; closing;
-   a record per clip.
+3. **Capture and lines.** (a) Done: the walk on the vertex cache's angles,
+   with a window a visit; `top` and `bot`; the ceiling strip; the clips,
+   with the fast path, runs and the screen's edge; closing. The lines
+   still `main`'s, from view space. (b) The on-screen lines from the logs,
+   and a record per clip.
 4. **Fill and clear.** T into the back buffer, then T cleared from the
    records.
 5. **Sprites.** After the fill, spritescale's pixels exactly, clipped by
@@ -667,5 +810,8 @@ before any 6502; but everything is written to be 6502-shaped.
   than a bit a delta), or clip at the view's edge?
 - **Grazing walls behind the eye.** How bad is Doom's clipper at 1024
   steps?
+- **A column out.** Columns from angles put a vertical edge a column off
+  now and then. Live with it, or give `pt_view_col` a finer input near the
+  middle of the view?
 - **`pt_log2` the 6502's way.** Switch the C from its shift loop to the
   `nrm` and `k8` tables now, or leave that for the port?

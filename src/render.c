@@ -783,6 +783,158 @@ static void side_next(const pt_render *r, pt_visit *vs)
     side_end(r, vs);
 }
 
+// ---- sprites ----
+
+// A cell's sprite as it's seen, at the cell's first visit: spritescale's
+// place for it, in logs as the lines are; 0 when it can't be seen (none,
+// beside or behind the eye, too near, too small, off the screen, or no room
+// left in the clip pool). The
+// base's centre is seen as a vertex is, from the eye in the middle of the
+// camera's unit square, and its depth's log is the length's less lsec of
+// its view angle.
+//   - The scale, 64 size / (h depth) in 8.8, is 2^(14 + log size - log h -
+//     log depth), the first three the sprite's own, made with the map.
+//   - The centre's column is 64 + 64 tan v: tan by log sine and lsec, so a
+//     centre off the view (where a wide sprite's edge can still show) needs
+//     no table past it. Out to 255 pixels each side; further, the sprite is
+//     nearer than PT_SPRITE_NEAR or too far to the side to show anyway. Its
+//     left column is half the plotted width (spritescale's, by the
+//     accumulator) less.
+//   - Its bottom is the floor's row at that depth, as the floor's lines have
+//     it (make_line's offset from the middle, from the visit's floor height,
+//     in whole rows past 255), and the pair above is its first.
+// The instance goes into the draw order by depth, far first. Sprites stand
+// inside their cells, so where two overlap on the screen one's cell is seen
+// through the other's, and the nearer is the shallower. Its clip rows take
+// two bytes a column from the pool, and only the tops are set: a top of 0
+// hides a column whatever its bottom.
+static uint8_t inst_new(pt_render *r, const pt_visit *vs)
+{
+    const pt_map *m = r->map;
+    const pt_cell *c = &m->cells[vs->cell];
+    if (c->sprite == 0 || !r->sprites)
+        return 0;
+    const pt_sprite *sp = &m->sprites[c->sprite];
+    const pt_sprite_art *a = &m->arts[sp->art];
+
+    int16_t dx = pt_i16(2 * ((int32_t)sp->x - r->vc->x) - 1);
+    int16_t dy = pt_i16(2 * ((int32_t)sp->y - r->vc->y) - 1);
+    pt_polar pp = pt_polar_of(dx, dy);
+    uint16_t va = (uint16_t)((uint16_t)(pp.angle - r->cam4) & 1023u);
+    if (va >= 256 && va < 768)
+        return 0;    // beside or behind
+    bool left = va >= 512;
+    uint8_t i = left ? (uint8_t)~(uint8_t)va : (uint8_t)va;    // steps off straight ahead
+    int16_t ld = pt_i16((int32_t)pp.lr - 256 - pt_lsec16(i));
+    if (ld < PT_SPRITE_NEAR_L)
+        return 0;
+
+    uint8_t w = pt_sprite_width(a);
+    uint8_t h = pt_sprite_height(a);
+    int32_t ls = (int32_t)sp->ls - ld;
+    if (ls < 0)
+        return 0;
+    uint16_t scale = pt_exp2(pt_u16(ls));
+
+    // the left column
+    int32_t lt = 14 * 256 + (int32_t)pt_logsin(va) + pt_lsec16(i);
+    uint16_t off = lt < 0 ? (uint16_t)0 : pt_exp2(pt_u16(lt));
+    int32_t centre = left ? 64 * 256 - (int32_t)off : 64 * 256 + (int32_t)off;
+    uint16_t pw = pt_u16((int32_t)((128u + (uint32_t)w * scale) >> 8));
+    int16_t sx = pt_i16((centre - (int32_t)pw * 128 + 128) >> 8);
+
+    // the bottom pair
+    int32_t o = 0;
+    if (vs->hf.m != 0) {
+        int32_t lo = (int32_t)vs->hf.l - ld;
+        if (lo >= 16 * 256)
+            o = (int32_t)pt_exp2(pt_u16(lo - 8 * 256)) << 8;
+        else if (lo >= 0)
+            o = pt_exp2(pt_u16(lo));
+    }
+    int32_t y = PT_EDGE_OFF + 128 + (vs->hf.below ? o : -o);
+    int16_t sy = pt_i16(PT_SCREEN_HEIGHT - (y >> 8));
+
+    uint16_t ph = pt_u16((int32_t)((128u + (uint32_t)h * scale) >> 8));
+    int32_t cx0 = sx < 0 ? 0 : sx;
+    int32_t cx1 = (int32_t)sx + pw > PT_SCREEN_WIDTH ? PT_SCREEN_WIDTH : (int32_t)sx + pw;
+    int32_t p1 = (int32_t)sy + ph;
+    if (sy >= PT_SCREEN_HEIGHT || p1 <= 0 || cx0 >= cx1)
+        return 0;
+    uint8_t width = (uint8_t)(cx1 - cx0);
+    if (r->clip_used + 2u * width > PT_CLIP_POOL)
+        return 0;
+
+    RC_PANIC(r->num_insts < PT_MAX_INSTS);
+    uint8_t ii = r->num_insts++;
+    pt_inst *in = &r->insts[ii];
+    in->sprite = c->sprite;
+    in->place = (pt_sprite_place) {.scale = scale, .x = sx, .y = sy};
+    in->ld = ld;
+    in->cx0 = (uint8_t)cx0;
+    in->cx1 = (uint8_t)cx1;
+    in->p0 = sy < 0 ? (uint8_t)0 : (uint8_t)sy;
+    in->p1 = p1 > PT_SCREEN_HEIGHT ? (uint8_t)PT_SCREEN_HEIGHT : (uint8_t)p1;
+    in->clip = r->clip_used;
+    r->clip_used = (uint16_t)(r->clip_used + 2u * width);
+    memset(&r->clipmem[in->clip + width], 0, width);    // shown by no visit yet
+    in->cols = 0;
+    in->whole = true;
+    uint8_t k = r->num_order++;
+    for (; k > 0 && r->insts[r->order[k - 1]].ld < ld; k--)
+        r->order[k] = r->order[k - 1];
+    r->order[k] = ii;
+    return ii;
+}
+
+// A visit to a sprite's cell over [xl, xr): the rows its portal shows in
+// the sprite's columns there, as pairs up from the screen's bottom. The
+// bounds are in top[] and bot[] (or are the screen's edges, as the extents
+// say, and filled in whole), and the visit's children haven't written over
+// them yet. On the 6502 each is LDA #64 : SBC bot,X with the carry set once
+// for the loop (a bound is at most 64, so it never borrows). The extents
+// also say whether every column here shows all of the sprite: if each
+// visit's do, and together they show every column, no strip of it needs
+// classing.
+static void inst_clip(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr, uint8_t tmax, uint8_t bmin)
+{
+    pt_inst *in = &r->insts[ii];
+    uint8_t c0 = xl > in->cx0 ? xl : in->cx0;
+    uint8_t c1 = xr < in->cx1 ? xr : in->cx1;
+    if (c0 >= c1)
+        return;
+    uint8_t width = (uint8_t)(in->cx1 - in->cx0);
+    uint8_t n = (uint8_t)(c1 - c0);
+    uint8_t *lo = &r->clipmem[in->clip + (uint8_t)(c0 - in->cx0)];
+    uint8_t *hi = lo + width;
+    if (bmin == PT_SCREEN_HEIGHT)
+        memset(lo, 0, n);
+    else
+        for (uint8_t i = 0; i < n; i++)
+            lo[i] = (uint8_t)(PT_SCREEN_HEIGHT - r->bot[c0 + i]);
+    if (tmax == 0)
+        memset(hi, PT_SCREEN_HEIGHT, n);
+    else
+        for (uint8_t i = 0; i < n; i++)
+            hi[i] = (uint8_t)(PT_SCREEN_HEIGHT - r->top[c0 + i]);
+    in->cols = (uint8_t)(in->cols + n);
+    if (PT_SCREEN_HEIGHT - bmin > in->p0 || PT_SCREEN_HEIGHT - tmax < in->p1)
+        in->whole = false;
+}
+
+// Hide a sprite over [xl, xr): a visit the walk won't follow after all.
+static void inst_hide(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr)
+{
+    pt_inst *in = &r->insts[ii];
+    uint8_t c0 = xl > in->cx0 ? xl : in->cx0;
+    uint8_t c1 = xr < in->cx1 ? xr : in->cx1;
+    if (c0 >= c1)
+        return;
+    uint8_t width = (uint8_t)(in->cx1 - in->cx0);
+    memset(&r->clipmem[in->clip + width + (uint8_t)(c0 - in->cx0)], 0, (size_t)(c1 - c0));
+    in->whole = false;
+}
+
 // ---- visits ----
 
 // The cell's visit record, made on first need, with its heights' logs.
@@ -821,6 +973,7 @@ static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_visit *fro
         vs->lo8 = (uint8_t)(from->lo8 + (uint8_t)mid);
         vs->k = pt_map_ring_next(c, twin);
         side_start(r, vs);
+        vs->inst = inst_new(r, vs);
     }
     uint8_t guard = c->num;
     while (vs->c1 <= xl) {
@@ -832,6 +985,8 @@ static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_visit *fro
     vs->xr = xr;
     vs->tmax = tmax;
     vs->bmin = bmin;
+    if (vs->inst != 0)
+        inst_clip(r, vs->inst, xl, xr, tmax, bmin);
     return vi;
 }
 
@@ -1034,6 +1189,8 @@ static void descend(pt_render *r, uint8_t ci, uint8_t depth)
         const pt_cell *c = &r->map->cells[vs->cell];
         close_columns(r, vs->x, vs->xr, pt_pattern_xor(pt_shade(c->ceil), pt_shade(c->floor)),
                       vs->bmin == PT_SCREEN_HEIGHT);
+        if (vs->inst != 0)
+            inst_hide(r, vs->inst, vs->x, vs->xr);
         return;
     }
     walk(r, ci, depth);
@@ -1140,6 +1297,9 @@ static uint8_t root_visit(pt_render *r)
     vs->xr = PT_SCREEN_WIDTH;
     vs->tmax = 0;
     vs->bmin = PT_SCREEN_HEIGHT;
+    vs->inst = inst_new(r, vs);
+    if (vs->inst != 0)
+        inst_clip(r, vs->inst, 0, PT_SCREEN_WIDTH, 0, PT_SCREEN_HEIGHT);
     return vi;
 }
 
@@ -1163,6 +1323,9 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // with, as lines running off the top toggle it unrecorded
     r->num_recs = 0;
     memset(r->lastp1, 1, sizeof r->lastp1);
+    r->num_insts = 1;
+    r->num_order = 0;
+    r->clip_used = 0;
 
     // the root portal's bounds are the screen's edges, the top at row 0 and
     // the bottom in the junk row below: its extents say so, and top[] and
@@ -1170,6 +1333,16 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // fill starts each column from its colour
     walk(r, root_visit(r), 1);
     pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->lastp1);
+    for (uint8_t k = 0; k < r->num_order; k++) {
+        const pt_inst *in = &r->insts[r->order[k]];
+        uint8_t width = (uint8_t)(in->cx1 - in->cx0);
+        pt_sprite_clip clip = {.lo = &r->clipmem[in->clip], .hi = &r->clipmem[in->clip + width],
+                               .x0 = in->cx0, .x1 = in->cx1,
+                               .whole = in->whole && in->cols == width};
+        pt_sprite_plot(r->fb, &m->arts[m->sprites[in->sprite].art], in->place, clip);
+    }
+    if (r->clip_used > r->clip_high)
+        r->clip_high = r->clip_used;
     unplot(r);
 
     if (r->num_visits > r->visits_high)

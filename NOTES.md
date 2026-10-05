@@ -15,21 +15,25 @@ tried and kept or tried and dropped.
   of sides stored backwards.
 - **Phase 2b, done.** Collision on the new map: the cell tracked by
   angles, through the vertex cache.
-- **Phase 3a, done (awaiting commit).** The walk on the vertex cache's
-  angles and the per-column clip.
-- **Phase 3b, done (awaiting commit).** The lines from the logs: an end in
-  view by `lsec`, one out of it by Doom's clipper, the near clip in screen
-  space. View space is gone.
-- **The review, done (awaiting commit).** Work done twice, done once; the
-  vertex cache by vertex; the side's quadrant stored; every type explicit.
+- **Phase 3a, done.** The walk on the vertex cache's angles and the
+  per-column clip.
+- **Phase 3b, done.** The lines from the logs: an end in view by `lsec`,
+  one out of it by Doom's clipper, the near clip in screen space. View
+  space is gone.
+- **The review, done.** Work done twice, done once; the vertex cache by
+  vertex; the side's quadrant stored; every type explicit. Pixels
+  unchanged.
+- **A structural pass, done.** One vertex cache, the app's, shared by the
+  camera and the renderer; the plotters in `plot.c`; the old spec gone.
   Pixels unchanged.
-- **A structural pass, done (awaiting commit).** One vertex cache, the
-  app's, shared by the camera and the renderer; the plotters in `plot.c`;
-  the old spec gone. Pixels unchanged.
-- **Phase 4, done (awaiting commit).** The toggle buffer, T: the fill
-  from T into the frame, stopping its EORs at each column's last toggle,
-  and the unplotter clearing T from the frame's records. Pixels unchanged.
-- **Next, phase 5.** Sprites after the fill.
+- **Phase 4, done.** The toggle buffer, T: the fill from T into the frame,
+  stopping its EORs at each column's last toggle, and the unplotter
+  clearing T from the frame's records. Pixels unchanged.
+- **Phase 5, done (awaiting commit).** Sprites after the fill:
+  spritescale's two plotters, its format and rounding, clipped a pixel
+  column at a time to the rows each column shows. Pixels under them
+  unchanged.
+- **Next, phase 6.** Measure against `main`, and write up.
 
 The phases are at the end.
 
@@ -1314,30 +1318,177 @@ for its clear and fill: 18k a frame.
 ## Sprites after the fill
 
 Drawn over the finished picture, far to near, by Baron's
-`examples/spritescale` plotter. The C sprite pass reproduces its pixels and
-rounding exactly: `PY` from a half-step start, columns stepped by the same
-accumulator. Its two plotters (the stretch engine and the per-pair rebuild)
-give the same bytes, so the C needs one.
+`examples/spritescale` plotters, their pixels and rounding exactly. They
+live in `sprite.c`; the renderer only says where each sprite goes and what
+each column shows.
 
-**The clip rows.** Each visit to a sprite's cell copies `top[c]` and
-`bot[c]` over the sprite's columns within the visit's span. Columns no
-visit covers stay empty. A column's visible rows are `[top, bot)`, the
-portal's own. The screen's top and bottom are the root's case of the same
-thing.
+**The format** is spritescale's: run-length columns, bottom up, a byte a run
+(its last row * 8, its colour), and a header byte for the crossover between
+the plotters, worked out as Baron's sprite macro does. A test checks the
+boulder against the 105 bytes in Baron's listing. The palette's patterns
+are made with the art. The rebuild doesn't need spritescale's 64 bytes of
+pre-masked patterns either: with the slot a constant in each unrolled copy,
+`LDA (pal),Y : AND #slotmask` costs what indexing the pre-masked tables
+does.
 
-**Into the plotter.** `plot_draw` is event-driven a strip at a time, so a
-vertical clip is just more events:
+**Where it goes.** At the first visit to its cell, all in logs, like the
+lines:
 
-1. a strip wholly inside its four columns' clip rows runs as it is (most
-   strips);
-2. if all four pixel columns share their clip rows, the strip's start and
-   length are trimmed, as `skiploop` steps past transparent pairs;
-3. otherwise each slot gets up to two clip events, in the change handler's
-   min with the run ends, and a clip mask ANDs into the data bytes and ORs
-   into `mask`.
+- the base's centre is seen as a vertex is, its depth's log the length's
+  less lsec;
+- the scale, 64 size / (h depth) in 8.8, is 2^(14 + log size - log h - log
+  depth), the first three made with the map, per sprite;
+- the centre's column is 64 + 64 tan v, tan by log sine and lsec, so a
+  centre off the view (a wide sprite's edge can still show) needs no table
+  past it; the left column is half the plotted width less;
+- the bottom is the floor's row at that depth, make_line's offset from the
+  visit's floor height, so it stands on the floor's own rows.
 
-The close-ups that cost up to 500k on `main` come down to the sprite's
-area on screen: no toggle list to keep, no world toggles to erase under it.
+Nearer than 32 units, `main`'s limit (16x for both arts), it isn't drawn.
+The map's check makes sure no art's column could pass 255 pixels wide
+there. Facing the pit from 220 units the boulder comes out at 2.32x
+(exactly, 2.33x) and 32 pixels wide, and `main`'s frames agree within a
+row.
+
+**What each column shows.** When `enter()` starts a visit, its bounds are in
+`top[]` and `bot[]`, and its children haven't written over them yet. So
+every visit to a sprite's cell copies them over the sprite's columns in its
+span, as pairs up from the screen's bottom: `LDA #64 : SBC bot,X`, the carry
+set once a loop (a bound is at most 64, so it never borrows), or the
+screen's edges filled in where the extents say so. They go in a pool, two
+bytes a column for each sprite's own columns. Only the tops are set to
+begin with: a top of 0 hides a column whatever its bottom, so a column no
+visit covers shows nothing. The pool is 768 bytes, three full-width
+sprites; 336 is the most 60,000 random poses used. A sprite that doesn't fit
+isn't drawn.
+
+The extents say more: where a visit's top extent is above the sprite and
+its bottom extent below, every column it covers shows all of the sprite.
+If every visit to the cell does, and between them they cover all its
+columns, no strip of it needs classing.
+
+A cell the walk reaches past its depth cap is closed flat, not walked, and
+its sprite is hidden over those columns again.
+
+**Rows in screen space.** spritescale counts pairs up from the sprite's
+bottom, and the sprite has to fit. Here each source row's edge is counted up
+from the screen's bottom and clamped to 0..64. The rounding is the same,
+but a sprite can now stand on a floor below the screen and run up past its
+top, and the screen's edges clip like any other. On the 6502 the loop goes
+in three parts:
+
+- under the screen, a three-byte add, storing 0s, which also counts k0,
+  the first source row on the screen;
+- on it, a two-byte add (the top byte is 0 and the pair under 64, so nothing
+  carries out), where `CMP #64 : BCS top` leaves the carry clear for the
+  next `ADC`;
+- past the top, 64s.
+
+The column accumulator is spritescale's 16 bits: only its whole byte's
+differences count, and a column is under 256 pixels wide.
+
+**Strips.** Each strip, a byte column, is classed from its four slots'
+windows, clamped to the sprite:
+
+- *hidden*: nothing shows. Skipped, its columns still walked.
+- *clean*: every slot shows all of it, or the extents said so for the
+  whole sprite. spritescale's code, untouched, but for one thing. A sprite
+  standing below the screen has runs ending under it, and each column
+  passes them by first: `LDA (spr),Y : CMP k0x8 : BCS done : INY : BNE`,
+  15 cycles a run, the raw run byte against 8 k0, no ends looked up. The
+  handlers then never meet a run ending under the strip, and the zoom set
+  still needs no swallow.
+- *clipped*: the rest. The clean strips' handlers, each column started on
+  the run over the strip's first pair, and the clip's events.
+
+**Clipping by events.** In a clipped strip a slot opens at the bottom of
+its window and closes at its top. Shut, it's out of its column's
+`colmask`: run changes never write it, its data stays 0 and its mask 1, and
+the stretch loops keep the background there. Opening merges its column's
+colour back in, read from the run byte before `idx`; closing blanks it.
+The events are a short sorted list per strip. The next one's pair is a
+fifth value in the handler's min, with the strip's end as its sentinel, so
+`stretchdone` compares with `nextev` where a clean strip compares with `ph`.
+Events go before a run change at the same pair: they commute. Nothing per
+pair.
+
+It's per pixel slot, not per source column, so a zoomed column three slots
+wide still gets three ragged edges. The rebuild's slots are a pixel column
+each anyway, so a slot's opening and closing join its run ends as its own
+events, and a shut slot is a dummy, as spritescale's padding is. Its fetch
+swallows runs at or below the pair, a `BCC` beside the `BEQ`, which at an
+opening is the runs under the window. Its pair loop is untouched.
+
+**Two more for the 6502**, beside spritescale's loops:
+
+- A solid stretch whose even and odd bytes match (a colour of one shade,
+  black or red) stores one byte twice: `STA (scr),Y : DEY : STA (scr),Y :
+  DEY : BMI : DEX : BNE`, 23 cycles a pair against 29, picked once a stretch
+  (`LDA data_odd : CMP data_even : BNE solidloop`). 57% of solid pairs on
+  map 0.
+- A skip needn't step the pointer: pairs are counted from the screen's
+  bottom, so the next one's cursor is two lookups (`LDX cnt : LDY pairy,X :
+  LDA pairpage,X : ORA drawpage`), about 17 cycles against `skiploop`'s 41.
+  The same tables place each strip's start.
+
+**Order.** By depth, far first: an insertion into a list of at most 7.
+Sprites stand inside their cells (the map checks the base's disc fits), so
+where two overlap on the screen, one's cell is seen through the other's,
+and the nearer is shallower.
+
+**Tests.** A reference works out every pixel alone: column and row edges by
+spritescale's rounding, the code, the clip. Both plotters have to match it
+byte for byte on 6,000 random sprites: the boulder and random art up to 32
+columns, a sixteenth to 16x, anywhere round the screen, over full, even,
+sloping, noisy and gappy clips. The clip is held over the sprite's own
+columns only, and the plotters assert they read nowhere else; where it
+shows the whole sprite, they're tried with the shortcut as well. Bugs
+planted on purpose each failed it: an opening slot not merged, a rebuild
+slot never closing, clipped strips taken for clean, no runs passed under the
+screen, and a clipped rebuild fetch with no seek.
+
+**How they come out**, over 20,000 random poses a map:
+
+| | map 0 | map 0, 6 more sprites | map 9 |
+|---|---|---|---|
+| frames with a sprite | 17% | 39% | 23% |
+| engine strips clean / clipped / ragged | 97 / 3.1 / 1.2% | 98 / 1.3 / 0.4% | 42 / 56 / 10.5% |
+| ... clean by the extents, not classed | 62% | 84% | 32% |
+| rebuild strips clean / clipped / hidden | 1 / 74 / 25% | 70 / 15 / 15% | |
+| clip events a clipped engine strip | 0.68 | 0.61 | 0.35 |
+
+The first version classed a sprite standing below the screen clipped all
+over, 70% of the engine's strips on map 0, for runs it only had to pass
+by. Now clipped means a portal really cuts it. Map 9's obelisk is seen
+through doorways, so half its strips are.
+
+**Against main.** An independent review modelled both on the 6502: `main`'s
+sprite pass from its C and `beeb/src/sprites.6502` (which puts its heavy
+frame at 75.0k against the measured 73.5k), and polar's from spritescale's
+own binary run in an emulator (the boulder costs 17.7k at 1x, 29.8k at
+2.32x, 57.1k at 4x), plus the clipping:
+
+| The boulder, map 0 | on screen | `main` | polar | |
+|---|---|---|---|---|
+| 0.32x | 4 pixels, portal-clipped | 12.0k | 5.6k | 2.1x |
+| 1x | 14 x 16, whole | 62.8k | 18.8k | 3.3x |
+| 2x, the heavy pose | 28 x 32 | 75.0k | 25.9k | 2.9x |
+| 2.3x, the start pose | 32 x 37 | 99.3k | 32.3k | 3.1x |
+| 4x, base below the screen | 56 x 64 | 94.9k | 36.8k | 2.6x |
+| 16x | the whole screen | 180.1k | about 91k | 2.0x |
+
+Polar's figures are from before this pass's fixes, but for the 4x and 16x
+rows, which have the runs under the screen passed by; the rest take a few
+percent more off.
+`main` paid about 370 cycles a pixel column before drawing anything, a
+toggle scan down every byte column to the sprite's bottom, and about 370 a
+colour change; polar writes every visible pair, but shares its run work
+between a strip's four pixels. There's no crossover for real art: only a
+tall, featureless sprite with transparency in every byte gets near.
+
+Everything else is unchanged: the sweep without sprites (`portalc_sweep
+--no-sprites`) is byte-identical to before, and so is the comparer, which
+has sprites off.
 
 ## Considered and dropped
 
@@ -1453,8 +1604,8 @@ have nothing wrong, against 6,210.
 4. **Fill and clear.** Done: T; a record per plotted run, colourless bound
    lines too; the fill from T into the frame, from the ceiling's colour,
    its EORs stopping at each column's last toggled row; the unplotter.
-5. **Sprites.** After the fill, spritescale's pixels exactly, clipped by
-   the saved rows.
+5. **Sprites, done.** After the fill, spritescale's pixels exactly, clipped
+   by the saved rows.
 6. **Measure and write up.** Against `main`, then the journal. The old spec
    (`docs/portal-spec.md`, `main`'s design) is gone; NOTES.md is the design.
 

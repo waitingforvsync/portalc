@@ -88,6 +88,8 @@ typedef struct pt_sprite {
     uint16_t y;
     uint16_t size;       // height in world units; the width follows the art's aspect
     uint8_t art;         // index into the map's art
+    int16_t ls;          // 256 log2(64 * 256 size / h): its scale's log, 8.8,
+                         // before its depth's comes off; made with the map
 } pt_sprite;
 
 typedef struct pt_map {
@@ -141,9 +143,14 @@ void pt_scene_init(pt_map *m);
 void pt_stress_scene_init(pt_map *m);
 
 // Check every structural invariant (twins, convexity, winding, soft-edge
-// attribute equality, collision data, sprites within their cells); trips an
-// assert on failure in debug, returns false in release.
+// attribute equality, collision data, sprites within their cells and
+// their scales in range); trips an assert on failure in debug, returns
+// false in release.
 bool pt_map_validate(const pt_map *m);
+
+// A sprite of art art in m, size units tall, its base's centre at (x, y),
+// with its scale's log made (by the host, which builds maps).
+pt_sprite pt_map_sprite(const pt_map *m, uint16_t x, uint16_t y, uint16_t size, uint8_t art);
 
 // The signed distance of a point from the line of the side at position k
 // of cell c, s16.8: positive on the cell's interior side.

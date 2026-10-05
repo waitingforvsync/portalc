@@ -15,6 +15,7 @@
 #include "map.h"
 #include "mode5.h"
 #include "richc/macros.h"
+#include "sprite.h"
 #include "vcache.h"
 
 #define PT_MAX_DEPTH 16      // portals nested along a line of sight (the walk's
@@ -22,6 +23,14 @@
 #define PT_MAX_VISITS PT_MAX_CELLS    // distinct cells one frame may visit; entry 0 is null
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
 #define PT_MAX_RECS 128       // runs plotted in a frame, for the unplotter
+#define PT_MAX_INSTS PT_MAX_SPRITES    // sprites seen in a frame; entry 0 is null
+#define PT_CLIP_POOL 768               // the sprites' clip rows, two bytes a column:
+                                       // three full-width sprites (336 the most
+                                       // seen in 60,000 poses); one that won't
+                                       // fit isn't drawn
+#define PT_SPRITE_NEAR_L (5 * 256)     // sprites nearer than 32 units (main's
+                                       // limit: 16x for the boulder and the
+                                       // obelisk) aren't drawn; a depth's log
 
 // A plotted run, as the unplotter wants it: columns [x0, x1) from the row at
 // x0 (u8.8, the rounding half in), stepping by g (plot.h's gradient). Six
@@ -69,7 +78,24 @@ typedef struct pt_visit {
                           // to 1,535, for the eye's own cell's last side)
     uint8_t c0, c1;       // and their columns
     pt_height hc, hf;     // the cell's ceiling and floor, as its lines see them
+    uint8_t inst;         // its sprite as seen this frame, 0 for none
 } pt_visit;
+
+// A sprite seen this frame: where it goes on the screen, its depth for the
+// order, and the rows it shows in each column it covers, gathered from its
+// cell's visits into the clip pool (a column none of them covers shows
+// none).
+typedef struct pt_inst {
+    uint8_t sprite;           // the map's
+    pt_sprite_place place;
+    int16_t ld;               // 256 log2 of its depth
+    uint8_t cx0, cx1;         // the screen columns it covers
+    uint8_t p0, p1;           // the pairs it covers, clamped to the screen
+    uint16_t clip;            // its rows in the pool: each column's bottom
+                              // pair (lo) from here, then its top (hi)
+    uint8_t cols;             // the columns its cell's visits have shown
+    bool whole;               // and each showed all of it there
+} pt_inst;
 
 typedef struct pt_render {
     const pt_map *map;
@@ -109,7 +135,17 @@ typedef struct pt_render {
     uint8_t recs_high;               // high-water mark across frames, for stats
     uint8_t lastp1[PT_SCREEN_WIDTH / 4];
 
-    bool sprites;                    // draw sprites (none yet: phase 5)
+    // the sprites seen, the order they're drawn in, far to near, and their
+    // clip rows
+    pt_inst insts[PT_MAX_INSTS];
+    uint8_t num_insts;
+    uint8_t order[PT_MAX_INSTS];
+    uint8_t num_order;
+    uint8_t clipmem[PT_CLIP_POOL];
+    uint16_t clip_used;
+    uint16_t clip_high;              // high-water mark across frames, for stats
+
+    bool sprites;                    // draw sprites
 } pt_render;
 
 // Bind the renderer to a map and the app's vertex cache.
@@ -118,7 +154,8 @@ void pt_render_init(pt_render *r, const pt_map *m, pt_vcache *vc);
 // Render one frame into r->fb from the camera: the vertex cache looks from
 // its eye, and cell is the one the cache's angles put it in, as the
 // camera's tick left them. The capture walk toggles lines into T, the fill
-// takes T into the frame, and the unplotter clears T again.
+// takes T into the frame, the sprites go over it, and the unplotter clears
+// T again.
 void pt_render_view(pt_render *r, uint8_t angle, uint8_t cell);
 
 // Render one frame from a bare pose (the tools' and tests'): the vertex

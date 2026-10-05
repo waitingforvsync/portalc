@@ -13,12 +13,8 @@ bool pt_testmaps_add_sprites(pt_map *m)
             sx += m->verts[pt_map_side(m, c, k)->v].x;
             sy += m->verts[pt_map_side(m, c, k)->v].y;
         }
-        m->sprites[m->num_sprites] = (pt_sprite) {
-            .x = (uint16_t)(sx / (c->num + 1)),
-            .y = (uint16_t)(sy / (c->num + 1)),
-            .size = 64,
-            .art = 0,
-        };
+        m->sprites[m->num_sprites] = pt_map_sprite(m, (uint16_t)(sx / (c->num + 1)),
+                                                   (uint16_t)(sy / (c->num + 1)), 64, 0);
         m->cells[cells[i]].sprite = m->num_sprites++;
     }
     return pt_map_validate(m);

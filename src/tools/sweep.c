@@ -1,9 +1,12 @@
 // sweep.c - render every cell centroid at 32 angles, then a scripted
 // pseudo-random camera walk, concatenating the raw framebuffers to a file.
 // Two sweeps from different builds compare with cmp: byte-identical output
-// proves a refactor changed nothing observable.
+// proves a refactor changed nothing observable. --no-sprites leaves them
+// out, for comparing what's under them.
 
+#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "arith.h"
 #include "camera.h"
@@ -17,18 +20,21 @@ static pt_vcache vc;
 
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
-        fprintf(stderr, "usage: portalc_sweep out.bin\n");
+    bool sprites = !(argc == 3 && strcmp(argv[1], "--no-sprites") == 0);
+    if (argc != 2 && sprites) {
+        fprintf(stderr, "usage: portalc_sweep [--no-sprites] out.bin\n");
         return 1;
     }
+    const char *out = argv[argc - 1];
 
     pt_arith_init();
     pt_scene_init(&map);
     pt_vcache_init(&vc);
     pt_render_init(&render, &map, &vc);
-    FILE *fp = fopen(argv[1], "wb");
+    render.sprites = sprites;
+    FILE *fp = fopen(out, "wb");
     if (!fp) {
-        fprintf(stderr, "cannot write %s\n", argv[1]);
+        fprintf(stderr, "cannot write %s\n", out);
         return 1;
     }
 

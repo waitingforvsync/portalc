@@ -73,13 +73,21 @@ static uint8_t add_art(builder *b, const char *const rows[], const uint8_t pal[7
     return m->num_arts++;
 }
 
+pt_sprite pt_map_sprite(const pt_map *m, uint16_t x, uint16_t y, uint16_t size, uint8_t art)
+{
+    RC_ASSERT(art < m->num_arts && size != 0);
+    double h = pt_sprite_height(&m->arts[art]);
+    double ls = 256.0 * log2(64.0 * 256.0 * size / h);
+    return (pt_sprite) {.x = x, .y = y, .size = size, .art = art, .ls = (int16_t)lround(ls)};
+}
+
 // Stand a sprite in the current cell, on its floor.
 static void add_sprite(builder *b, uint16_t x, uint16_t y, uint16_t size, uint8_t art)
 {
     pt_map *m = b->m;
     RC_PANIC(m->num_sprites < PT_MAX_SPRITES);
     RC_ASSERT(b->cur_cell != 0 && m->cells[b->cur_cell].sprite == 0);
-    m->sprites[m->num_sprites] = (pt_sprite) {.x = x, .y = y, .size = size, .art = art};
+    m->sprites[m->num_sprites] = pt_map_sprite(m, x, y, size, art);
     m->cells[b->cur_cell].sprite = m->num_sprites++;
 }
 
@@ -340,6 +348,12 @@ bool pt_map_validate(const pt_map *m)
                 if (pt_map_edge_side(m, c, k, sp->x, sp->y) < half * len)
                     return false;
                 if (sp->size > 8 * (c->floor_z - c->ceil_z))
+                    return false;
+                // its log made, and a column under 256 pixels wide at the
+                // nearest it's drawn, 32 units: 512 size / h in 8.8
+                if (sp->ls != pt_map_sprite(m, sp->x, sp->y, sp->size, sp->art).ls)
+                    return false;
+                if (512.0 * sp->size / pt_sprite_height(a) >= 65280.0)
                     return false;
             }
 

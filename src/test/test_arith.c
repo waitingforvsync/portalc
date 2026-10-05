@@ -27,10 +27,8 @@ RC_TEST_STEP(arith, mulu8_exhaustive, fix)
 {
     (void)fix;
     for (uint32_t a = 0; a < 256; a++)
-        for (uint32_t b = 0; b < 256; b++) {
+        for (uint32_t b = 0; b < 256; b++)
             RC_CHECK(pt_mulu8((uint8_t)a, (uint8_t)b), ==, (uint16_t)(a * b));
-            RC_CHECK(pt_mulu8_neg((uint8_t)a, (uint8_t)b), ==, (uint16_t)-(uint16_t)(a * b));
-        }
 }
 
 RC_TEST_STEP(arith, mulu16_frac, fix)
@@ -38,11 +36,8 @@ RC_TEST_STEP(arith, mulu16_frac, fix)
     (void)fix;
     static const uint16_t as[] = {0, 1, 2, 255, 256, 257, 4095, 16384, 32767, 65535};
     for (uint32_t i = 0; i < sizeof(as) / sizeof(as[0]); i++)
-        for (uint32_t f = 0; f < 256; f++) {
-            uint16_t want = (uint16_t)(((uint32_t)as[i] * f) >> 8);
-            RC_CHECK(pt_mulu16_frac(as[i], (uint8_t)f), ==, want);
-            RC_CHECK(pt_mulu16_frac_neg(as[i], (uint8_t)f), ==, (uint16_t)-want);
-        }
+        for (uint32_t f = 0; f < 256; f++)
+            RC_CHECK(pt_mulu16_frac(as[i], (uint8_t)f), ==, (uint16_t)(((uint32_t)as[i] * f) >> 8));
 }
 
 RC_TEST_STEP(arith, mulg_u16, fix)
@@ -57,51 +52,10 @@ RC_TEST_STEP(arith, mulg_u16, fix)
         }
 }
 
-// The rounded product a * s / 256 for the reference rotation, sign-aware.
-static int32_t rot_term(int32_t a, int32_t s)
-{
-    int32_t ua = a < 0 ? -a : a;
-    int32_t us = s < 0 ? -s : s;
-    int32_t m = (ua * us + 128) >> 8;
-    return ((a < 0) != (s < 0)) ? -m : m;
-}
-
 // The table's sine of t in 256ths of a turn, as a wide reference.
 static int32_t ref_sin(uint32_t t)
 {
     return (int32_t)lround(sin((double)(t & 255) * (3.14159265358979323846 / 128.0)) * 256.0);
-}
-
-RC_TEST_STEP(arith, rot, fix)
-{
-    (void)fix;
-    static const int16_t vs[] = {-30000, -257, -256, -1, 0, 1, 255, 256, 30000};
-    for (uint32_t i = 0; i < sizeof(vs) / sizeof(vs[0]); i++)
-        for (uint32_t j = 0; j < sizeof(vs) / sizeof(vs[0]); j++)
-            for (uint32_t t = 0; t < 256; t++) {
-                int32_t sm = ref_sin(t);
-                int32_t cm = ref_sin(t + 64);
-                pt_xy r = pt_rot(vs[i], vs[j], (uint8_t)t);
-                RC_CHECK(r.x, ==, (int16_t)(rot_term(vs[i], cm) + rot_term(vs[j], sm)));
-                RC_CHECK(r.y, ==, (int16_t)(rot_term(vs[j], cm) - rot_term(vs[i], sm)));
-            }
-}
-
-RC_TEST_STEP(arith, lerp16, fix)
-{
-    (void)fix;
-    static const int16_t as[] = {-20000, -100, 0, 50, 20000};
-    static const int16_t bs[] = {-20000, -101, 0, 49, 30000};
-    for (uint32_t i = 0; i < sizeof(as) / sizeof(as[0]); i++)
-        for (uint32_t j = 0; j < sizeof(bs) / sizeof(bs[0]); j++)
-            for (uint32_t t = 0; t < 256; t += 17) {
-                int32_t a = as[i];
-                int32_t b = bs[j];
-                int32_t dm = b >= a ? b - a : a - b;
-                int32_t off = (int32_t)(((int64_t)dm * t) >> 8);
-                int32_t exact = b >= a ? a + off : a - off;
-                RC_CHECK((int32_t)pt_lerp16(as[i], bs[j], (uint8_t)t), ==, exact);
-            }
 }
 
 // Directions in 1024ths: every angle's sine and cosine products against
@@ -136,149 +90,6 @@ RC_TEST_STEP(arith, directions, fix)
     }
 }
 
-RC_TEST_STEP(arith, div_t_bounds, fix)
-{
-    (void)fix;
-    static const uint16_t dens[] = {1, 2, 3, 255, 256, 257, 1000, 32767, 65535};
-    for (uint32_t i = 0; i < sizeof(dens) / sizeof(dens[0]); i++) {
-        uint16_t den = dens[i];
-        for (uint32_t k = 0; k <= 8; k++) {
-            uint16_t num = (uint16_t)(((uint32_t)den * k) / 8);
-            uint32_t got = pt_div_t(num, den);
-            uint32_t exact = ((uint32_t)num << 8) / den;
-            if (exact > 255)
-                exact = 255;
-            // reciprocal normalisation loses low bits of large denominators
-            int32_t err = (int32_t)got - (int32_t)exact;
-            RC_CHECK(err >= -3 && err <= 3, ==, true);
-        }
-    }
-}
-
-RC_TEST_STEP(arith, project_col, fix)
-{
-    (void)fix;
-    static const uint16_t xs[] = {1, 2, 3, 100, 255, 256, 1000, 2500, 8000};
-    for (uint32_t i = 0; i < sizeof(xs) / sizeof(xs[0]); i++) {
-        uint16_t x = xs[i];
-        for (int32_t k = -8; k <= 8; k++) {
-            int16_t y = (int16_t)(((int32_t)x * k) / 8);
-            int32_t exact = 64 + (64 * (int32_t)y) / (int32_t)x;
-            int32_t got = pt_project_col(y, x, pt_recip16(x));
-            RC_CHECK(got >= 0 && got <= 128, ==, true);
-            int32_t err = got - exact;
-            RC_CHECK(err >= -2 && err <= 2, ==, true);
-        }
-    }
-}
-
-RC_TEST_STEP(arith, project_rowd, fix)
-{
-    (void)fix;
-    static const uint8_t hs[] = {0, 1, 10, 17, 50, 127, 255};
-    for (uint32_t i = 0; i < sizeof(hs) / sizeof(hs[0]); i++) {
-        uint8_t h8 = hs[i];
-        uint16_t d = (uint16_t)(((uint32_t)h8 * (8 * 128) + PT_SCREEN_HEIGHT - 1)
-                                / PT_SCREEN_HEIGHT);
-        if (d == 0)
-            d = 1;
-        for (uint32_t x = d; x < 8000; x = x * 2 + 1) {
-            int32_t exact = (64 * 8 * (int32_t)h8) / (int32_t)x;
-            int32_t got = pt_project_rowd(h8, (uint16_t)x, pt_recip16((uint16_t)x));
-            RC_CHECK(got >= 0 && got <= PT_SCREEN_HEIGHT / 2, ==, true);
-            int32_t err = got - exact;
-            RC_CHECK(err >= -2 && err <= 2, ==, true);
-        }
-    }
-}
-
-RC_TEST_STEP(arith, project_q8, fix)
-{
-    (void)fix;
-    // byte and u16 lengths, depths from 1 up: within the reciprocal's error
-    // plus a count, or saturated; a u16 depth's normalising truncates its low
-    // bits, which can overestimate 1/x by up to 1/128
-    static const uint16_t lens[] = {0, 1, 7, 100, 128, 255, 256, 300, 1000, 4000, 30000};
-    for (uint32_t i = 0; i < sizeof(lens) / sizeof(lens[0]); i++)
-        for (uint32_t x = 1; x < 60000; x = x * 3 / 2 + 1) {
-            uint32_t exact = ((uint32_t)lens[i] << 14) / x;
-            uint32_t got = pt_project_q8(lens[i], (uint16_t)x, pt_recip16((uint16_t)x));
-            if (exact >= 0xFFFF) {
-                RC_CHECK(got >= 0xFF00, ==, true);
-                continue;
-            }
-            int32_t err = (int32_t)got - (int32_t)exact;
-            int32_t slack = (int32_t)(exact / 128) + 2;
-            RC_CHECK(err >= -slack && err <= slack, ==, true);
-        }
-}
-
-RC_TEST_STEP(arith, grad_mag, fix)
-{
-    (void)fix;
-    for (uint32_t dy = 0; dy <= 64; dy += 3)
-        for (uint32_t dx = 1; dx <= 128; dx++) {
-            uint32_t exact = (dy << 8) / dx;
-            uint32_t got = pt_grad_mag((uint8_t)dy, (uint8_t)dx);
-            // the byte reciprocal costs up to ~0.2% of the exact value; over
-            // a line's own dx-column span that is under a sixth of a row
-            int32_t err = (int32_t)got - (int32_t)exact;
-            int32_t slack = (int32_t)(exact / 256) + 2;
-            RC_CHECK(err >= -slack && err <= slack, ==, true);
-        }
-}
-
-RC_TEST_STEP(arith, gradq8_mag, fix)
-{
-    (void)fix;
-    static const uint16_t dxs[] = {1, 128, 255, 256, 300, 1000, 16384, 32768};
-    for (uint32_t dy = 0; dy <= 64; dy += 7)
-        for (uint32_t i = 0; i < sizeof(dxs) / sizeof(dxs[0]); i++) {
-            uint32_t exact = (dy << 16) / dxs[i];
-            if (exact > 0x7FFF)
-                exact = 0x7FFF;
-            uint32_t got = pt_gradq8_mag((uint8_t)dy, dxs[i]);
-            // normalisation costs up to ~1% of the exact value
-            int32_t err = (int32_t)got - (int32_t)exact;
-            int32_t slack = (int32_t)(exact / 64) + 2;
-            RC_CHECK(err >= -slack && err <= slack, ==, true);
-        }
-}
-
-RC_TEST_STEP(arith, div_q8, fix)
-{
-    (void)fix;
-    static const uint16_t nums[] = {0, 1, 255, 256, 1600, 40960, 65535};
-    static const uint16_t dens[] = {128, 129, 255, 256, 900, 1600, 18000, 65535};
-    for (uint32_t i = 0; i < sizeof(nums) / sizeof(nums[0]); i++)
-        for (uint32_t j = 0; j < sizeof(dens) / sizeof(dens[0]); j++) {
-            uint64_t exact = ((uint64_t)nums[i] << 8) / dens[j];
-            if (exact > 0xFFFF)
-                exact = 0xFFFF;
-            uint32_t got = pt_div_q8(nums[i], dens[j]);
-            // reciprocal normalisation loses low bits of large denominators
-            int64_t err = (int64_t)got - (int64_t)exact;
-            int64_t slack = (int64_t)(exact / 64) + 2;
-            RC_CHECK(err >= -slack && err <= slack, ==, true);
-        }
-}
-
-RC_TEST_STEP(arith, div_cols, fix)
-{
-    (void)fix;
-    static const uint16_t nums[] = {0, 1, 255, 256, 1000, 16384};
-    static const uint16_t dens[] = {1, 3, 255, 256, 300, 16384, 32768};
-    for (uint32_t i = 0; i < sizeof(nums) / sizeof(nums[0]); i++)
-        for (uint32_t j = 0; j < sizeof(dens) / sizeof(dens[0]); j++) {
-            uint32_t exact = nums[i] / dens[j];
-            if (exact > 127)
-                exact = 127;
-            uint32_t got = pt_div_cols(nums[i], dens[j]);
-            int32_t err = (int32_t)got - (int32_t)exact;
-            RC_CHECK(err >= -2 && err <= 2, ==, true);
-        }
-}
-
 // ---- angles and logs ----
 
 #define PI 3.14159265358979323846
@@ -299,6 +110,25 @@ RC_TEST_STEP(arith, packed_tables, fix)
         RC_CHECK(pt_lsec((int8_t)v), ==, (uint8_t)lround(-256.0 * log2(cos(mid * (PI / 512.0)))));
         RC_CHECK(pt_view_col((int8_t)v), ==,
                  (uint8_t)lround(64.0 + 64.0 * tan((v + 0.5) * (PI / 512.0))));
+    }
+}
+
+// lsec over the whole right angle, its second half made from logs, and log
+// sine, which is it read backwards.
+RC_TEST_STEP(arith, lsec16_logsin, fix)
+{
+    (void)fix;
+    for (uint32_t i = 0; i < 128; i++)
+        RC_CHECK(pt_lsec16((uint8_t)i), ==, pt_lsec((int8_t)i));
+    double worst = 0;
+    for (uint32_t i = 0; i < 256; i++) {
+        double want = -256.0 * log2(cos((i + 0.5) * (PI / 512.0)));
+        worst = fmax(worst, fabs(pt_lsec16((uint8_t)i) - want));
+    }
+    RC_CHECK(worst, <, 1.2);    // three roundings: the log's, lsx's, the constant's
+    for (uint32_t a = 0; a < 1024; a++) {
+        double want = 256.0 * log2(fabs(sin((a + 0.5) * (PI / 512.0))));
+        RC_CHECK(fabs(pt_logsin((uint16_t)a) - want), <, 1.2);
     }
 }
 

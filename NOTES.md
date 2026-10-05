@@ -16,8 +16,12 @@ tried and kept or tried and dropped.
 - **Phase 2b, done.** Collision on the new map: the cell tracked by
   angles, through the vertex cache.
 - **Phase 3a, done (awaiting commit).** The walk on the vertex cache's
-  angles and the per-column clip, still with `main`'s lines.
-- **Next, phase 3b.** The lines from the logs.
+  angles and the per-column clip.
+- **Phase 3b, done (awaiting commit).** The lines from the logs: an end in
+  view by `lsec`, one out of it by Doom's clipper, the near clip in screen
+  space. View space is gone.
+- **Next, phase 4.** The toggle buffer, and clearing it from the clips'
+  records.
 
 The phases are at the end.
 
@@ -159,6 +163,24 @@ the whole part, and the 8 bits under it, rounded, index a fraction table.
 `pt_exp2` is the reverse: a 9-bit mantissa from a table, shifted by the
 whole part (the last shift's carry rounds).
 
+`pt_log2` finds the place and the bits the 6502's way. `k8` gives the high
+byte's bit length, `nrm` lines its bits up under its leading one, and the
+low byte's go under them, shifted down k - 1 places, the last bit out
+rounding:
+
+```
+    LDX hi : BEQ small
+    LDA nrm,X : ASL A : STA t        ; hi's bits under its leading one
+    LDY k8,X : LDA lo : CLC
+    DEY : BEQ join                    ; k = 1: lo is the rest, exactly
+.sh LSR A : DEY : BNE sh            ; C is the last bit out
+.join ORA t : ADC #0                ; carry out: the next octave's 0
+```
+
+Under 256 it's exact: `nrm`'s byte with its leading one shifted out. The
+offsets in half units are under 4,096, so a vertex's logs shift at most
+three times. Same answers as the shift loop, all 65,535 of them.
+
 | | worst error |
 |---|---|
 | `pt_log2`, all 16-bit values | 1.15 units (0.31%) |
@@ -188,9 +210,9 @@ My estimate for the 6502, before writing any of it:
 | view angle, in-view test, column, log depth | ~40 |
 | **total** | **~280** |
 
-That's against about 900 now. With map offsets under 2,048, a component's
-high byte is 0 to 7, so normalising for the log is a lookup and at most
-two shifts.
+That's against about 900 now. With offsets under 4,096 half units, a
+component's high byte is 0 to 15, so normalising for the log is a lookup
+and at most three shifts.
 
 **Turning is free.** A vertex's world angle and log length depend only on
 where the camera stands, not which way it faces. Keep them while the
@@ -259,12 +281,35 @@ All bytes:
 | `logf` | 256 | log2's fraction for a mantissa | 1, then 0 |
 | `expf` | 256 | 2^x's mantissa for a fraction | 0, then 1 |
 | `lsec` | 128 | -log2 cos across the view | 0, 1, 2 |
+| `lsx` | 128 | -log2(sin x / x), small angles | 0 |
 | `a2c` | 256 | view angle to column | 0 |
 
-`lsec` only covers the view, 45 degrees either side. Projecting vertices
-that are in front of the eye but out of view would need it towards 90,
-where the deltas get far too big for a bit each. That's for phase 3 to
-settle.
+Past 45 degrees `lsec` climbs too fast for a bit a delta: to 2,137 at the
+last step. Its second half is 16 bits, made from logs. The sine of a small
+angle is the angle, short by a factor, so for step j's middle, x = (2j +
+1) pi / 1024:
+
+```
+    -log2 sin x = -log2(pi / 1024) - log2(2j + 1) + lsx[j]
+```
+
+The constant is 2,137 in 256ths. That's 128 calls of `pt_log2` at start
+up, and the whole table is within 1.14 units (0.3%). Read backwards it's
+log sine, which the view-edge clip wants (Off the view, below).
+
+`nrm` and `k8` go an octave at a time. The bytes of bit length k
+normalise to 128, 128 + 2^(8 - k), and so on, the step halving each
+octave:
+
+```
+    LDX #1 : LDY #1 : LDA #128 : STA step
+.octave
+    LDA #128
+.entry
+    STA nrm,X : PHA : TYA : STA k8,X : PLA
+    INX : CLC : ADC step : BCC entry
+    INY : LSR step : CPX #0 : BNE octave
+```
 
 ### The sine's 1.0
 
@@ -300,11 +345,13 @@ The old helpers go as their users do:
 - **Phase 2, done:** `pt_dir8`, and the builder's and collision's
   `pt_rot`. `pt_div_q8` stays for now: the posts' deflection divides by
   it.
-- **Phase 3:** `sin_`, `pt_rot`, `pt_ray_basis`, `recipf`, `sbyte`, and the
-  reciprocal, division, gradient and projection helpers.
+- **Phase 3, done:** `sin_`, `pt_rot`, `pt_ray_basis`, the negated
+  products, the lerp, and the division, gradient and projection helpers.
 
-`nrm` and `k8` stay, for normalising logs. `pt_mulg_u16` may stay too: a
-line restarting partway along wants an exact gradient times columns.
+`nrm` and `k8` stay, for normalising logs, and `pt_mulg_u16`: a line
+restarting partway along wants an exact gradient times columns.
+`pt_div_q8` went too, with `recipf`, `sbyte` and the normaliser: the posts
+divide by a byte table now (Collision).
 
 ## The map
 
@@ -418,6 +465,16 @@ slide iterations, the hop walk) with new pieces:
 - **The edge's length** joins the edge, for the foot cap.
 - **The posts stay.** They're cheap, and they keep the radius off wall
   ends, which keeps the eye off vertices.
+- **The posts' division is a byte table.** A post pushes the move out by
+  its radial part, 1.25 (M . v) v / |v|^2, overcorrected by a quarter so a
+  grazing arc drifts out rather than grinding in. So 1/|v|^2 needn't be
+  good. `rpost` holds 1.25 * 2^15 / d2 for each 8 of d2 over the circle's
+  [256, 1600), 168 bytes indexed by d2 >> 3, rounded up from each bucket's
+  start so the factor stays in 1.25 to 1.30. The division and the quarter
+  are then one 16 x 8 fractional multiply: about 90 cycles, against 160
+  for the reciprocal division and its quarter, or 170 by log and exp. And
+  the reciprocal table, `sbyte` and the normaliser go. It's built by
+  restoring division at start up, 8 steps an entry.
 
 The facing step comes from the quarter sine table, four 1024ths a camera
 step: the same values as before.
@@ -425,7 +482,12 @@ step: the same values as before.
 ### How it comes out
 
 Over the 40,000-tick walk the collision probe takes, the closest the camera
-came to a wall was 29.04 units (radius 40; it was 29.17). The cell it
+came to a wall was 29.04 units (radius 40; it was 29.17). That wanders
+with any change to the walk: with the cell-tracking fix of phase 3a it
+was 29.11, and with the posts' byte table 28.47. Over ten seeds it runs
+28.1 to 29.2 with the table and 28.0 to 29.6 with an exact division, so
+the table costs nothing there. The probe trips at 28, which an exact
+division nearly hit on one seed. The cell it
 tracks differed from exact point location in 79 ticks, by at most 0.28 of a
 unit. The fan probe now allows exactly that: a point d from a side's line
 sees its vertices d (1/r0 + 1/r1) radians off a half turn apart, and each
@@ -511,6 +573,9 @@ Clipping a line is, column by column:
    hidden;
 4. for a line forming a bound, store its row as the child's.
 
+(That was the plan. How it's done now, with fast paths and runs, is under
+Drawing a line.)
+
 No products, divisions, splits, twins or `yf`. And ties stop mattering: a
 line on the same row as its bound toggles the same pixel either way.
 
@@ -546,7 +611,8 @@ Not worth it.
 
 ### What it costs
 
-My estimates, per column:
+My estimates before phase 3, per column (the measured version is under
+Drawing a line):
 
 - **Slow (clamped) column:** about 75 cycles. Step, two compares, a toggle,
   maybe a store.
@@ -558,6 +624,328 @@ My estimates, per column:
 
 That's about 13k on the typical frame against `main`'s 31k for clipping,
 row evaluations and plotting, and about 31k against 73k on the heavy one.
+
+### Gradients, and rows off the portal
+
+Lines step by a gradient, which the log domain makes cheap: one subtract
+and an exp.
+
+Where a line's vertex lies outside the visit's span, its row at the span's
+first column is interpolated from the projected vertices: row0 + g (c -
+col0), with an exact multiply. The same vertices always give the same g,
+so a line split across two visits carries on exactly where it left off,
+with no line extension and no stored pieces.
+
+Doom's clipper (the wall's depth along a ray, from its perpendicular
+distance and two angles) does every end off the view, in front or behind.
+Its weak spot is a grazing wall, measured under Drawing a line.
+
+## Drawing a line
+
+How a line gets from an edge to the screen in phase 3a, and how it gets
+past the bounds without a compare for every pixel.
+
+```
+an edge's span, [xa, xb)
+  |
+  +-- make the line: its rows at the ends, a gradient, cut at the screen
+  |
+  +-- clip it, as plain, floor or ceiling:
+        1. the screen's edge: the cut-off columns, no scan
+        2. the fast path: both ends inside the extents, plotted whole
+        3. the scan: a step and two compares a column
+             visible stretches --> the line plotters
+             hidden stretches  --> the flat plotter, or nowhere
+```
+
+### Half open: [sx, ex)
+
+Still. A vertex's column is the first whose centre lies right of it
+(`a2c` reads the middle of the vertex's angle step), and an edge covers
+`[sx, ex)`: the columns whose centre rays cross it. The next edge starts
+at `ex`, so each of a visit's columns belongs to exactly one edge. An edge
+from column 40 to 60 does 40 to 59, and the next one picks up at 60.
+
+`main` took `floor(64 + 64 y/x)`, the column the vertex is in, so its
+edges sat up to half a column left of the pixel centres. The reference
+casts through the centres, so the angles round the right way.
+
+The walk cuts the edge's span to the visit's: `xa = max(sx, x)` and `xb =
+min(ex, xr)`, `x` being where the visit's last edge ended and `xr` its
+portal's right column. If that's empty, the edge is skipped. The side
+clips make the only other ends: a vertex outside the view is clipped at
+its ray, column 0 or 128.
+
+### A line
+
+```
+pt_line   x0, x1   the columns it's on the screen over, within [sx, ex)
+          y        its row at x0, u8.8, with the rounding half in
+          g        rows a column, sign bit + u7.8
+          below    the side it's cut off on: under the screen, or over
+          ce, co   its colour: the even and odd scanlines' patterns
+```
+
+A line's row at `sx` is its start's own, to a 256th of a row, and the
+gradient takes it to the end's at `ex`. With half a row in the fraction,
+the nearest row is just the high byte.
+
+`[x0, x1)` is usually `[sx, ex)`. A line nearer than x = 2h (h its height
+off the eye) projects past the screen's top or bottom, so `make_line` stops
+it at the column where it reaches the edge. The columns cut off read as
+beyond the screen on that side: row 0 above, 0xFFFF below. An edge too near
+at both ends makes a line with no columns at all, and that still matters:
+every column of its span reads as off the screen.
+
+### Ends from logs
+
+An edge's two ends are worked out once, for all its lines, from the
+vertex cache's polar forms:
+
+- **In view,** an end is its vertex: the column its angle gives, and its
+  depth's log, the length's less `lsec` of its view angle. A lookup and a
+  subtract.
+- **Out of view,** in front or behind, it's where the edge crosses the
+  view's edge ray, column 0 or 128. That's Doom's clipper (Off the view).
+
+Then each line, at height h in 8-unit steps, gets its ends' rows as
+offsets from the screen's middle, and a gradient from their difference:
+
+```
+    offset = 2^(17 + log h - log depth)            ; 64 * 8h / depth, u8.8 rows
+    g      = 2^(log |offset1 - offset0| - log (ex - sx))
+```
+
+The rows run down from the middle below the eye, and up above it.
+
+An end with an offset of 32 rows or more is at or past the screen's edge:
+nearer than 2h. The line runs off the screen between its ends, (32 rows -
+the far end's offset) / g columns from the far end, which is one more log
+and exp. That's screen space: a line stays straight when it's projected,
+so no depth is needed. A near end past 256 rows saturates u8.8, and
+flattened the gradient of any wall ending a unit or two from the eye, so
+there the difference is taken in whole rows instead.
+
+The columns kept are whole ones, counted from the far end. A floor line
+whose far end is 20 rows below the middle at column 40, and whose near end
+is 80 rows below at column 70, has g = 2 and delta = 6. It keeps columns
+40 to 45, offsets 20 to 30; 46 would be on the screen's bottom edge.
+Mirrored, near end at 40 and far end at 70, it keeps 65 to 69, and its
+anchor is the far end's row stepped back 5 columns, one `pt_mulg_u16`.
+(Column 70 is the next edge's: half open.)
+
+Rows stay bytes wherever the clip and the plotters look: `top` and `bot`,
+and a line's `y`, a row byte and a fraction byte, as `main`'s anchor
+always was. Only line making goes wider: an offset is u8.8 up to 256 rows,
+and the saturated path's whole rows are 16 bits.
+
+On the 6502, my estimates: about 250 cycles a line (`log h`, two exps for
+the rows, two logs and an exp for the gradient), and 150 more for a near
+clip. An end is about 15 in view and 90 out of it. The typical frame's
+15 lines come to about 5.5k, against `main`'s 20k for making lines and
+transforming vertices. The polar forms come on top, about 280 a vertex,
+but a frame that only turns doesn't redo them.
+
+### Off the view
+
+The eye's distance from the edge's line comes from an end in view: d = r
+|sin(a - w)|, where r and a are the end's length and angle, and w the
+edge's direction (its angle byte, with the quadrant from its vertices). A
+ray at angle b meets the line d / |sin(b - w)| along, and on the view's
+edge ray (b the camera's angle, less or plus 128) the depth is that times
+cos 45 degrees. In logs:
+
+```
+    log depth = log r + log sin(a - w) - log sin(b - w) - 128
+```
+
+`lsec` read backwards is log sine, so that's a few lookups and adds:
+about 90 cycles, and it's the same for an end behind the eye.
+
+The alternative for an end in front but out of view was screen space:
+project it anyway (its column 64 + 64 tan v from the logs of sin and cos,
+its depth through the long `lsec`), then run its line to the screen's
+edge. That's an exp for the column, the row as usual, and another log and
+exp for the row at column 0 or 128, about 160 cycles more than an end in
+view against Doom's 75. Ends behind the eye need Doom's anyway.
+
+So I measured both, over map 0's 20,000 random poses. These are the row
+errors where the line meets the view's edge, for a line 10 steps off the
+eye (rows past the screen's edge count as on it), by the angle between the
+ray and the edge:
+
+| graze | ends | Doom's mean | worst | over a row | screen space mean | worst |
+|---|---|---|---|---|---|---|
+| 0-2 degrees | 6 | 1.06 | 4.66 | 17% | 1.21 | 3.22 |
+| 2-5 | 106 | 0.31 | 2.78 | 7.6% | 0.42 | 2.96 |
+| 5-10 | 446 | 0.18 | 1.73 | 3.4% | 0.22 | 1.40 |
+| 10-20 | 1,762 | 0.08 | 1.59 | 0.3% | 0.11 | 1.39 |
+| 20-45 | 10,262 | 0.04 | 0.81 | 0 | 0.06 | 0.71 |
+| 45-90 | 45,582 | 0.03 | 0.60 | 0 | 0.03 | 0.32 |
+
+(Screen space only counts ends whose other end is in view, a few
+thousand fewer.) As accurate, cheaper, and one path for every end: Doom's.
+
+Two half steps mattered. The edge's angle byte is floored, so the angle
+between the ray and the edge is centred half a step under b - w, and the
+lookup goes at b - w - 1, whose middle is there. The end's angle is floored
+too, so a - w falls between two steps' middles, and it takes the average
+of both lookups (about 20 cycles more, on the 4 or so clipped ends a
+frame). Before those, the worst grazing error was 5.3 rows.
+
+**Grazing walls behind the eye.** The ends behind the eye do better than
+the ones in front:
+
+| graze | ends | mean | worst | over a row |
+|---|---|---|---|---|
+| 2-5 degrees | 30 | 0.08 | 1.47 | 3.3% |
+| 5-10 | 135 | 0.07 | 1.91 | 1.5% |
+| 10-20 | 491 | 0.03 | 1.02 | 0.2% |
+| 20-45 | 3,082 | 0.02 | 0.79 | 0 |
+| 45-90 | 12,583 | 0.01 | 0.39 | 0 |
+
+Under 2 degrees the line is past the screen's edge. Grazing is rare,
+under 0.3% of clipped ends below 5 degrees, and it's a wall seen nearly
+end-on at the view's edge, where its line is near the horizon anyway. I'll
+take a row or two there.
+
+### What an edge makes
+
+A wall makes two lines, its ceiling and its floor. A portal from cell A
+into cell B makes up to four, two a side. On the ceiling side:
+
+| B's ceiling | plain line | bound line (B's top) |
+|---|---|---|
+| lower (a lintel) | A's ceiling, `A ceil ^ wall` | B's ceiling, `wall ^ B ceil` |
+| level | A's ceiling, `A ceil ^ B ceil`, unless that's 0 | none: B keeps A's top |
+| higher | none | A's ceiling, `A ceil ^ B ceil` |
+
+The floor side is the same upside down: a riser (B's floor higher) makes a
+plain line at A's floor, `wall ^ A floor`, and the bound at B's,
+`B floor ^ wall`.
+
+The plain lines go first, against the bounds as they are. Then the floor
+bound writes B's bottom over A's, and then the ceiling bound writes B's
+top, against B's bottom (it closes B where it meets it). B is the first
+run of columns left open.
+
+### Three clips
+
+Each clip runs a line over `[xa, xb)` against `top[c]` and `bot[c]`. On a
+bound counts as hidden:
+
+| line | on or above the top | between | on or below the bottom |
+|---|---|---|---|
+| plain | toggle at the top | plot | toggle at the bottom |
+| floor (B's bottom) | close B: toggle at the top, `colour ^ cbfb` | plot; it's B's bottom | lend A's bottom: toggle there |
+| ceiling (B's top) | lend A's top: toggle there | plot; it's B's top | close B: toggle at B's bottom, `colour ^ cbfb` |
+
+A toggle at a bound's row is the line's colour change pushed onto the
+bound. The fill can't tell it from the line plotted there. `cbfb` is B's
+ceiling ^ floor: where B is closed, its whole stack telescopes to that.
+Where the floor line closed B, the ceiling line is above the top as well,
+and merges into it with nothing worked out.
+
+Later runs of open columns (a sliver pinched shut by rounding) are closed
+after the fact, a `cbfb` toggle at B's bottom a column. So is a child past
+the depth cap.
+
+### The ways through
+
+Cheapest first:
+
+1. **No colour.** A plain line with nothing to change is dropped. (A level
+   side whose shades match isn't even made.)
+2. **The screen's edge.** If the visit's bound on the line's side is the
+   screen's edge in every column (`tmax` 0 for a line above the eye,
+   `bmin` 64 for one below), the columns the line was cut off over are
+   known without a look. Off the top they're all hidden on row 0: one flat
+   run. Off the bottom they're in the junk row: nothing. A floor line's
+   stay open there, lending the junk row, or close B on row 0; a ceiling
+   line's merge into row 0, open or not. That leaves the line's on-screen
+   columns.
+3. **The fast path.** If the line's rows at both ends of what's left are
+   strictly inside the visit's extents, it's visible in every column, and
+   plotted whole. A bound line stores its rows as it goes. The ceiling
+   line's fast path also needs the floor line to have closed nothing, and
+   tests against B's highest bottom.
+4. **The scan,** for the rest.
+
+### The extents
+
+`tmax` is the lowest top row over the visit's portal, and `bmin` the
+highest bottom row. A row with `tmax < row < bmin` is inside in every
+column. A line's rows run from one end's to the other's, so two compares
+settle the lot.
+
+They're worked out once, when the child is entered: a pass over its open
+run, which the bound lines have just written. The root's are 0 and 64,
+and a child through a soft edge keeps its parent's. They stay true while
+the visit's edges are walked: a child only writes its bounds over columns
+its parent has finished with.
+
+They're conservative. One deep notch in a portal's bottom takes the fast
+path away from every line in it. Measured, three quarters of the columns
+still go through it (below).
+
+### The scan, by example
+
+A wall's floor line from row 50 at column 40 to row 54 at column 60, so
+g = 0.2, in a visit whose bottom is row 56 except for a notch at row 52
+over columns 50 to 53 (a nearer step, say). `bmin` is 52, and the line
+ends on 54, so no fast path:
+
+```
+column    40 .. 47  48  49 | 50  51  52  53 | 54 .. 59
+row       50 .. 51  52  52 | 52  52  52  53 | 53 .. 54
+bottom    56 .. 56  56  56 | 52  52  52  52 | 56 .. 56
+          visible          | hidden         | visible
+```
+
+Three plotter calls: the line over 40 to 49, a flat run on row 52 over 50
+to 53, and the line over 54 to 59, starting from the row and fraction the
+scan stepped to. Nothing toggled a pixel at a time, and no multiply to
+pick the line up again.
+
+Hidden columns are gathered like visible ones: a run on one row in one
+colour, ended when either changes. A run in the junk row is dropped.
+
+On the 6502, a column of the scan is a 16-bit add, `CMP top,X`, `CMP
+bot,X` and a branch or two: about 30 cycles. The runs' bookkeeping only
+happens where visible meets hidden.
+
+### Rows the plotter's way
+
+The scan steps the row exactly as the plotter does, the same 16-bit add of
+`g` a column from the same start. So the rows it compares are the rows
+that get plotted, and a run starting mid-line takes the scan's row and
+fraction as its own.
+
+A multiply only comes in where a span starts away from the line's anchor:
+`line_y` works out `y + g (c - x0)`, the sum the adds would make. That's a
+line split across two visits, or an edge starting left of its portal. The
+fast path's test at the far end multiplies too. On the 6502 it can test
+the end vertex's own row instead, which bounds the line's rows just as
+well.
+
+### The plotters
+
+All of them move a screen cursor (a character block's address and Y),
+placed once at the run's first pixel and then only moved: a row down or
+up, a byte right, a pixel right. A toggle EORs both scanlines of its row,
+the even and the odd pattern.
+
+- **Flat** (g = 0: hidden runs, the ceiling strip, flat lines). Whole
+  bytes on one row, the ends masked. No arithmetic at all.
+- **Shallow** (|g| < 1). The row moves at most one a column, so it's a row
+  byte and a fraction, and each step's carry says whether the next column
+  is a row on. The odd pixels at either end go one at a time. Whole bytes
+  go four pixels at once: the three carries inside a byte pick one of
+  eight fixed routines, each with its row masks as constants, and a fourth
+  says whether the next byte starts a row on. The same trees as `main`'s
+  6502.
+- **Steep** (|g| >= 1). A pixel pair a column, moving on by the gradient's
+  whole rows plus the fraction's carry.
 
 ### Off the screen, measured
 
@@ -598,25 +986,8 @@ bounds. So:
 | hidden runs plotted | 3.8 (5.7 bytes) | 4.9 (8.9 bytes) |
 
 The pictures are byte-for-byte what they were. Scanning 57 columns a frame
-is about 1.5k cycles, so the per-byte early-out I had in reserve (the
+is about 1.7k cycles, so the per-byte early-out I had in reserve (the
 lowest top and highest bottom over each byte's columns) isn't needed.
-
-### Gradients, and rows off the portal
-
-Lines step by a gradient, which the log domain makes cheap: one subtract
-and an exp.
-
-Where a line's vertex lies outside the visit's span, its row at the span's
-first column is interpolated from the projected vertices: row0 + g (c -
-col0), with an exact multiply. The same vertices always give the same g,
-so a line split across two visits carries on exactly where it left off,
-with no line extension and no stored pieces.
-
-Doom's clipper (the wall's depth along a ray, from its perpendicular
-distance and two angles) is kept for vertices behind the eye only. Its
-weak spot is a grazing wall: the cos of the angle between the ray and the
-wall's normal is near 0, and 1024 steps a turn magnify the error there
-(Doom wobbles even at 8192). First thing to check in phase 3.
 
 ## Buffers
 
@@ -779,6 +1150,20 @@ square eye in R1, above its ceiling. The camera has no step rule, so
 nothing stops a walk in there either, but the map was never meant to be
 walked.
 
+### Phase 3b
+
+The lines from the logs, on the same frames:
+
+| map | `main` | 3a | 3b |
+|---|---|---|---|
+| 0 | 1,036,731 | 418,022 | 368,080 |
+| 9 | 6,468,692 | 6,292,368 | 6,238,134 |
+
+Against 3a, map 0 is better in 11,707 frames and worse in 2,483, the
+worst by 34 pixels. Against `main`, the frames with nothing wrong went from 4,661 to
+8,317, and 3 are worse by more than 128 pixels. On map 9, 9,332 frames
+have nothing wrong, against 6,210.
+
 ## The phases
 
 0. **The branch and the comparer.** Done.
@@ -788,13 +1173,13 @@ walked.
    rings of sides stored backwards, the builder and checks, the comparer's
    reference; collision on dot products, the cell by angles, and the
    vertex cache.
-3. **Capture and lines.** (a) Done: the walk on the vertex cache's angles,
-   with a window a visit; `top` and `bot`; the ceiling strip; the clips,
-   with the fast path, runs and the screen's edge; closing. The lines
-   still `main`'s, from view space. (b) The on-screen lines from the logs,
-   and a record per clip.
-4. **Fill and clear.** T into the back buffer, then T cleared from the
-   records.
+3. **Capture and lines.** Done: (a) the walk on the vertex cache's
+   angles, with a window a visit; `top` and `bot`; the ceiling strip; the
+   clips, with the fast path, runs and the screen's edge; closing. (b) The
+   lines from the logs, ends off the view by Doom's clipper, the near clip
+   in screen space.
+4. **Fill and clear.** A record per clip, T into the back buffer, then T
+   cleared from the records.
 5. **Sprites.** After the fill, spritescale's pixels exactly, clipped by
    the saved rows.
 6. **Measure and write up.** Against `main`, then the journal and the spec.
@@ -805,13 +1190,16 @@ before any 6502; but everything is written to be 6502-shaped.
 
 ## Open questions
 
-- **Off-view vertices.** For one in front of the eye but out of view:
-  project it (and extend `lsec` towards 90 degrees, built some other way
-  than a bit a delta), or clip at the view's edge?
-- **Grazing walls behind the eye.** How bad is Doom's clipper at 1024
-  steps?
-- **A column out.** Columns from angles put a vertical edge a column off
-  now and then. Live with it, or give `pt_view_col` a finer input near the
-  middle of the view?
-- **`pt_log2` the 6502's way.** Switch the C from its shift loop to the
-  `nrm` and `k8` tables now, or leave that for the port?
+None for now.
+
+Settled:
+
+- **Columns by angle** are precise enough. A vertical edge a column out
+  now and then is fine.
+- **`pt_log2` the 6502's way,** through `nrm` and `k8`, built as the 6502
+  will. Done.
+- **Off-view ends** by Doom's clipper, measured against screen space above.
+- **Grazing walls:** a row or two of error, taken over anything slower.
+  Performance comes first.
+- **The posts' division:** a byte table, the quickest, with error only on
+  the side of more overcorrection.

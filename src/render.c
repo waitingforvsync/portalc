@@ -2,8 +2,7 @@
 // the bounds a screen column at a time and toggled straight into the back
 // buffer as they're made, and the fill. The walk finds its way by the
 // angles of the cells' vertices from the eye (the vertex cache): those
-// give every edge its columns. A line's rows come from its edge's ends in
-// view space.
+// give every edge its columns, and their logs its lines' rows.
 //
 // A column's bounds are two rows, top[] and bot[]: the top bound's row (the
 // first inside the portal) and the bottom bound's (the first below it). A
@@ -32,21 +31,11 @@ typedef struct pt_line {
     uint8_t co;
 } pt_line;
 
-// A side-clipped edge endpoint: depth, lateral, screen column, and the
-// depth's reciprocal for the row projections.
-typedef struct pt_ep {
-    uint16_t x;
-    int16_t y;
-    uint8_t sx;
-    pt_recip rx;
-} pt_ep;
-
 // ---- row arithmetic ----
 //
 // Every u8.8 row (line_y, the plot DDA) carries the +128 rounding bias in
 // its anchor, so rounding to the nearest row is a plain high-byte read
-// (row_of). A line placed on a whole row is anchored at its middle. The
-// clip steps a line's rows exactly as the plotter does, so it compares
+// (row_of): the first row whose middle is below the line. The clip steps a line's rows exactly as the plotter does, so it compares
 // exactly the rows that are plotted.
 
 // y plus or minus g*dx: the add saturates on carry out, the subtract clamps
@@ -81,13 +70,6 @@ static uint8_t row_of(uint16_t y_b)
     return row > PT_SCREEN_HEIGHT ? PT_SCREEN_HEIGHT : row;
 }
 
-// The biased u8.8 value of a whole row: the row in the high byte, the
-// rounding bias in the low.
-static uint16_t row_anchor(uint8_t row)
-{
-    return (uint16_t)((row << 8) | 128);
-}
-
 // Row of a line at column c in u8.8. Where it was cut off at the screen's
 // edge it is beyond every bound on that side: the furthest row there is.
 static uint16_t line_y(const pt_line *l, uint8_t c)
@@ -114,200 +96,103 @@ static pt_relh rel_h(uint8_t z, uint8_t eye_z)
     return (pt_relh) {.m = (uint8_t)(eye_z - z), .below = 0};
 }
 
-// The screen row of a height at an endpoint's depth: the centre plus or
-// minus the projected offset, the side picking the direction.
-static uint8_t row_from(pt_relh h, const pt_ep *e)
+// An edge's end as its lines see it: its column, and the log of its depth
+// (256 log2, in whole units).
+typedef struct pt_end {
+    uint8_t sx;
+    int16_t ld;
+} pt_end;
+
+// 2^(l / 256), 0 under 1 and saturating at 0xFFFF.
+static uint16_t exp2_sat(int32_t l)
 {
-    uint8_t q = pt_project_rowd(h.m, e->x, e->rx);
-    return (uint8_t)(h.below ? PT_SCREEN_HEIGHT / 2 + q : PT_SCREEN_HEIGHT / 2 - q);
+    if (l < 0)
+        return 0;
+    if (l >= 16 * 256)
+        return 0xFFFF;
+    return pt_exp2((uint16_t)l);
 }
 
-// The edge's line at relative height h, pre-clipped to the screen: the part
-// nearer than x = 2h projects past the screen's top or bottom edge (h's
-// side), so the line stops at the column where it reaches that edge. The
-// columns cut off, the rest of [e0.sx, e1.sx), are outside every portal on
-// that side (line_y); the line is empty (x0 == x1) when both endpoints are
-// too near.
-static pt_line make_line(pt_ep e0, pt_ep e1, pt_relh h, pt_pattern col)
+// The rows a line's offsets run to: the screen's top or bottom edge, 32 rows
+// from its middle, u8.8.
+#define PT_EDGE_OFF (PT_SCREEN_HEIGHT / 2 * 256)
+
+// The edge's line at relative height h, from its ends: each end's row is
+// its offset from the screen's middle, 64 * 8h / depth, u8.8: 2^(17 + log
+// h - log depth) in 256ths. The gradient is the offsets' difference over
+// the columns', by their logs. An end at or past the screen's edge, nearer
+// than 2h, cuts the line where it reaches that edge, (32 rows - the far
+// end's offset) / g columns on from the far end; the columns cut off are
+// beyond every bound on that side (line_y), and with both ends there the
+// line has no columns at all.
+static pt_line make_line(pt_end e0, pt_end e1, pt_relh h, pt_pattern col)
 {
-    RC_ASSERT(e0.x >= 1 && e1.x >= 1);
     RC_ASSERT(e0.sx < e1.sx);
-
-    // The clip plane sits exactly where the row projection reaches the
-    // screen edge: x = 128h/H, the 64-row screen's classic x = 2h = 16*h.m
-    // (for the 80-row screen it is 8h/5, shifts and adds on the 6502).
-    uint16_t d = (uint16_t)(((uint32_t)h.m * (8 * 128) + PT_SCREEN_HEIGHT - 1)
-                            / PT_SCREEN_HEIGHT);
-    uint8_t edge = h.below ? PT_SCREEN_HEIGHT : 0;
-    bool near0 = e0.x < d;
-    bool near1 = e1.x < d;
-
     pt_line L = {.x0 = e0.sx, .x1 = e0.sx, .below = h.below, .ce = col.e, .co = col.o};
+    int32_t l0 = -1;    // the offsets' logs, -1 for none (at the eye's height)
+    int32_t l1 = -1;
+    if (h.m != 0) {
+        int32_t lh = (int32_t)pt_log2(h.m) + 17 * 256;
+        l0 = lh - e0.ld;
+        l1 = lh - e1.ld;
+    }
+    uint16_t o0 = exp2_sat(l0);
+    uint16_t o1 = exp2_sat(l1);
+    bool near0 = o0 >= PT_EDGE_OFF;
+    bool near1 = o1 >= PT_EDGE_OFF;
     if (near0 && near1)
         return L;
+
+    // the rows run away from the middle as the offset grows: down below the
+    // eye, up above it
+    uint8_t dc = (uint8_t)(e1.sx - e0.sx);
+    uint16_t dr = o1 > o0 ? (uint16_t)(o1 - o0) : (uint16_t)(o0 - o1);
+    uint8_t neg = h.below ? o1 < o0 : o1 > o0;
+    int32_t lg = 0;
+    uint16_t gm = 0;
+    if (dr != 0) {
+        if (o0 == 0xFFFF || o1 == 0xFFFF) {
+            // a near end past 256 rows: the difference in whole rows instead
+            // (it's then at least 224 of them)
+            uint16_t w0 = exp2_sat(l0 - 8 * 256);
+            uint16_t w1 = exp2_sat(l1 - 8 * 256);
+            uint16_t dw = w1 > w0 ? (uint16_t)(w1 - w0) : (uint16_t)(w0 - w1);
+            lg = (int32_t)pt_log2(dw) + 8 * 256 - pt_log2(dc);
+        } else {
+            lg = (int32_t)pt_log2(dr) - pt_log2(dc);
+        }
+        gm = exp2_sat(lg);
+        gm = gm > 0x7FFF ? 0x7FFF : gm;
+    }
+    L.g = pt_g_make(gm, neg);
+    uint16_t mid = PT_EDGE_OFF + 128;    // the middle row, with the rounding half
+    uint16_t y0 = h.below ? (uint16_t)(mid + o0) : (uint16_t)(mid - o0);
     if (!near0 && !near1) {
-        uint8_t sy0 = row_from(h, &e0);
-        uint8_t sy1 = row_from(h, &e1);
-        uint8_t dx = (uint8_t)(e1.sx - e0.sx);
         L.x1 = e1.sx;
-        L.y = row_anchor(sy0);
-        L.g = sy1 >= sy0 ? pt_g_make(pt_grad_mag((uint8_t)(sy1 - sy0), dx), 0)
-                         : pt_g_make(pt_grad_mag((uint8_t)(sy0 - sy1), dx), 1);
+        L.y = y0;
         return L;
     }
 
-    // exactly one endpoint too close: clip the edge at depth d
-    const pt_ep *ne = near0 ? &e0 : &e1;
-    const pt_ep *fe = near0 ? &e1 : &e0;
-    uint8_t t = pt_div_t((uint16_t)(d - ne->x), (uint16_t)(fe->x - ne->x));
-    int16_t ys = pt_lerp16(ne->y, fe->y, t);
-    uint16_t sxq = pt_project_col_q8(ys, d);
-    uint8_t syf = row_from(h, fe);
-
-    uint8_t cs = (uint8_t)((uint16_t)(sxq + 255) >> 8);
-    if (cs < e0.sx)
-        cs = e0.sx;
-    if (cs > e1.sx)
-        cs = e1.sx;
-
-    if (near0) {
-        if (cs < e1.sx) {
-            uint16_t dxq = (uint16_t)(((uint16_t)(e1.sx << 8)) - sxq);
-            uint8_t fr = (uint8_t)(((uint16_t)(cs << 8)) - sxq);
-            uint16_t base = (uint16_t)((edge << 8) | 128);    // rounding bias in the anchor
-            uint16_t y0q;
-            if (syf >= edge) {
-                uint16_t gm = pt_gradq8_mag((uint8_t)(syf - edge), dxq);
-                uint16_t off = pt_mulu16_frac(gm, fr);
-                L.g = pt_g_make(gm, 0);
-                y0q = (uint16_t)(base + off);
-                if (y0q < base)
-                    y0q = 0xFFFF;    // carry out: clamp
-            } else {
-                uint16_t gm = pt_gradq8_mag((uint8_t)(edge - syf), dxq);
-                uint16_t off = pt_mulu16_frac(gm, fr);
-                L.g = pt_g_make(gm, 1);
-                y0q = off > base ? 0 : (uint16_t)(base - off);
-            }
-            // round like every other re-anchor; PT_SCREEN_HEIGHT is fine,
-            // the line comes on screen where its gradient brings the row
-            // under the screen edge less a half
-            L.x0 = cs;
-            L.x1 = e1.sx;
-            L.y = y0q;
-        }
-    } else if (e0.sx < cs) {
-        uint16_t dxq = (uint16_t)(sxq - ((uint16_t)(e0.sx << 8)));
-        L.x1 = cs;
-        L.y = row_anchor(syf);
-        L.g = edge >= syf ? pt_g_make(pt_gradq8_mag((uint8_t)(edge - syf), dxq), 0)
-                          : pt_g_make(pt_gradq8_mag((uint8_t)(syf - edge), dxq), 1);
+    // one end too near: the columns from the far end before the crossing
+    // are on the screen, ceil(delta) of them counting the far end's own
+    uint16_t of = near0 ? o1 : o0;
+    uint16_t dq = exp2_sat((int32_t)pt_log2((uint16_t)(PT_EDGE_OFF - of)) + 8 * 256 - lg);
+    uint16_t n = (uint16_t)((dq + 255u) >> 8);
+    n = n > dc ? dc : n;
+    if (near1) {
+        L.x1 = (uint8_t)(e0.sx + n);
+        L.y = y0;
+    } else if (n > 1) {
+        // the end's own column isn't the line's: n - 1 back from it, the row
+        // g (n - 1) nearer the screen's edge
+        uint8_t back = (uint8_t)(n - 1);
+        uint16_t y1 = h.below ? (uint16_t)(mid + o1) : (uint16_t)(mid - o1);
+        uint16_t d = pt_mulg_u16(gm, back);
+        L.x0 = (uint8_t)(e1.sx - back);
+        L.x1 = e1.sx;
+        L.y = h.below ? (uint16_t)(y1 + d < y1 ? 0xFFFF : y1 + d) : (uint16_t)(d > y1 ? 0 : y1 - d);
     }
     return L;
-}
-
-// ---- view space (an edge's lines) ----
-
-// Frustum classification of a view vertex: the ray sums a = x + y (left ray)
-// and b = x - y (right ray), kept as signs. The negative bits sit at 7 and 6,
-// where the 6502's BIT lands them in N and V.
-#define PT_VF_ANEG 0x80u     // a < 0: strictly outside the left ray
-#define PT_VF_BNEG 0x40u     // b < 0: strictly outside the right ray
-#define PT_VF_AZERO 0x08u    // a == 0: exactly on the left ray
-#define PT_VF_BZERO 0x04u    // b == 0: exactly on the right ray
-
-// A vertex in view space: x its depth and y its lateral offset, right
-// positive; rx the depth's reciprocal, inside both rays only.
-typedef struct pt_vv {
-    int16_t x;
-    int16_t y;
-    uint8_t flags;    // PT_VF_*
-    pt_recip rx;
-} pt_vv;
-
-// A vertex rotated into view space through the sine table, and its place
-// against the view's two rays. Only an edge with lines needs it: the walk
-// goes by angles. The eye is the vertex cache's, the middle of its unit
-// square: the offsets are odd half units, and the rotated ones are rounded
-// back to whole units.
-static pt_vv view_xy(const pt_render *r, uint8_t v)
-{
-    pt_vertex w = r->map->verts[v];
-    int16_t rx = (int16_t)(2 * (w.x - r->cam_x) - 1);
-    int16_t ry = (int16_t)(2 * (w.y - r->cam_y) - 1);
-    int16_t x = (int16_t)((pt_dot_dir(rx, ry, r->cam4) + 1) >> 1);
-    int16_t y = (int16_t)((pt_dot_dir(rx, ry, (uint16_t)(r->cam4 + 256)) + 1) >> 1);
-
-    int32_t a = (int32_t)x + y;
-    int32_t b = (int32_t)x - y;
-    uint8_t flags = 0;
-    if (a < 0)
-        flags |= PT_VF_ANEG;
-    else if (a == 0)
-        flags |= PT_VF_AZERO;
-    if (b < 0)
-        flags |= PT_VF_BNEG;
-    else if (b == 0)
-        flags |= PT_VF_BZERO;
-
-    // the ray sums are also zero on the rays' backward extensions, where the
-    // zero flags would wrongly read as "exactly on the (forward) ray": a
-    // vertex on a seam of the behind quadrant counts as behind
-    if ((flags & PT_VF_ANEG) && (flags & PT_VF_BZERO))
-        flags |= PT_VF_BNEG;
-    if ((flags & PT_VF_BNEG) && (flags & PT_VF_AZERO))
-        flags |= PT_VF_ANEG;
-
-    pt_vv out = {.x = x, .y = y, .flags = flags};
-    if (!(flags & (PT_VF_ANEG | PT_VF_BNEG)))
-        out.rx = pt_recip16(x > 0 ? (uint16_t)x : 1);
-    return out;
-}
-
-// ---- frustum side clips (spec 7.6) ----
-
-// Clamp a lerped depth to at least 1 so the projections stay well defined.
-static uint16_t depth_of(int16_t x)
-{
-    return x < 1 ? 1 : (uint16_t)x;
-}
-
-// An endpoint left where the vertex is. An in-frustum vertex brings its
-// reciprocal; one outside a ray (an edge's far end that no clip claimed,
-// rare) normalises its own.
-static pt_ep ep_unclipped(pt_vv v, uint8_t sx)
-{
-    uint16_t x = depth_of(v.x);
-    pt_recip rx = (v.flags & (PT_VF_ANEG | PT_VF_BNEG)) ? pt_recip16(x) : v.rx;
-    return (pt_ep) {.x = x, .y = v.y, .sx = sx, .rx = rx};
-}
-
-static pt_ep clip_left(pt_vv v0, pt_vv v1)
-{
-    RC_ASSERT(v0.flags & PT_VF_ANEG);
-    RC_ASSERT(!(v1.flags & (PT_VF_ANEG | PT_VF_AZERO)));
-
-    // the ray magnitudes, recomputed with the signs the flags fix: -(x + y)
-    // is one subtract chain from zero, nothing is negated
-    uint16_t na = (uint16_t)(0u - (uint16_t)v0.x - (uint16_t)v0.y);
-    uint16_t den = (uint16_t)(na + (uint16_t)(v1.x + v1.y));
-    RC_ASSERT(den >= na);
-    uint8_t t = pt_div_t(na, den);
-    uint16_t x = depth_of(pt_lerp16(v0.x, v1.x, t));
-    return (pt_ep) {.x = x, .y = (int16_t)-x, .sx = 0, .rx = pt_recip16(x)};
-}
-
-static pt_ep clip_right(uint16_t x0, uint16_t b0, pt_vv v1)
-{
-    RC_ASSERT(v1.flags & PT_VF_BNEG);
-
-    // -(x - y) is the reversed subtraction y - x: no negate at all
-    uint16_t den = (uint16_t)(b0 + (uint16_t)((uint16_t)v1.y - (uint16_t)v1.x));
-    RC_ASSERT(den >= b0 && den > 0);
-    uint8_t t = pt_div_t(b0, den);
-    RC_ASSERT(x0 <= 0x7FFF);
-    uint16_t x = depth_of(pt_lerp16((int16_t)x0, v1.x, t));
-    return (pt_ep) {.x = x, .y = (int16_t)x, .sx = 128, .rx = pt_recip16(x)};
 }
 
 // ---- the clip, a column at a time (spec 7.9) ----
@@ -999,39 +884,62 @@ static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, int16_t lo, uint8_t
 
 // ---- one edge of the walk (spec 7.8) ----
 
-// An edge's lines are made from its ends in view space, side-clipped once
-// for all of them; an end inside the view keeps the column its angle gives,
-// so the lines meet the walk's spans.
+// An edge's lines are made from its ends, worked out once for all of them.
+// An end in the view is its vertex: its column by angle, and its depth's
+// log, the length's less lsec of its view angle. An end out of it, in
+// front or behind, is where the edge crosses the view's edge, column 0 or
+// 128, by Doom's clipper: the eye's distance from the edge's line, d = r
+// |sin(a - w)| from an end in view (a its angle, w the edge's direction),
+// over |sin| of the edge ray's angle to the line, is the distance along the
+// ray, and cos 45 degrees (-128 in the log) makes it a depth. All logs: two
+// log sine lookups and some adds.
 typedef struct pt_edgelines {
-    uint8_t v0, v1;    // the edge's vertices
-    uint8_t c0, c1;    // their columns, by angle
-    bool have_ep;
-    pt_ep e0, e1;
+    const pt_side *sd;
+    uint8_t v1;                  // the end's vertex (the start's is the side's)
+    const pt_polar *p0, *p1;     // their polar forms from the eye
+    pt_cols cols;                // their view angles in the window, and columns
+    bool have;
+    pt_end e0, e1;
 } pt_edgelines;
+
+static void edge_ends(const pt_render *r, pt_edgelines *el)
+{
+    const pt_map *m = r->map;
+    int16_t u0 = el->cols.u0;
+    int16_t u1 = el->cols.u1;
+    bool in0 = u0 >= -128;
+    bool in1 = u1 < 128;
+    if (in0)
+        el->e0 = (pt_end) {.sx = el->cols.c0,
+                           .ld = (int16_t)((int16_t)el->p0->lr - pt_lsec((int8_t)u0))};
+    if (in1)
+        el->e1 = (pt_end) {.sx = el->cols.c1,
+                           .ld = (int16_t)((int16_t)el->p1->lr - pt_lsec((int8_t)u1))};
+    if (!in0 || !in1) {
+        // the edge's direction: the quadrant from its vertices, and its byte
+        pt_vertex a = m->verts[el->sd->v];
+        pt_vertex b = m->verts[el->v1];
+        uint8_t q = pt_quadrant((int16_t)(b.x - a.x), (int16_t)(b.y - a.y));
+        uint16_t w = (uint16_t)(q << 8 | m->edges[el->sd->edge].angle);
+        const pt_polar *pk = in1 ? el->p1 : el->p0;
+        uint16_t aw = (uint16_t)(pk->angle - w);
+        int16_t ls = (int16_t)((pt_logsin((uint16_t)(aw - 1)) + pt_logsin(aw)) >> 1);
+        int16_t ld = (int16_t)((int16_t)pk->lr + ls - 128);
+        if (!in0)
+            el->e0 = (pt_end) {.sx = 0,
+                               .ld = (int16_t)(ld - pt_logsin((uint16_t)(r->cam4 - 129 - w)))};
+        if (!in1)
+            el->e1 = (pt_end) {.sx = PT_SCREEN_WIDTH,
+                               .ld = (int16_t)(ld - pt_logsin((uint16_t)(r->cam4 + 127 - w)))};
+    }
+    el->have = true;
+}
 
 static pt_line edge_line(const pt_render *r, pt_edgelines *el, pt_relh h, pt_pattern col)
 {
-    if (!el->have_ep) {
-        pt_vv v0 = view_xy(r, el->v0);
-        pt_vv v1 = view_xy(r, el->v1);
-        uint16_t b0 = 0;    // the start's b = x - y, for the right clip
-        if ((v0.flags & PT_VF_ANEG) && !(v1.flags & (PT_VF_ANEG | PT_VF_AZERO))) {
-            el->e0 = clip_left(v0, v1);
-            b0 = (uint16_t)(el->e0.x << 1);    // on the left ray b = 2x
-        } else {
-            el->e0 = ep_unclipped(v0, el->c0);
-            if (!(v0.flags & PT_VF_BNEG))
-                b0 = (uint16_t)(int16_t)(v0.x - v0.y);
-        }
-        // the right clip wants the end strictly outside the right ray (a
-        // seam vertex behind the eye can read as outside with b exactly 0)
-        if ((v1.flags & PT_VF_BNEG) && v1.y > v1.x && el->e0.x <= 0x7FFF)
-            el->e1 = clip_right(el->e0.x, b0, v1);
-        else
-            el->e1 = ep_unclipped(v1, el->c1);
-        el->have_ep = true;
-    }
-    if (el->e0.sx >= el->e1.sx)    // edge-on, or the classifications disagree at a ray
+    if (!el->have)
+        edge_ends(r, el);
+    if (el->e0.sx >= el->e1.sx)    // edge-on
         return (pt_line) {.x0 = el->e0.sx, .x1 = el->e0.sx, .below = h.below, .ce = col.e, .co = col.o};
     return make_line(el->e0, el->e1, h, col);
 }
@@ -1066,8 +974,9 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
         return enter(r, ci, sd->twin, child_lo(cols), xa, xb, vs->tmax, vs->bmin);
     }
 
-    pt_edgelines el = {.v0 = sd->v, .v1 = pt_map_side_v1(m, ca, vs->k), .c0 = cols.c0,
-                       .c1 = cols.c1};
+    const pt_polar *pv = pt_vcache_cell(r->vc, m, vs->cell);
+    pt_edgelines el = {.sd = sd, .v1 = pt_map_side_v1(m, ca, vs->k), .p0 = &pv[vs->k],
+                       .p1 = &pv[pt_map_ring_next(ca, vs->k)], .cols = cols};
     pt_pattern wall = pt_shade((uint8_t)(e->colour - 1));
     pt_pattern ca_ceil = pt_shade(ca->ceil);
     pt_pattern ca_floor = pt_shade(ca->floor);

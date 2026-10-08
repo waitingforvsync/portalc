@@ -542,7 +542,14 @@ log2 |g| = log2 |o1 - o0| - log2 (ex - sx)
 ```
 
 The offsets are in 256ths and the columns whole, so g comes out in 256ths of
-a row per column. The columns' log is made once an edge. The sign: below the
+a row per column. The columns' log is made once an edge.
+
+With both ends on the screen, each offset is under 32 rows, and so is their
+difference. It goes into the log as a byte, in eighths of a row, rounded, so
+its log is a byte's: `nrm`, `k8` and `logf`, with no shifts. 5 × 256 takes
+the eighths back to 256ths. A clipped line (the near clip, below) keeps 16
+bits: its near end can be hundreds of rows off, and its gradient is how the
+clip finds where it crosses the screen's edge. The sign: below the
 eye the rows go down as the offset grows, above it up, so it's the
 offsets' subtract's borrow, the other way round above the eye.
 
@@ -552,7 +559,8 @@ floor both 10 steps from the eye, so h.l is 5,202 for both:
 ```
 column 7, log depth 1,892    o = 2^((5,202 - 1,892)/256) = 7,808    30.5 rows
 column 90, log depth 2,286   o = 2^((5,202 - 2,286)/256) = 2,688    10.5 rows
-g = 2^((log2(7,808 - 2,688) - log2 83)/256) = 2^((3,154 - 1,632)/256) = 62
+7,808 - 2,688 = 5,120: 160 eighths of a row, log 1,874 + 5 × 256 = 3,154
+g = 2^((3,154 - log2 83)/256) = 2^((3,154 - 1,632)/256) = 62
 ```
 
 62 256ths of a row a column: the ceiling line falls from row 2.0 to 22.1 and
@@ -581,7 +589,9 @@ n = (32 × 256 - o_far) / |g|
 ```
 
 columns. In logs, log2(32 × 256 - o_far) + 8 × 256 - log2 |g|, then an exp;
-the extra 8 × 256 keeps 8 bits of fraction in n. The count is n rounded up,
+the extra 8 × 256 keeps 8 bits of fraction in n. 32 × 256 - o_far is under
+32 rows, so like a gradient's difference it goes in as a byte in eighths of
+a row, and its log is a byte's. The count is n rounded up,
 counting the far end's own column (`CMP #1` on the fraction, `ADC #0` into
 the whole part). Logs can be a column over, so it steps back while the
 last column's row would be off the screen.

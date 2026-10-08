@@ -64,6 +64,13 @@ uint16_t pt_sinq(uint8_t j);
 // the 8 bits under x's leading one, rounded, index a fraction table.
 uint16_t pt_log2(uint16_t x);
 
+// The same for a byte b >= 1, with the same answers and no shifts: under 256
+// the bits under the leading one are fewer than 8, so the normalised byte,
+// its leading one shifted out, indexes the fraction exactly.
+//   LDX b : LDA nrm,X : ASL A : TAY : LDA logf,Y    ; the fraction
+//   LDY k8,X : DEY                                  ; the whole part
+uint16_t pt_log2_8(uint8_t b);
+
 // 2^(l / 256), rounded, saturating at 0xFFFF: pt_log2's inverse, within ~0.2%.
 // Under 8 * 256 the result is a byte (or 256, from the rounding's carry),
 // and the 9-bit mantissa never needs a second byte: its 1 comes in from the

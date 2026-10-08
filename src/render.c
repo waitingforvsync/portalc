@@ -107,7 +107,7 @@ static pt_height height_of(const pt_render *r, uint8_t z)
 {
     pt_height h = {.below = z >= r->eye_z};
     h.m = h.below ? pt_u8((int32_t)z - r->eye_z) : pt_u8((int32_t)r->eye_z - z);
-    h.l = h.m != 0 ? pt_i16((int32_t)pt_log2(h.m) + 17 * 256) : 0;
+    h.l = h.m != 0 ? pt_i16((int32_t)pt_log2_8(h.m) + 17 * 256) : 0;
     return h;
 }
 
@@ -174,10 +174,12 @@ static pt_line make_line(const pt_end *e0, const pt_end *e1, int16_t ldc, pt_hei
     uint8_t neg = (uint8_t)(h.below ? borrow : !borrow && dr != 0);
     int16_t lg = 0;
     uint16_t gm = 0;
-    if (dr != 0) {
+    if (near0 || near1) {
+        // a near end's offset is 32 rows or more, hundreds even, and the clip
+        // below finds where the line crosses the screen's edge from the
+        // gradient: the difference in 16 bits, and past 256 rows, where the
+        // offset saturates, in whole rows (it's then at least 224 of them)
         if (o0 == 0xFFFF || o1 == 0xFFFF) {
-            // a near end past 256 rows: the difference in whole rows instead
-            // (it's then at least 224 of them)
             uint16_t w0 = exp2_sat(pt_i16((int32_t)l0 - 8 * 256));
             uint16_t w1 = exp2_sat(pt_i16((int32_t)l1 - 8 * 256));
             uint16_t dw = w1 > w0 ? pt_u16((int32_t)w1 - w0) : pt_u16((int32_t)w0 - w1);
@@ -187,6 +189,20 @@ static pt_line make_line(const pt_end *e0, const pt_end *e1, int16_t ldc, pt_hei
         }
         gm = exp2_sat(lg);
         gm = gm > 0x7FFF ? (uint16_t)0x7FFF : gm;
+    } else {
+        // both ends on the screen: each offset is under 32 rows, and so is
+        // their difference, a byte in eighths of a row (rounded; 0 under a
+        // sixteenth all along, and the line is flat), whose log is a byte's,
+        // with no shifts (pt_log2_8). 5 * 256 takes the eighths back to
+        // 256ths. The gradient's under 32 rows a column, so its exp never
+        // saturates
+        uint16_t d = (uint16_t)((dr + 16u) >> 5);
+        uint8_t d8 = d > 255 ? (uint8_t)255 : (uint8_t)d;
+        if (d8 != 0) {
+            lg = pt_i16((int32_t)pt_log2_8(d8) + 5 * 256 - ldc);
+            RC_ASSERT(lg < 13 * 256);
+            gm = exp2_sat(lg);
+        }
     }
     L.g = pt_g_make(gm, neg);
     if (!near0 && !near1) {
@@ -199,9 +215,14 @@ static pt_line make_line(const pt_end *e0, const pt_end *e1, int16_t ldc, pt_hei
     // one end too near: the far end's columns towards the crossing, ceil
     // (delta) of them counting its own (CMP #1 on the low byte, ADC #0 into
     // the high), back to the last whose row is on the screen (delta is
-    // logs, and can be a column over)
+    // logs, and can be a column over). The far end's distance from the edge
+    // is under 32 rows, a byte in eighths of a row (rounded; at least one,
+    // as the far end's offset is at most 8,176) with a byte's log: 5 * 256
+    // back to 256ths, and 8 * 256 more for delta's fraction
     uint16_t of = near0 ? o1 : o0;
-    int16_t lq = pt_i16((int32_t)pt_log2((uint16_t)(PT_EDGE_OFF - of)) + 8 * 256 - lg);
+    uint16_t de = (uint16_t)((PT_EDGE_OFF - of + 16u) >> 5);
+    uint8_t de8 = de > 255 ? (uint8_t)255 : (uint8_t)de;
+    int16_t lq = pt_i16((int32_t)pt_log2_8(de8) + 13 * 256 - lg);
     uint16_t dq = exp2_sat(lq);
     uint16_t n = (uint16_t)((dq >> 8) + ((uint8_t)dq != 0 ? 1u : 0u));
     uint8_t cnt = n > dc ? dc : (uint8_t)n;
@@ -1036,7 +1057,7 @@ static void edge_ends(const pt_render *r, pt_edgelines *el)
             el->e1 = (pt_end) {.sx = PT_SCREEN_WIDTH,
                                .ld = pt_i16((int32_t)ld - pt_logsin((uint16_t)(r->cam4 + 127u - w)))};
     }
-    el->ldc = el->e0.sx < el->e1.sx ? pt_i16(pt_log2(pt_u8((int32_t)el->e1.sx - el->e0.sx))) : 0;
+    el->ldc = el->e0.sx < el->e1.sx ? pt_i16(pt_log2_8(pt_u8((int32_t)el->e1.sx - el->e0.sx))) : 0;
     el->have = true;
 }
 

@@ -165,6 +165,14 @@ static void build(uint8_t *table, uint32_t n, double (*f)(uint32_t), bool floore
     unpack(table, n, pack(ideal, n));
 }
 
+// 256 log2 b for a byte: the bits under its leading one are fewer than 8, so
+// the normalised byte, its leading one shifted out, is the fraction exactly
+static uint16_t log2_8_(uint8_t b)
+{
+    RC_ASSERT(b > 0);
+    return (uint16_t)((k8_[b] - 1) << 8 | logf_[(uint8_t)(nrm_[b] << 1)]);
+}
+
 // 256 log2 x. The leading one's place is the whole part, and the 8 bits
 // under it, rounded, index the fraction; a rounding that carries out is the
 // next octave's fraction 0. k8 finds the place and nrm lines up the high
@@ -176,15 +184,14 @@ static void build(uint8_t *table, uint32_t n, double (*f)(uint32_t), bool floore
 //   DEY : BEQ join                    ; k = 1: lo is the rest, exactly
 // .sh LSR A : DEY : BNE sh            ; C is the last bit out
 // .join ORA t : ADC #0                ; carry out: the next octave's 0
-// Under 256 the bits under the leading one are fewer than 8, so the
-// normalised byte, its leading one shifted out, is the fraction exactly.
+// Under 256 it's the byte's log (log2_8_).
 static uint16_t log2_(uint16_t x)
 {
     RC_ASSERT(x > 0);
     uint8_t hi = (uint8_t)(x >> 8);
     uint8_t lo = (uint8_t)x;
     if (hi == 0)
-        return (uint16_t)((k8_[lo] - 1) << 8 | logf_[(uint8_t)(nrm_[lo] << 1)]);
+        return log2_8_(lo);
     uint8_t k = k8_[hi];
     uint8_t c = 0;
     for (uint8_t n = (uint8_t)(k - 1); n != 0; n--) {
@@ -281,7 +288,7 @@ void pt_arith_init(void)
     for (uint32_t i = 0; i < 128; i++)
         lsec16_[i] = lsec_[i];
     for (uint32_t j = 0; j < 128; j++)
-        lsec16_[255 - j] = pt_u16(PT_LOG_STEP - (int32_t)log2_(pt_u16(2 * (int32_t)j + 1)) + lsx_[j]);
+        lsec16_[255 - j] = pt_u16(PT_LOG_STEP - (int32_t)log2_8_(pt_u8(2 * (int32_t)j + 1)) + lsx_[j]);
 
     inited_ = true;
 }
@@ -298,6 +305,12 @@ uint16_t pt_log2(uint16_t x)
 {
     RC_ASSERT(inited_);
     return log2_(x);
+}
+
+uint16_t pt_log2_8(uint8_t b)
+{
+    RC_ASSERT(inited_);
+    return log2_8_(b);
 }
 
 // 2^(l / 256) for l under 8 * 256: 1.f shifted right 8 - n, rounded, a

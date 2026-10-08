@@ -781,6 +781,15 @@ offsets from the screen's middle, and a gradient from their difference:
 
 The rows run down from the middle below the eye, and up above it.
 
+With both ends on the screen, the difference is under 32 rows, so it goes
+into the log as a byte in eighths of a row (rounded), and its log is a
+byte's: no shifts, 5 * 256 back to 256ths. Against the ray-cast reference
+that's 368,080 wrong pixels to 368,000 on map 0, and 6,238,134 to
+6,238,296 on the stress map: nothing. A line with an end off the screen
+keeps 16 bits, as its gradient is what finds where it crosses the edge
+(below). The far end's distance from that edge is under 32 rows, though,
+so the crossing's own log is a byte's too: not a pixel different.
+
 An end with an offset of 32 rows or more is at or past the screen's edge:
 nearer than 2h. The line runs off the screen between its ends, (32 rows -
 the far end's offset) / g columns from the far end, which is one more log

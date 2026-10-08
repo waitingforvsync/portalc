@@ -146,6 +146,13 @@ RC_TEST_STEP(arith, log2_exhaustive, fix)
     RC_CHECK(pt_log2(65535), ==, 16 * 256);    // rounds into the next octave
 }
 
+RC_TEST_STEP(arith, log2_8, fix)
+{
+    (void)fix;
+    for (uint32_t b = 1; b < 256; b++)
+        RC_CHECK(pt_log2_8((uint8_t)b), ==, pt_log2((uint16_t)b));
+}
+
 RC_TEST_STEP(arith, exp2, fix)
 {
     (void)fix;

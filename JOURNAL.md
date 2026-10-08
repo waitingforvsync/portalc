@@ -2525,3 +2525,44 @@ The cost model, estimated 6502 cycles a frame:
 
 That's better than the whole plain-byte experiment managed. The replay
 records are remade: 4,984, all reproduce. 34/34 tests.
+
+## 2026-10-05 — polar, against main
+
+`polar` is done in C: the vertex cache and angles, lines from logs, the
+per-column clip, the toggle buffer with its fill and unplotter, and the
+sprites after the fill. Time to see what it buys on a 6502 it doesn't have
+yet.
+
+`main` measures itself: its port, on the emulator, over all 22,568 golden
+poses. `polar` gets a cost model. Its C counts what a frame does, and the
+counts have weights: the arithmetic written in Baron and timed on the
+golden frames' own arguments (log2 47 cycles, exp2 81, the polar form
+369); the plotters timed through `main`'s `plot`, which is the same code;
+the sprites through spritescale's own binary; the fill counted by hand. The
+glue is sketched, generously, and then multiplied by 1.5, because that's
+how far `main`'s model fell short where it guessed.
+
+A median frame, polar against main (main's blank frames on the rims left
+out):
+
+| | main | polar | |
+|---|---|---|---|
+| sweep | 108.5k | 96.4k | 0.82 |
+| map 7 | 128.7k | 109.5k | 0.76 |
+| rim | 96.3k | 93.4k | 0.86 |
+| stress | 121.8k | 111.7k | 0.87 |
+
+Unscaled, 0.65 to 0.73. The 90th percentile is about level, and the worst
+frame comes down from 348k-493k to 294k-348k.
+
+The fill did what it said: clear and fill, 58.7k, become 31k to 38k. The
+sprites did better, three times cheaper. Capture did nothing: 42k to 54k
+against main's 27k to 51k. Split by job, the clip and the walk got
+cheaper and the vertices and lines didn't: a polar form costs about what
+a rotation did, every vertex the walk reaches still needs one, and a
+line's logs cost about what main's projections did. And plotting lines as
+runs while they're made, 250 cycles of setup a run, then unplotting them,
+eats back part of the fill's win.
+
+So it's faster, not the leap I wanted. Next is finding where capture's
+cycles really go, and that won't be known until it's 6502.

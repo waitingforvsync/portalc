@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 600" width="820" height="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
+<rect width="820" height="600" fill="#ffffff"/>
+<line x1="440.0" y1="380.0" x2="660.0" y2="50.7" stroke="#2563eb" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="6 4"/>
+<line x1="440.0" y1="380.0" x2="769.3" y2="600.0" stroke="#2563eb" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="6 4"/>
+<text x="650.0" y="60.7" font-size="11" text-anchor="end" fill="#2563eb" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">the view's left edge: ray b</text>
+<line x1="440.0" y1="380.0" x2="686.0" y2="331.1" stroke="#8a8478" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 4"/>
+<text x="692.0" y="335.1" font-size="11" text-anchor="start" fill="#8a8478" font-weight="normal" xml:space="preserve">facing</text>
+<line x1="85.2" y1="530.7" x2="682.9" y2="96.5" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<line x1="117.3" y1="507.4" x2="618.9" y2="143.1" stroke="#1d1b18" stroke-width="4" stroke-linecap="round"/>
+<circle cx="117.3" cy="507.4" r="4.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="127.3" y="523.4" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v4: off the view</text>
+<circle cx="618.9" cy="143.1" r="4.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="628.9" y="147.1" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">P = v0, in view</text>
+<text x="253.7" y="388.1" font-size="11" text-anchor="end" fill="#8a8478" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">the edge, direction w</text>
+<circle cx="440.0" cy="380.0" r="5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="430.0" y="398.0" font-size="12" text-anchor="end" fill="#1d1b18" font-weight="normal" xml:space="preserve">eye</text>
+<line x1="440.0" y1="380.0" x2="618.9" y2="143.1" stroke="#1d1b18" stroke-width="1.6" stroke-linecap="round"/>
+<text x="548.4" y="255.7" font-size="14" text-anchor="start" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">r</text>
+<line x1="440.0" y1="380.0" x2="389.1" y2="309.9" stroke="#15803d" stroke-width="2" stroke-linecap="round"/>
+<text x="402.6" y="349.0" font-size="14" text-anchor="end" fill="#15803d" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">d</text>
+<polyline points="396.4,304.6 401.7,311.9 394.4,317.2" fill="none" stroke="#15803d" stroke-width="1.2" stroke-linejoin="round"/>
+<line x1="440.0" y1="380.0" x2="578.9" y2="172.0" stroke="#c2410c" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="578.9" cy="172.0" r="4.5" fill="#c2410c" stroke="none" stroke-width="1"/>
+<text x="566.9" y="168.0" font-size="12" text-anchor="end" fill="#c2410c" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">the clipped end</text>
+<text x="499.5" y="276.0" font-size="14" text-anchor="end" fill="#c2410c" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">s</text>
+<line x1="578.9" y1="172.0" x2="613.5" y2="345.5" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="4 3"/>
+<circle cx="613.5" cy="345.5" r="3" fill="#8a8478" stroke="none" stroke-width="1"/>
+<text x="621.5" y="361.5" font-size="12" text-anchor="start" fill="#c2410c" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">depth = s cos 45°</text>
+<text x="24.0" y="40.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">d     = r |sin(a - w)|      from P</text>
+<text x="24.0" y="57.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">s     = d / |sin(b - w)|    along the ray b</text>
+<text x="24.0" y="74.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">depth = s cos 45°</text>
+<text x="24.0" y="108.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">log depth = log r + logsin(a - w)</text>
+<text x="24.0" y="125.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">                  - logsin(b - w) - 128</text>
+<text x="24.0" y="159.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">a, b, w: the angles of P, the ray, the edge</text>
+<text x="24.0" y="193.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">here a = 105, w = 153, b = 96 (steps):</text>
+<text x="24.0" y="210.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">log depth = 1,809, so 134 units</text>
+</svg>

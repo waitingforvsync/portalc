@@ -33,7 +33,10 @@ tried and kept or tried and dropped.
   spritescale's two plotters, its format and rounding, clipped a pixel
   column at a time to the rows each column shows. Pixels under them
   unchanged.
-- **Next, phase 6.** Measure against `main`, and write up.
+- **Phase 6, done (awaiting commit).** Measured against `main`: `main`'s
+  port on the emulator, `polar` by a cost model of timed primitives and
+  sketched glue. A median frame 13 to 24% faster, sprites three times
+  cheaper, capture no cheaper. See "Measured against main".
 
 The phases are at the end.
 
@@ -1490,6 +1493,211 @@ Everything else is unchanged: the sweep without sprites (`portalc_sweep
 --no-sprites`) is byte-identical to before, and so is the comparer, which
 has sprites off.
 
+## Measured against main
+
+`main` has a 6502 port, so its frames are measured: every golden pose, 22,568
+of them (the sweep, map 7 with its seven sprites, the rims, the stress
+map), through clear, capture, plot, the sprite pass and fill on
+`emu6502.py`. It gives the demo frames above to the cycle. `polar` has no
+6502 yet, so its frames are a cost model: a generated copy of the C counts
+what each frame does, as `main`'s `trace.py` does, about 130 counters, and
+each count has a weight in cycles.
+
+**The weights.**
+
+- *Timed on the emulator.* log2 (47 cycles), exp2 (81), the polar form
+  (369), log sine (41), lsec (19) and the view column (17), written in
+  Baron and run on 40,000 of the arguments the golden frames pass them,
+  each one checked against the C. Plus 16 a call, for the `JSR` and the
+  arguments.
+- *Timed through `main`.* Its `plot` is polar's plotters, so 4,000 lines
+  through it, fitted per operation: a whole byte 79, a row more inside one
+  49, an end pixel 68, a steep column 71, a line's setup 173 to 247. 9.6
+  cycles rms.
+- *Timed through spritescale.* Its own binary, the boulder in 3,000 places,
+  fitted to the plotters' counters to 0.6%.
+- *Counted.* The fill is straight-line code: 133 cycles a column, 9 a byte
+  EOR'd, 5 a byte stored.
+- *Sketched.* The rest, all glue: the walk, making lines, the clips, the
+  records, the unplotter, the projection. Generously, and still 38% of the
+  total.
+
+`main`'s own model ran 40% short of its port wherever it guessed, so the
+headline has every sketched weight 1.5 times over.
+
+**The frames.** Cycles, with `main`'s blank frames left out: 504 rim poses
+and 196 on the stress map put the eye on a boundary, where `main` draws
+nothing at all and `polar` draws the room.
+
+| | `main` median | 90% | worst | `polar` median | 90% | worst | ratio, median | 90% |
+|---|---|---|---|---|---|---|---|---|
+| sweep | 108.5k | 208.9k | 396.4k | 96.4k | 194.9k | 300.6k | 0.82 | 1.04 |
+| map 7 | 128.7k | 247.9k | 492.8k | 109.5k | 216.9k | 348.0k | 0.76 | 1.04 |
+| rim | 96.3k | 189.6k | 347.5k | 93.4k | 193.8k | 342.1k | 0.86 | 1.22 |
+| stress | 121.8k | 219.8k | 371.6k | 111.7k | 210.2k | 293.7k | 0.87 | 1.01 |
+
+With the sketches as they stand, not 1.5 times over, the medians' ratios
+are 0.65 to 0.73. The demo's two frames: the typical one 118.6k to 105.9k
+(90.8k unscaled), the heaviest 289.1k to 268.7k (218.5k). (The first
+version counted the polar form's two log2 calls twice, once in its own
+timing; it overstated `polar` by 1.4k to 2.2k a frame.)
+
+**Where it goes**, a median frame at 1.5 times:
+
+- *Clear and fill.* 58.7k becomes the fill alone, 31k to 38k. The win
+  expected, about 25k a frame.
+- *Sprites.* Three times cheaper. Over the frames with one, the sprite
+  pass's median is 62k to 84k on `main`'s map 0 streams, `polar`'s 24k to
+  30k; the heaviest frame's goes from 73.5k to 26k.
+- *Capture.* No win: 41k to 52k against `main`'s 27k to 51k (30k to 39k
+  unscaled). See below for why.
+- *Plot.* 13k to 14k against `main`'s 6k to 10k. Lines are plotted as runs
+  as they're made, 13 to 18 runs a frame at about 250 cycles of setup
+  each, and recorded, 2k.
+- *The unplotter.* 5k to 9k that `main` never paid.
+
+So a median frame is 13 to 24% faster at the conservative end, the 90th
+percentile about the same, and the ceiling lower: the worst frame 294k to
+348k against 348k to 493k. Keeping the vertex cache while only turning
+takes about 6k more off.
+
+Not the step change it was meant to be. The fill and the sprites did their
+part, and capture didn't. The places to look, by what they cost:
+
+- the polar form, 369 cycles, two logs and an exp each, 11 to 18 a frame;
+- exp2's long path, a loop of 16-bit shifts, and the logs and exps around
+  each line;
+- the plotters' 250 cycles of setup a run, paid over many short runs;
+- the records and the unplotter, 8k to 13k between them;
+- and the glue, whose real cost no one knows until it's written.
+
+**Why capture is no faster.** `main`'s `frame.py` splits capture by job,
+and the model does the same, over 1,130 golden poses (every 20th of each
+stream):
+
+| capture | `main`, measured | `polar`, as sketched | 1.5 times over |
+|---|---|---|---|
+| vertices | 13.4k | 13.1k | 16.4k |
+| making lines | 15.3k | 15.5k | 19.8k |
+| clipping | 15.1k | 8.4k | 12.7k |
+| the walk | 10.7k | 5.0k | 7.5k |
+| sprites' projection | 1.0k | 0.4k | 0.6k |
+| all | 55.6k | 42.4k | 56.9k |
+
+The per-column clip and the leaner walk did what they were for. Vertices
+and lines broke even, and they're the half that angles and logs were
+meant to win.
+
+- *The vertex cache* does its job inside a frame: 14.8 polar forms for the
+  14.4 distinct vertices `main` transformed 18.4 times. Across frames it
+  only helps while the camera stands still, and the goldens are each a
+  fresh position; turning in place takes 11 polar forms a frame down to 3,
+  about 6k.
+- *Angles don't mean fewer vertices.* The early-outs come after the angle:
+  whether a side faces the eye, where it falls in the window, its column,
+  all need its ends' angles first. So every vertex the walk reaches gets a
+  polar form, the same set `main` rotated.
+- *A polar form isn't cheap.* 369 cycles timed: two log2s, a byte exp,
+  `atan` and `lhyp`, the quadrant and the absolute values. With its 110 of
+  bookkeeping it's about 500 a vertex, against `main`'s rotation at about
+  450 (`rot`) and 730 with its own bookkeeping. Add the window work round
+  each side, sketched at about 300 a vertex, and it's 881 a vertex against
+  `main`'s 727 a transform.
+- *Logs aren't cheaper than projections.* A line is about two exp2s and two
+  log2s, 350 cycles of arithmetic before its glue: 890 a line against
+  `main`'s 952, for 17.5 lines a frame against 16.1.
+
+What `polar` saves at the front is the column by table rather than a
+division, and the duplicate transforms. What it pays is a polar form per
+vertex and logs per line, which cost about what the rotations, projections
+and divisions did.
+
+**The plotters' setup.** The 247 cycles a run are `main`'s `plot`, the
+same plotters, traced an instruction at a time on a one-pixel line, 308
+cycles in all:
+
+| | cycles |
+|---|---|
+| the piece from the pool: 8 fields into zero page, colour and below-screen checks | 74 |
+| the cursor from column and row | 37 |
+| the pixel's mask | 11 |
+| shallow, steep or flat | 13 |
+| the head pixels, whole bytes and tail pixels, worked out and each tested | 90 |
+| the loop and return | 16 |
+| the one pixel | 67 |
+
+So it's pessimistic for `polar`, which calls the plotter with the run in
+hand, and the model charges `plot_run` 50 and `record` 70 on top: about
+370 a run before a pixel, 13 to 18 runs a frame. A plotter shaped for
+`polar` would take the run in zero page (no pool), the cursor from the
+row's two tables (about 20), and the head, whole and tail counts from a
+table on the columns (about 15): 120 to 150 a run. And the records walk
+the very bytes the plotter does, so the plotter can keep `lastp1` as it
+goes, the row in hand, rather than a second walk at 42 a byte. Between
+them, 3.5k to 4.5k a frame.
+
+The model's tools are in the session's scratchpad, not the repo: the
+counter generator and harness, the Baron primitives and their timer, the
+plotter and spritescale fits, and the model itself.
+
+## After the measurement
+
+A review for anything faster, ranked by the cost model, per median frame,
+with the glue as sketched. Decided so far:
+
+| | Change | Saving | Decision |
+|---|---|---|---|
+| 1 | A plotter shaped for `polar`: the run taken where the clip holds it, the cursor and the head, whole and tail counts by table, `lastp1` kept as it plots | ~4k | yes, with lazy plotting |
+| 2 | Flatten children seen through narrow portals | 1k to 2.4k | no: a narrow portal between wider ones onto the same cell would leave a stripe |
+| 3 | A cheaper polar form | ~1.8k | later, with the arithmetic as macros |
+| 4 | Row-0 toggles into the fill's start values, a byte column each | ~1.3k | to do |
+| 5 | Height logs per cell, kept across frames until the eye's height changes | ~1.4k | to do |
+| 6 | Each side's patterns and level flags made with the map | ~1k | to do |
+| 7 | End offsets reused between neighbouring sides | ~0.85k | to do |
+| 8 | The hot arithmetic inlined | ~1k | yes: macros, later |
+| 9-10 | exp2's shifts and small logs by table | ~1.6k | later |
+| 11 | The fill from the first toggle down | ~0.9k | to do |
+| 12-17 | The unplotter's setup, a vertex's column cached, coordinates kept doubled, a gradient log a side, a byte-plus-carry window, whole sprites' clips not copied | 0.2k to 1k each | to do |
+| 18 | No frame when nothing moved | all of it, when idle | to do |
+| 19 | A depth cap by cycle budget | | no, as 2 |
+| 20 | A guard for portals with no opening | nothing on these maps | to do, it's free |
+
+And dropped on the numbers: exact extents for the fast path (0.2 more fast
+clips a frame), a cheap path for columns beyond a line's ends (2 to 8 a
+frame), clearing T in or after the fill, T at half height, polar forms
+updated as the camera moves.
+
+**Keeping a side's lines for the cell's next visit.** Tried, and reverted
+while I think about it: it worked, but it's a fair bit of machinery.
+
+A cell seen through several portals side by side gets a visit for each,
+and each later one resumes on the side the last one stopped on, making
+that side's lines again. Kept instead (the side's ends and up to four
+lines, a role each: the ceiling and floor lines forming no bound, and the
+child's two bounds), in one of 12 memos, they can be used as they are:
+each depends only on the side, the heights, the colours and the eye, and
+the frames came out byte-identical. On map 0, 2 lines a frame of 14 were
+no longer made twice: about 1k a frame, 3.5k at the 90th percentile, up to
+14k in the worst. The stress map never sees a cell through two portals,
+and saved nothing. The pool's high water was 7.
+
+It went with slimming the visit record to what a cell's next visit needs:
+the side it stopped on, the right column it reached, its window's start, a
+memo and its sprite, 6 bytes and the window where it's 26 now. The rest is
+the walk's own state for the visit it's on, and could be carried by
+`walk()` and handed to a child's (on the 6502, zero page, saved on the
+stack across a child's walk), with the heights in per-cell arrays. A
+resumed walk makes its side's places and columns again from the vertex
+cache, the same values in the same window, for about 30 cycles.
+
+Two more steps were planned on top: the window derived from the side a
+visit enters by, a quarter turn back, so a visit needn't keep it; and lazy
+plotting, a kept side's visible runs held, extended where the next visit's
+runs carry straight on, and plotted when a gap, a new side or the end of
+capture says they're done. That's safe, as nothing reads T before the
+fill, and the clip writes the child's bounds to `top[]` and `bot[]` as it
+goes, whatever happens to the plotting.
+
 ## Considered and dropped
 
 - **Dropping the vertical dither.** Fill the even scanlines and store each
@@ -1606,7 +1814,7 @@ have nothing wrong, against 6,210.
    its EORs stopping at each column's last toggled row; the unplotter.
 5. **Sprites, done.** After the fill, spritescale's pixels exactly, clipped
    by the saved rows.
-6. **Measure and write up.** Against `main`, then the journal. The old spec
+6. **Measure and write up, done.** Against `main`, then the journal. The old spec
    (`docs/portal-spec.md`, `main`'s design) is gone; NOTES.md is the design.
 
 The tests are rewritten as each part lands. `beeb/` stays as it is, and

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 700" width="820" height="700" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
+<rect width="820" height="700" fill="#ffffff"/>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d1b18"/></marker></defs>
+<clipPath id="room"><polygon points="392.8,59.2 696.8,280.0 580.8,638.4 204.8,638.4 88.8,280.0"/></clipPath>
+<polygon points="312.8,299.2 472.8,299.2 472.8,459.2 312.8,459.2" fill="#a8987a" stroke="none" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="312.8,299.2 472.8,299.2 472.8,459.2 312.8,459.2" fill="#2563eb" stroke="none" stroke-width="1.5" stroke-linejoin="round" fill-opacity="0.12"/>
+<polygon points="392.8,59.2 696.8,280.0 472.8,299.2 312.8,299.2" fill="#f3efe6" stroke="none" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="392.8,59.2 696.8,280.0 472.8,299.2 312.8,299.2" fill="#2563eb" stroke="none" stroke-width="1.5" stroke-linejoin="round" fill-opacity="0.2"/>
+<polygon points="696.8,280.0 580.8,638.4 472.8,459.2 472.8,299.2" fill="#f3efe6" stroke="none" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="696.8,280.0 580.8,638.4 472.8,459.2 472.8,299.2" fill="#2563eb" stroke="none" stroke-width="1.5" stroke-linejoin="round" fill-opacity="0.12"/>
+<polygon points="580.8,638.4 456.8,638.4 328.8,638.4 204.8,638.4 312.8,459.2 472.8,459.2" fill="#f3efe6" stroke="none" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="204.8,638.4 88.8,280.0 312.8,299.2 312.8,459.2" fill="#f3efe6" stroke="none" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="88.8,280.0 392.8,59.2 312.8,299.2" fill="#f3efe6" stroke="none" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="88.8,280.0 392.8,59.2 312.8,299.2" fill="#2563eb" stroke="none" stroke-width="1.5" stroke-linejoin="round" fill-opacity="0.28"/>
+<polygon points="284.4,202.8 951.1,-795.0 1282.2,869.5" fill="#2563eb" stroke="none" stroke-width="1.5" stroke-linejoin="round" fill-opacity="0.07" clip-path="url(#room)"/>
+<g clip-path="url(#room)">
+<line x1="284.4" y1="202.8" x2="951.1" y2="-795.0" stroke="#2563eb" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="6 4"/>
+<line x1="284.4" y1="202.8" x2="1282.2" y2="869.5" stroke="#2563eb" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="6 4"/>
+<line x1="284.4" y1="202.8" x2="1007.6" y2="-754.8" stroke="#2563eb" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="284.4" y1="202.8" x2="1462.9" y2="428.9" stroke="#2563eb" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="284.4" y1="202.8" x2="1350.7" y2="753.2" stroke="#2563eb" stroke-width="0.9" stroke-linecap="round"/>
+</g>
+<line x1="312.8" y1="299.2" x2="472.8" y2="299.2" stroke="#c2410c" stroke-width="2" stroke-linecap="round"/>
+<line x1="472.8" y1="299.2" x2="472.8" y2="459.2" stroke="#c2410c" stroke-width="2" stroke-linecap="round"/>
+<line x1="472.8" y1="459.2" x2="312.8" y2="459.2" stroke="#c2410c" stroke-width="2" stroke-linecap="round"/>
+<line x1="312.8" y1="459.2" x2="312.8" y2="299.2" stroke="#c2410c" stroke-width="2" stroke-linecap="round"/>
+<line x1="392.8" y1="59.2" x2="696.8" y2="280.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="696.8" y1="280.0" x2="472.8" y2="299.2" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<line x1="312.8" y1="299.2" x2="392.8" y2="59.2" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<line x1="696.8" y1="280.0" x2="580.8" y2="638.4" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="580.8" y1="638.4" x2="472.8" y2="459.2" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<line x1="580.8" y1="638.4" x2="456.8" y2="638.4" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="456.8" y1="638.4" x2="328.8" y2="638.4" stroke="#c2410c" stroke-width="2" stroke-linecap="round"/>
+<line x1="328.8" y1="638.4" x2="204.8" y2="638.4" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="204.8" y1="638.4" x2="312.8" y2="459.2" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<line x1="204.8" y1="638.4" x2="88.8" y2="280.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<line x1="88.8" y1="280.0" x2="312.8" y2="299.2" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<line x1="88.8" y1="280.0" x2="392.8" y2="59.2" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<text x="392.8" y="383.2" font-size="12" text-anchor="middle" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">cell 1</text>
+<text x="468.8" y="238.4" font-size="12" text-anchor="middle" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">cell 2</text>
+<text x="555.8" y="423.2" font-size="12" text-anchor="middle" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">cell 3</text>
+<text x="392.8" y="582.7" font-size="12" text-anchor="middle" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">cell 4</text>
+<text x="229.8" y="423.2" font-size="12" text-anchor="middle" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">cell 5</text>
+<text x="240.8" y="184.8" font-size="12" text-anchor="middle" fill="#1d1b18" font-weight="bold" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">cell 6</text>
+<circle cx="392.8" cy="59.2" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="400.8" y="53.2" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v0</text>
+<circle cx="696.8" cy="280.0" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="704.8" y="296.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v1</text>
+<circle cx="580.8" cy="638.4" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="588.8" y="654.4" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v2</text>
+<circle cx="88.8" cy="280.0" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="80.8" y="274.0" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v4</text>
+<circle cx="312.8" cy="299.2" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="304.8" y="293.2" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v5</text>
+<circle cx="472.8" cy="299.2" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="480.8" y="315.2" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v6</text>
+<circle cx="472.8" cy="459.2" r="3.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<text x="464.8" y="475.2" font-size="11" text-anchor="end" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v7</text>
+<circle cx="284.4" cy="202.8" r="5.5" fill="#1d1b18" stroke="none" stroke-width="1"/>
+<line x1="284.4" y1="202.8" x2="339.3" y2="191.9" stroke="#1d1b18" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah)"/>
+<text x="276.4" y="220.8" font-size="12" text-anchor="end" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">eye</text>
+<text x="354.0" y="89.7" font-size="10" text-anchor="end" fill="#2563eb" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">col 0</text>
+<text x="374.4" y="94.3" font-size="10" text-anchor="start" fill="#2563eb" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">col 7</text>
+<text x="543.7" y="252.5" font-size="10" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">col 90</text>
+<text x="497.7" y="312.9" font-size="10" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">col 115</text>
+<text x="503.9" y="349.5" font-size="10" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">col 128</text>
+<line x1="640.0" y1="70.0" x2="670.0" y2="70.0" stroke="#1d1b18" stroke-width="3" stroke-linecap="round"/>
+<text x="678.0" y="74.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">wall</text>
+<line x1="640.0" y1="88.0" x2="670.0" y2="88.0" stroke="#c2410c" stroke-width="2" stroke-linecap="round"/>
+<text x="678.0" y="92.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">portal with a step</text>
+<line x1="640.0" y1="106.0" x2="670.0" y2="106.0" stroke="#8a8478" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+<text x="678.0" y="110.0" font-size="11" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve">soft edge</text>
+<text x="60.0" y="30.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="bold" xml:space="preserve">Map 0 from above, x up, y right: the eye at (1756, 1400), facing 56/256</text>
+</svg>

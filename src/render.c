@@ -406,28 +406,6 @@ static void on_screen(const pt_line *L, uint8_t xa, uint8_t xb, uint8_t *l, uint
         *l = *rr = xb;
 }
 
-// The child's open columns over an edge's span: all of them, until a bound
-// line closes one, and only then kept a column at a time in open[] (filled
-// first). Every column open is the common case, and needs no open[] at all.
-typedef struct pt_open {
-    bool all;
-    uint8_t xa, xb;
-} pt_open;
-
-static void close_col(pt_render *r, pt_open *op, uint8_t c)
-{
-    if (op->all) {
-        memset(&r->open[op->xa], 1, (size_t)(op->xb - op->xa));
-        op->all = false;
-    }
-    r->open[c] = 0;
-}
-
-static bool is_open(const pt_render *r, const pt_open *op, uint8_t c)
-{
-    return op->all || r->open[c] != 0;
-}
-
 // One line's scan: the line, the runs it's gathering, and its bounds.
 // Where a visit's extent says a bound is the screen's edge all along (tmax
 // 0, bmin 64), its rows are that, and the array isn't read.
@@ -435,12 +413,12 @@ typedef struct pt_scan {
     pt_render *r;
     const pt_line *L;
     pt_pattern col;     // the line's colour
-    pt_pattern shut;    // and with the child's stack telescoped in, closing it
     bool tz;            // the top is row 0 all along
     bool bz;            // the bottom is the junk row all along
-    pt_open *op;        // a bound line's child's open columns
     uint8_t ext;        // the child's bound's extent so far: the floor line's
                         // highest row, the ceiling line's lowest
+    bool room;          // a bound line has left the child room in a column:
+                        // its bottom below its top
     pt_vrun v;
     pt_hrun h;
 } pt_scan;
@@ -538,11 +516,12 @@ static void clip_plain(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, u
     hrun_end(r, &s.h, xb);
 }
 
-// The child's bottom: it closes the child where it's on or above the top
-// (the child's stack, telescoped to its ceiling ^ floor, cbfb, goes in with
-// it), lends the parent's bottom where it's on or below that, and is the
-// bottom where it's between. Either way the child's bottom row is written:
-// the parent's may be the junk row it never kept.
+// The child's bottom: the line, merged into the parent's top where it's on
+// or above that, and into the parent's bottom where it's on or below that.
+// Either way the child's bottom row is written: the parent's may be the junk
+// row it never kept. Where it's merged into the top, the child has no room:
+// its bottom is its top, nothing's visible, and every toggle its walk makes
+// there lands on that one row, which telescopes to its ceiling ^ floor.
 static void floor_col(pt_scan *s, uint8_t c, uint16_t y)
 {
     pt_render *r = s->r;
@@ -551,11 +530,9 @@ static void floor_col(pt_scan *s, uint8_t c, uint16_t y)
     uint8_t b = bot_at(s, c);
     if (row <= t) {
         run_end(r, s->L, &s->v, c);
-        hrun_add(r, &s->h, c, t, s->shut);
-        close_col(r, s->op, c);
-        return;
-    }
-    if (row >= b) {
+        hrun_add(r, &s->h, c, t, s->col);
+        row = t;
+    } else if (row >= b) {
         run_end(r, s->L, &s->v, c);
         hrun_add(r, &s->h, c, b, s->col);
         row = b;
@@ -565,6 +542,7 @@ static void floor_col(pt_scan *s, uint8_t c, uint16_t y)
     }
     r->bot[c] = row;
     s->ext = row < s->ext ? row : s->ext;
+    s->room = s->room || row > t;
 }
 
 static void floor_fast_col(pt_scan *s, uint8_t c, uint16_t y)
@@ -573,35 +551,37 @@ static void floor_fast_col(pt_scan *s, uint8_t c, uint16_t y)
 }
 
 // The line forming the child's bottom, over [xa, xb) (floor_col). Writes
-// the child's bottom rows and closes columns in op; the child's bottom's
-// extent, its highest row over the columns left open, is the result. The
-// columns the screen's pre-clip cut off come first, as for clip_plain:
-// against the screen's edge, off the bottom they lend the junk row and stay
-// open, and off the top they close the child, on row 0. On the fast path
-// the extent is the line's ends'.
+// the child's bottom rows; the child's bottom's extent, its highest row, is
+// the result, and *room whether it has room in any column. The columns the
+// screen's pre-clip cut off come first, as for clip_plain: against the
+// screen's edge, off the bottom they lend the junk row, and off the top the
+// child's bottom there is row 0, its top. On the fast path the extent is
+// the line's ends', and every column has room.
 static uint8_t clip_floor(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax,
-                          uint8_t bmin, pt_pattern cbfb, pt_open *op)
+                          uint8_t bmin, bool *room)
 {
     pt_pattern col = {.e = L->ce, .o = L->co};
-    pt_scan s = {.r = r, .L = L, .col = col, .shut = pt_pattern_xor(col, cbfb), .tz = tmax == 0,
-                 .bz = bmin == PT_SCREEN_HEIGHT, .op = op, .ext = PT_SCREEN_HEIGHT,
-                 .v = {.x0 = 0xFF}, .h = {.x0 = 0xFF}};
+    pt_scan s = {.r = r, .L = L, .col = col, .tz = tmax == 0, .bz = bmin == PT_SCREEN_HEIGHT,
+                 .ext = PT_SCREEN_HEIGHT, .v = {.x0 = 0xFF}, .h = {.x0 = 0xFF}};
     if (L->below ? s.bz : s.tz) {
         uint8_t l, rr;
         on_screen(L, xa, xb, &l, &rr);
         if (L->below) {
             memset(&r->bot[xa], PT_SCREEN_HEIGHT, (size_t)(l - xa));
             memset(&r->bot[rr], PT_SCREEN_HEIGHT, (size_t)(xb - rr));
+            s.room = l > xa || rr < xb;
         } else {
-            flat_top(r, xa, l, s.shut);
-            flat_top(r, rr, xb, s.shut);
-            for (uint8_t c = xa; c < l; c++)
-                close_col(r, op, c);
-            for (uint8_t c = rr; c < xb; c++)
-                close_col(r, op, c);
+            flat_top(r, xa, l, col);
+            flat_top(r, rr, xb, col);
+            memset(&r->bot[xa], 0, (size_t)(l - xa));
+            memset(&r->bot[rr], 0, (size_t)(xb - rr));
+            if (l > xa || rr < xb)
+                s.ext = 0;
         }
-        if (l == rr)
+        if (l == rr) {
+            *room = s.room;
             return s.ext;
+        }
         xa = l;
         xb = rr;
     }
@@ -609,45 +589,42 @@ static uint8_t clip_floor(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb
     if (fast_inside(L, xa, xb, tmax, bmin, &y)) {
         scan(&s, xa, xb, floor_fast_col);
         plot_run(r, L, xa, xb, y);
+        *room = true;
         uint8_t lo = row_of(y) < L->rl ? row_of(y) : L->rl;
         return lo < s.ext ? lo : s.ext;
     }
     scan(&s, xa, xb, floor_col);
     run_end(r, L, &s.v, xb);
     hrun_end(r, &s.h, xb);
+    *room = s.room;
     return s.ext;
 }
 
-// The child's top, after the floor line: it lends the parent's top where
-// it's on or above that, closes the child where it's on or below the
-// child's bottom, and is the top between, the child's top row written
-// either way. Where the floor line closed the child, this line is above the
-// top as well, and merges into it with nothing worked out.
+// The child's top, after the floor line: the line, merged into the parent's
+// top where it's on or above that, and into the child's bottom where it's on
+// or below that, so the child has no room there (as for floor_col). Either
+// way the child's top row is written.
 static void ceil_col(pt_scan *s, uint8_t c, uint16_t y)
 {
     pt_render *r = s->r;
-    uint8_t t = top_at(s, c);
-    if (!is_open(r, s->op, c)) {
-        run_end(r, s->L, &s->v, c);
-        hrun_add(r, &s->h, c, t, s->col);
-        return;
-    }
     uint8_t row = row_of(y);
+    uint8_t t = top_at(s, c);
+    uint8_t b = bot_at(s, c);
     if (row <= t) {
         run_end(r, s->L, &s->v, c);
         hrun_add(r, &s->h, c, t, s->col);
         row = t;
-    } else if (row >= bot_at(s, c)) {
+    } else if (row >= b) {
         run_end(r, s->L, &s->v, c);
-        hrun_add(r, &s->h, c, bot_at(s, c), s->shut);
-        close_col(r, s->op, c);
-        return;
+        hrun_add(r, &s->h, c, b, s->col);
+        row = b;
     } else {
         hrun_end(r, &s->h, c);
         run_add(&s->v, c, y);
     }
     r->top[c] = row;
     s->ext = row > s->ext ? row : s->ext;
+    s->room = s->room || row < b;
 }
 
 static void ceil_fast_col(pt_scan *s, uint8_t c, uint16_t y)
@@ -657,18 +634,17 @@ static void ceil_fast_col(pt_scan *s, uint8_t c, uint16_t y)
 
 // The line forming the child's top, over [xa, xb) (ceil_col), against the
 // parent's top (tmax its extent) and the child's bottom (cbmin). Writes the
-// child's top rows and closes columns in op; the child's top's extent, its
-// lowest row over the columns left open, is the result. The columns the
-// screen's pre-clip cut off the top come first, as for clip_plain: against
-// the screen's top, open or closed, they merge into row 0, the child's top
-// there. The fast path wants no column closed yet.
+// child's top rows; the child's top's extent, its lowest row, is the result,
+// and *room whether the child has room in any column, its bottom below its
+// top. The columns the screen's pre-clip cut off the top come first, as for
+// clip_plain: against the screen's top they merge into row 0, the child's
+// top there. The fast path is inside the child's bottom all along: room.
 static uint8_t clip_ceil(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax,
-                         uint8_t cbmin, pt_pattern cbfb, pt_open *op)
+                         uint8_t cbmin, bool *room)
 {
     pt_pattern col = {.e = L->ce, .o = L->co};
-    pt_scan s = {.r = r, .L = L, .col = col, .shut = pt_pattern_xor(col, cbfb), .tz = tmax == 0,
-                 .bz = cbmin == PT_SCREEN_HEIGHT, .op = op, .ext = 0,
-                 .v = {.x0 = 0xFF}, .h = {.x0 = 0xFF}};
+    pt_scan s = {.r = r, .L = L, .col = col, .tz = tmax == 0, .bz = cbmin == PT_SCREEN_HEIGHT,
+                 .ext = 0, .v = {.x0 = 0xFF}, .h = {.x0 = 0xFF}};
     if (!L->below && s.tz) {
         uint8_t l, rr;
         on_screen(L, xa, xb, &l, &rr);
@@ -676,21 +652,29 @@ static uint8_t clip_ceil(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb,
         flat_top(r, rr, xb, col);
         memset(&r->top[xa], 0, (size_t)(l - xa));
         memset(&r->top[rr], 0, (size_t)(xb - rr));
-        if (l == rr)
+        for (uint8_t c = xa; c < l; c++)
+            s.room = s.room || bot_at(&s, c) > 0;
+        for (uint8_t c = rr; c < xb; c++)
+            s.room = s.room || bot_at(&s, c) > 0;
+        if (l == rr) {
+            *room = s.room;
             return s.ext;
+        }
         xa = l;
         xb = rr;
     }
     uint16_t y;
-    if (op->all && fast_inside(L, xa, xb, tmax, cbmin, &y)) {
+    if (fast_inside(L, xa, xb, tmax, cbmin, &y)) {
         scan(&s, xa, xb, ceil_fast_col);
         plot_run(r, L, xa, xb, y);
+        *room = true;
         uint8_t hi = row_of(y) > L->rl ? row_of(y) : L->rl;
         return hi > s.ext ? hi : s.ext;
     }
     scan(&s, xa, xb, ceil_col);
     run_end(r, L, &s.v, xb);
     hrun_end(r, &s.h, xb);
+    *room = s.room;
     return s.ext;
 }
 
@@ -704,31 +688,6 @@ static void close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, 
         return;
     for (uint8_t c = l; c < rr; c++)
         toggle(r, c, r->bot[c], cbfb);
-}
-
-// The child: the first run of open columns, [*ol, *orr), empty when none.
-// Every portal opening is convex on the screen, so there should be one run;
-// a crossing's rounding could pinch a sliver-thin opening shut in the
-// middle, and any later run is closed after the fact. With nothing closed,
-// it's the edge's whole span, with no scan.
-static void open_run(pt_render *r, const pt_open *op, pt_pattern cbfb, bool bz, uint8_t *ol,
-                     uint8_t *orr)
-{
-    if (op->all) {
-        *ol = op->xa;
-        *orr = op->xb;
-        return;
-    }
-    uint8_t c = op->xa;
-    while (c < op->xb && !r->open[c])
-        c++;
-    *ol = c;
-    while (c < op->xb && r->open[c])
-        c++;
-    *orr = c;
-    for (; c < op->xb; c++)
-        if (r->open[c])
-            close_columns(r, c, (uint8_t)(c + 1u), cbfb, bz);
 }
 
 // ---- angles and columns ----
@@ -1205,14 +1164,14 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
 
     // 4. the bound-forming lines write the child's bounds over the
     // parent's. The floor line goes first, building the child's bottom
-    // against the parent's two; it closes the child where it is above the
-    // top. The ceiling line then builds the top against the parent's top and
-    // the child's bottom; where the floor line closed the child, it merges
-    // into the top with nothing worked out. A level side has no line: the
-    // child keeps the parent's bound there, and its extent. Each line gives
-    // the child its bound's extent
+    // against the parent's two; where it's above the top, the child's bottom
+    // is its top. The ceiling line then builds the top against the parent's
+    // top and the child's bottom, and where it's below that, the child's top
+    // is its bottom. A level side has no line: the child keeps the parent's
+    // bound there, and its extent. Each line gives the child its bound's
+    // extent, and says whether it left the child any room
     pt_pattern cbfb = pt_pattern_xor(cb_ceil, cb_floor);
-    pt_open op = {.all = true, .xa = xa, .xb = xb};
+    bool room = true;    // both level: the parent's
     uint8_t cbmin = w->bmin;
     if (!level_f) {
         uint8_t k = PT_K_FLOOR;
@@ -1224,7 +1183,7 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
             col = pt_pattern_xor(cb_floor, wall);
         }
         l = edge_line(r, &el, k, h, col);
-        cbmin = clip_floor(r, &l, xa, xb, w->tmax, w->bmin, cbfb, &op);
+        cbmin = clip_floor(r, &l, xa, xb, w->tmax, w->bmin, &room);
     }
     uint8_t ctmax = w->tmax;
     if (!level_c) {
@@ -1237,24 +1196,22 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
             col = pt_pattern_xor(wall, cb_ceil);
         }
         l = edge_line(r, &el, k, h, col);
-        ctmax = clip_ceil(r, &l, xa, xb, w->tmax, cbmin, cbfb, &op);
+        ctmax = clip_ceil(r, &l, xa, xb, w->tmax, cbmin, &room);
     }
     if (el.keep && vs->lines[0].x0 == PT_KEPT_NONE)
         vs->lines[0].x0 = 0;    // no line at the cell's ceiling: still kept
 
-    // 5. the child: the run of columns the two lines left open. A cell
-    // already walked over them (the eye on a vertex) isn't entered again,
-    // and its run is closed instead
-    bool bz = cbmin == PT_SCREEN_HEIGHT;
-    uint8_t ol, orr;
-    open_run(r, &op, cbfb, bz, &ol, &orr);
-    if (ol >= orr)
-        return false;
-    if (r->visits[ci].xr > ol) {
-        close_columns(r, ol, orr, cbfb, bz);
+    // 5. the child, over the edge's whole span: where it has no room, its
+    // toggles all land on its bottom row, which is its top. With no room
+    // anywhere it isn't walked at all, and its stack goes in telescoped to
+    // its ceiling ^ floor on the bottom rows, as a walk's toggles would. A
+    // cell already walked over these columns (the eye on a vertex) isn't
+    // entered again either
+    if (!room || r->visits[ci].xr > xa) {
+        close_columns(r, xa, xb, cbfb, cbmin == PT_SCREEN_HEIGHT);
         return false;
     }
-    return enter(r, ci, pt_side_twin(sd), w, ol, orr, ctmax, cbmin, cw);
+    return enter(r, ci, pt_side_twin(sd), w, xa, xb, ctmax, cbmin, cw);
 }
 
 // ---- the walk ----

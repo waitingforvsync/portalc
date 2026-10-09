@@ -126,8 +126,6 @@ typedef struct pt_render {
     // never needing the portal's there again
     uint8_t top[PT_SCREEN_WIDTH];
     uint8_t bot[PT_SCREEN_WIDTH];
-    uint8_t open[PT_SCREEN_WIDTH];    // an edge's scratch: the child's open columns,
-                                      // kept only once one closes (pt_open)
 
     pt_visit visits[PT_MAX_VISITS];
     uint8_t num_visits;

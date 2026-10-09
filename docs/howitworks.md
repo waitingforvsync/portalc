@@ -793,8 +793,16 @@ It's quicker than it sounds, because most lines never look at a column:
   visible stretches for the line plotters and hidden ones, which sit on one
   bound row in one colour, for the flat plotter.
 
-A bound line that closes columns leaves the child its first open run. A
-second run (a sliver pinched shut by rounding) is closed after the fact.
+A bound line with no room for the child in a column (the floor line on or
+above the top, or the ceiling line on or below the child's bottom) merges
+into the bound like any other, and the child's top and bottom there are
+the same row. Nothing else happens. The child is walked over the edge's
+whole span, and where it has no room every toggle its walk makes lands on
+that one row. Those toggles telescope: from the child's ceiling to its
+floor, they add up to its ceiling ^ floor, the change a column through it
+would make anyway. Only a child with no room anywhere isn't walked: its
+stack goes in as that ceiling ^ floor on each column's bottom row, as the
+walk would have left it, and saves a whole walk for nothing.
 
 ## Sprites' place
 

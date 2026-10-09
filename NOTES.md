@@ -647,9 +647,12 @@ The rest carries over:
 - **The ceiling strip.** The camera cell's ceiling colour along row 0, at
   the start: the root's top bound.
 - **The root's bottom.** Row 64, in the junk row, as now.
-- **Closing.** A line that closes the child toggles `colour ^ cbfb` at the
-  clamped row. The child is only walked over its open run, so nothing
-  counts twice.
+- **No room.** Where a bound line leaves the child no room, it merges into
+  the bound like any other, and the child's top and bottom are that row.
+  Walked there, the child's toggles all land on it and telescope to its
+  ceiling ^ floor, `cbfb`. (At first such a line "closed" the child: it
+  toggled `colour ^ cbfb` itself, and the child was walked over its open
+  run only. See Room, below.)
 
 ### Overdraw, measured
 
@@ -916,18 +919,17 @@ bound counts as hidden:
 | line | on or above the top | between | on or below the bottom |
 |---|---|---|---|
 | plain | toggle at the top | plot | toggle at the bottom |
-| floor (B's bottom) | close B: toggle at the top, `colour ^ cbfb` | plot; it's B's bottom | lend A's bottom: toggle there |
-| ceiling (B's top) | lend A's top: toggle there | plot; it's B's top | close B: toggle at B's bottom, `colour ^ cbfb` |
+| floor (B's bottom) | toggle at A's top; B's bottom is that, no room | plot; it's B's bottom | lend A's bottom: toggle there |
+| ceiling (B's top) | lend A's top: toggle there | plot; it's B's top | toggle at B's bottom; B's top is that, no room |
 
 A toggle at a bound's row is the line's colour change pushed onto the
 bound. The fill can't tell it from the line plotted there. `cbfb` is B's
-ceiling ^ floor: where B is closed, its whole stack telescopes to that.
-Where the floor line closed B, the ceiling line is above the top as well,
-and merges into it with nothing worked out.
+ceiling ^ floor: where B has no room, its whole stack telescopes to that,
+all on the one row.
 
-Later runs of open columns (a sliver pinched shut by rounding) are closed
-after the fact, a `cbfb` toggle at B's bottom a column. So is a child past
-the depth cap.
+A child with no room anywhere isn't walked: a `cbfb` toggle at its bottom
+row a column stands in for the walk. So does it for a child past the depth
+cap.
 
 ### The ways through
 
@@ -976,10 +978,22 @@ written, and nothing resets the arrays each frame (that was 256 stores).
 A bound line that lends its parent's bound writes it out, since the child
 may keep the rest of its bound in the array.
 
-**Open columns.** A child's open columns are all of them until a bound
-line closes one, and only then does `open[]` get filled and kept. Every
-column open is the usual case, and needs no `open[]`, and no scan for the
-child's run.
+**Room.** There used to be `open[]` here, a byte a column for the child's
+open columns, filled once a bound line closed one, and the child was
+walked over its first open run. It's gone. Closed columns needed nothing
+special: let the toggles coincide (No room, above). All that's left to
+know is whether the child has room in any column at all, a flag the bound
+lines set as they scan, as a child with none isn't worth a walk.
+
+On the stress map (map 0 never closes a column), 0.6 edges a frame leave
+the child no room anywhere, 87% of those that close any. Walking them
+anyway gives the same frames, byte for byte, which is the telescoping
+checked, but costs 1.2 more walks, 3.6 more lines and 17 more columns
+scanned a frame, about 2k cycles. The flag is a few cycles a column.
+
+The second run of a pinched opening (43 frames of 20,688) is now walked
+rather than closed flat, and comes out better: 425 fewer wrong pixels
+against the reference, worse by one pixel in 2 frames.
 
 ### The scan, by example
 

@@ -743,28 +743,58 @@ static void open_run(pt_render *r, const pt_open *op, pt_pattern cbfb, bool bz, 
 // is the 256 from tl: left of it is column 0, right of it 128, and in it
 // the view angle is the byte t + lo8.
 
-// Vertex v's place in visit vs's window.
-static uint16_t win_t(const pt_render *r, const pt_visit *vs, uint8_t v)
+// A window's made each time a walk enters the cell, centred on the portal
+// it comes in by. Any portal into a cell has its middle within the cell's
+// span, so any such window holds the cell in one piece, and gives each
+// vertex the same column: a later visit, through another portal, sees the
+// sides just as the first one did.
+
+// A visit's walk: all it needs while it's in progress, and nothing a later
+// visit does. It's made each time a walk enters the cell, and the walk's
+// recursion keeps it while a child's walk runs (on the 6502, a slot per
+// depth). The visit record keeps only what's left for a later visit.
+typedef struct pt_walk {
+    uint8_t vi;           // the visit
+    uint8_t x;            // where the next edge's span starts: the end of the
+                          // last one (the portal's left column to begin with)
+    uint8_t tmax, bmin;   // the bounds' extents over the portal: at least the
+                          // lowest top row, at most the highest bottom row.
+                          // 0 and 64 say the bound is the screen's edge all
+                          // along, and its rows aren't kept in top[] or bot[]
+    uint16_t lo;          // the cell's window: its start, a world angle (10
+                          // bits). A vertex's place in it is t = (angle - lo) & 1023
+    uint16_t tl;          // the view's left edge's place in the window, 0..768;
+                          // its right edge is 256 on
+    uint8_t lo8;          // the low byte of the window start's view angle: an
+                          // in-view t's view angle is the byte t + lo8
+    uint16_t t0, t1;      // the current side's ends' places (t1 a turn on, up
+                          // to 1,535, for the eye's own cell's last side)
+    uint8_t c0, c1;       // and their columns
+    pt_height hc, hf;     // the cell's ceiling and floor, as its lines see them
+} pt_walk;
+
+// Vertex v's place in the walk's window.
+static uint16_t win_t(const pt_render *r, const pt_walk *w, uint8_t v)
 {
     uint16_t a = pt_vcache_vert(r->vc, r->map, v)->angle;
-    return (uint16_t)((uint16_t)(a - vs->lo) & 1023u);
+    return (uint16_t)((uint16_t)(a - w->lo) & 1023u);
 }
 
 // The view angle of an in-view place: a byte.
-static int8_t view8(const pt_visit *vs, uint16_t t)
+static int8_t view8(const pt_walk *w, uint16_t t)
 {
-    return (int8_t)(uint8_t)((uint8_t)t + vs->lo8);
+    return (int8_t)(uint8_t)((uint8_t)t + w->lo8);
 }
 
 // The column of a place: in view, where its step's middle projects; left
 // of the view, 0; right of it, 128.
-static uint8_t win_col(const pt_visit *vs, uint16_t t)
+static uint8_t win_col(const pt_walk *w, uint16_t t)
 {
-    if (t < vs->tl)
+    if (t < w->tl)
         return 0;
-    if (t >= (uint16_t)(vs->tl + 256u))
+    if (t >= (uint16_t)(w->tl + 256u))
         return PT_SCREEN_WIDTH;
-    return pt_view_col(view8(vs, t));
+    return pt_view_col(view8(w, t));
 }
 
 // The current side's end. A side facing the eye turns clockwise by up to
@@ -774,34 +804,38 @@ static uint8_t win_col(const pt_visit *vs, uint16_t t)
 // start, a turn up. One facing away (a cell seen through a portal has a
 // chain of them, the portal among them) turns back, its end at or left of
 // its start in the window, and spans nothing.
-static void side_end(const pt_render *r, pt_visit *vs)
+static void side_end(const pt_render *r, pt_walk *w)
 {
+    const pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
-    uint16_t t = win_t(r, vs, pt_map_side_v1(r->map, c, vs->k));
-    uint16_t d = (uint16_t)((uint16_t)(t - vs->t0) & 1023u);
-    vs->t1 = d <= 512 ? pt_u16((int32_t)vs->t0 + d) : t;
-    vs->c1 = win_col(vs, vs->t1);
+    uint16_t t = win_t(r, w, pt_map_side_v1(r->map, c, vs->k));
+    uint16_t d = (uint16_t)((uint16_t)(t - w->t0) & 1023u);
+    w->t1 = d <= 512 ? pt_u16((int32_t)w->t0 + d) : t;
+    w->c1 = win_col(w, w->t1);
 }
 
-// Begin on side k: its start's place and column, and its end's.
-static void side_start(const pt_render *r, pt_visit *vs)
+// Begin on the record's side: its start's place and column, and its end's.
+static void side_start(const pt_render *r, pt_walk *w)
 {
+    const pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
-    vs->t0 = win_t(r, vs, pt_map_side(r->map, c, vs->k)->v);
-    vs->c0 = win_col(vs, vs->t0);
-    side_end(r, vs);
+    w->t0 = win_t(r, w, pt_map_side(r->map, c, vs->k)->v);
+    w->c0 = win_col(w, w->t0);
+    side_end(r, w);
 }
 
 // On to the next side clockwise: its start is this one's end, so a side
-// costs one vertex's place and column.
-static void side_next(const pt_render *r, pt_visit *vs)
+// costs one vertex's place and column. The kept lines were the last side's.
+static void side_next(pt_render *r, pt_walk *w)
 {
+    pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
     vs->k = pt_map_ring_next(c, vs->k);
-    uint16_t t = (uint16_t)(vs->t1 & 1023u);
-    vs->c0 = t == vs->t1 ? vs->c1 : win_col(vs, t);
-    vs->t0 = t;
-    side_end(r, vs);
+    vs->lines[0].x0 = PT_KEPT_NONE;
+    uint16_t t = (uint16_t)(w->t1 & 1023u);
+    w->c0 = t == w->t1 ? w->c1 : win_col(w, t);
+    w->t0 = t;
+    side_end(r, w);
 }
 
 // ---- sprites ----
@@ -822,17 +856,17 @@ static void side_next(const pt_render *r, pt_visit *vs)
 //     left column is half the plotted width (spritescale's, by the
 //     accumulator) less.
 //   - Its bottom is the floor's row at that depth, as the floor's lines have
-//     it (make_line's offset from the middle, from the visit's floor height,
+//     it (make_line's offset from the middle, from the cell's floor height,
 //     in whole rows past 255), and the pair above is its first.
 // The instance goes into the draw order by depth, far first. Sprites stand
 // inside their cells, so where two overlap on the screen one's cell is seen
 // through the other's, and the nearer is the shallower. Its clip rows take
 // two bytes a column from the pool, and only the tops are set: a top of 0
 // hides a column whatever its bottom.
-static uint8_t inst_new(pt_render *r, const pt_visit *vs)
+static uint8_t inst_new(pt_render *r, uint8_t cell, pt_height hf)
 {
     const pt_map *m = r->map;
-    const pt_cell *c = &m->cells[vs->cell];
+    const pt_cell *c = &m->cells[cell];
     if (c->sprite == 0 || !r->sprites)
         return 0;
     const pt_sprite *sp = &m->sprites[c->sprite];
@@ -866,14 +900,14 @@ static uint8_t inst_new(pt_render *r, const pt_visit *vs)
 
     // the bottom pair
     int32_t o = 0;
-    if (vs->hf.m != 0) {
-        int32_t lo = (int32_t)vs->hf.l - ld;
+    if (hf.m != 0) {
+        int32_t lo = (int32_t)hf.l - ld;
         if (lo >= 16 * 256)
             o = (int32_t)pt_exp2(pt_u16(lo - 8 * 256)) << 8;
         else if (lo >= 0)
             o = pt_exp2(pt_u16(lo));
     }
-    int32_t y = PT_EDGE_OFF + 128 + (vs->hf.below ? o : -o);
+    int32_t y = PT_EDGE_OFF + 128 + (hf.below ? o : -o);
     int16_t sy = pt_i16(PT_SCREEN_HEIGHT - (y >> 8));
 
     uint16_t ph = pt_u16((int32_t)((128u + (uint32_t)h * scale) >> 8));
@@ -958,57 +992,55 @@ static void inst_hide(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr)
 
 // ---- visits ----
 
-// The cell's visit record, made on first need, with its heights' logs.
+// The cell's visit record, made on first need.
 static uint8_t visit_of(pt_render *r, uint8_t cell)
 {
     uint8_t vi = r->cell_visit[cell];
     if (vi == 0) {
         RC_PANIC(r->num_visits < PT_MAX_VISITS);
         vi = r->num_visits++;
-        const pt_cell *c = &r->map->cells[cell];
-        r->visits[vi] = (pt_visit) {.cell = cell,
-                                    .hc = height_of(r, c->ceil_z),
-                                    .hf = height_of(r, c->floor_z)};
+        r->visits[vi] = (pt_visit) {.cell = cell, .lines[0].x0 = PT_KEPT_NONE};
         r->cell_visit[cell] = vi;
     }
     return vi;
 }
 
-// Enter visit vi over [xl, xr), its bounds already written: the cursor goes
-// to the first edge whose end is strictly right of xl. A first walk looks
-// from the edge after the twin (the side the walk came in by, at ring
-// position twin), in a window centred on the middle of the portal (from's
-// current side); a later one resumes from the edge its last walk ended on
-// - every earlier edge ends left of that walk's xr, which is at or left of
-// xl. 0 for a degenerate ring (not entered).
-static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_visit *from, uint8_t xl,
-                     uint8_t xr, uint8_t tmax, uint8_t bmin)
+// Enter visit vi over [xl, xr), its bounds already written, from the walk
+// whose current side is the portal (from): the child's walk, *cw, in a
+// window centred on the portal's middle, with the cell's heights. A first
+// walk looks from the edge after the twin (the side the walk came in by, at
+// ring position twin); a later one resumes from the edge its last walk
+// stopped on - every earlier edge ends left of that walk's xr, which is at
+// or left of xl. Either way the cursor then goes to the first edge whose end
+// is strictly right of xl. False for a degenerate ring (not entered).
+static bool enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_walk *from, uint8_t xl,
+                  uint8_t xr, uint8_t tmax, uint8_t bmin, pt_walk *cw)
 {
     pt_visit *vs = &r->visits[vi];
     const pt_cell *c = &r->map->cells[vs->cell];
-    if (vs->xr == 0) {
-        uint16_t mid = (uint16_t)(pt_u16((int32_t)from->t0 + from->t1) >> 1);
-        vs->lo = (uint16_t)((uint16_t)(from->lo + mid - 512u) & 1023u);
-        vs->tl = pt_u16((int32_t)from->tl - mid + 512);
-        RC_ASSERT(vs->tl <= 768);
-        vs->lo8 = (uint8_t)(from->lo8 + (uint8_t)mid);
+    uint16_t mid = (uint16_t)(pt_u16((int32_t)from->t0 + from->t1) >> 1);
+    *cw = (pt_walk) {.vi = vi, .x = xl, .tmax = tmax, .bmin = bmin,
+                     .lo = (uint16_t)((uint16_t)(from->lo + mid - 512u) & 1023u),
+                     .tl = pt_u16((int32_t)from->tl - mid + 512),
+                     .lo8 = (uint8_t)(from->lo8 + (uint8_t)mid),
+                     .hc = height_of(r, c->ceil_z), .hf = height_of(r, c->floor_z)};
+    RC_ASSERT(cw->tl <= 768);
+    bool first = vs->xr == 0;
+    if (first)
         vs->k = pt_map_ring_next(c, twin);
-        side_start(r, vs);
-        vs->inst = inst_new(r, vs);
-    }
+    side_start(r, cw);
+    if (first)
+        vs->inst = inst_new(r, vs->cell, cw->hf);
     uint8_t guard = c->num;
-    while (vs->c1 <= xl) {
+    while (cw->c1 <= xl) {
         if (guard-- == 0)
-            return 0;    // degenerate ring: skip the child rather than spin
-        side_next(r, vs);
+            return false;    // degenerate ring: skip the child rather than spin
+        side_next(r, cw);
     }
-    vs->x = xl;
     vs->xr = xr;
-    vs->tmax = tmax;
-    vs->bmin = bmin;
     if (vs->inst != 0)
         inst_clip(r, vs->inst, xl, xr, tmax, bmin);
-    return vi;
+    return true;
 }
 
 // ---- one edge of the walk ----
@@ -1022,27 +1054,39 @@ static uint8_t enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_visit *fro
 // over |sin| of the edge ray's angle to the line, is the distance along the
 // ray, and cos 45 degrees (-128 in the log) makes it a depth. All logs: log
 // sine lookups and some adds. The columns' log is the edge's too.
+//
+// Each line covers the edge's whole span in the view, whatever the portal's,
+// so a later visit that resumes on the side can use it as it is: the side
+// a walk stops on keeps its lines in the visit record, if its end is right
+// of the portal's (or no later visit could resume on it). Then that visit
+// works out no ends and makes no lines at all, only rows partway along them.
 typedef struct pt_edgelines {
-    const pt_visit *vs;    // the visit: its window, and the side's ends' places
+    const pt_walk *w;      // the walk: its window, and the side's ends' places
+    pt_visit *vs;          // its record, and the lines it keeps
     const pt_side *sd;
     uint8_t v1;            // the end's vertex (the start's is the side's)
     bool have;
+    bool kept;             // the record's lines are the side's, to use
+    bool keep;             // or keep the lines made, for a later visit
     pt_end e0, e1;
     int16_t ldc;           // 256 log2 of the columns between them
 } pt_edgelines;
 
+// The kept lines' slots, by height: an edge makes at most one line at each
+enum { PT_K_CEIL, PT_K_CEIL_ADJ, PT_K_FLOOR, PT_K_FLOOR_ADJ };
+
 static void edge_ends(const pt_render *r, pt_edgelines *el)
 {
     const pt_map *m = r->map;
-    const pt_visit *vs = el->vs;
+    const pt_walk *w = el->w;
     const pt_polar *p0 = pt_vcache_vert(r->vc, m, el->sd->v);
     const pt_polar *p1 = pt_vcache_vert(r->vc, m, el->v1);
-    bool in0 = vs->t0 >= vs->tl;
-    bool in1 = vs->t1 < (uint16_t)(vs->tl + 256u);
+    bool in0 = w->t0 >= w->tl;
+    bool in1 = w->t1 < (uint16_t)(w->tl + 256u);
     if (in0)
-        el->e0 = (pt_end) {.sx = vs->c0, .ld = pt_i16((int32_t)p0->lr - pt_lsec(view8(vs, vs->t0)))};
+        el->e0 = (pt_end) {.sx = w->c0, .ld = pt_i16((int32_t)p0->lr - pt_lsec(view8(w, w->t0)))};
     if (in1)
-        el->e1 = (pt_end) {.sx = vs->c1, .ld = pt_i16((int32_t)p1->lr - pt_lsec(view8(vs, vs->t1)))};
+        el->e1 = (pt_end) {.sx = w->c1, .ld = pt_i16((int32_t)p1->lr - pt_lsec(view8(w, w->t1)))};
     if (!in0 || !in1) {
         // the edge's direction, its quadrant stored with the side
         uint16_t w = pt_map_side_angle(m, el->sd);
@@ -1061,34 +1105,45 @@ static void edge_ends(const pt_render *r, pt_edgelines *el)
     el->have = true;
 }
 
-static pt_line edge_line(const pt_render *r, pt_edgelines *el, pt_height h, pt_pattern col)
+// The side's line at height h (in slot k of its kept lines), in colour col:
+// the one kept, or made from the ends, and kept if the side's to be
+static pt_line edge_line(const pt_render *r, pt_edgelines *el, uint8_t k, pt_height h,
+                         pt_pattern col)
 {
+    pt_kept *kl = &el->vs->lines[k];
+    if (el->kept)
+        return (pt_line) {.x0 = kl->x0, .x1 = kl->x1, .y = kl->y, .g = kl->g, .rl = kl->rl,
+                          .below = h.below, .ce = col.e, .co = col.o};
     if (!el->have)
         edge_ends(r, el);
+    pt_line L;
     if (el->e0.sx >= el->e1.sx)    // edge-on
-        return (pt_line) {.x0 = el->e0.sx, .x1 = el->e0.sx,
-                          .rl = h.below ? PT_SCREEN_HEIGHT : 0, .below = h.below,
-                          .ce = col.e, .co = col.o};
-    return make_line(&el->e0, &el->e1, el->ldc, h, col);
+        L = (pt_line) {.x0 = el->e0.sx, .x1 = el->e0.sx, .rl = h.below ? PT_SCREEN_HEIGHT : 0,
+                       .below = h.below, .ce = col.e, .co = col.o};
+    else
+        L = make_line(&el->e0, &el->e1, el->ldc, h, col);
+    if (el->keep)
+        *kl = (pt_kept) {.x0 = L.x0, .x1 = L.x1, .y = L.y, .g = L.g, .rl = L.rl};
+    return L;
 }
 
-// Process the visit's current edge: its lines, and the child through it, if
-// any (its visit, entered; 0 for none).
-static uint8_t process_edge(pt_render *r, uint8_t vi)
+// Process the walk's current edge: its lines, and the child through it, if
+// any (entered, its walk in *cw: true; false for none).
+static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
 {
     const pt_map *m = r->map;
-    pt_visit *vs = &r->visits[vi];
+    pt_visit *vs = &r->visits[w->vi];
     const pt_cell *ca = &m->cells[vs->cell];
     const pt_side *sd = pt_map_side(m, ca, vs->k);
 
     // 1. the column span: from where the visit's last span ended (the
     // portal's left column for its first edge), or the edge's start if
     // that's further right, to its end, within the portal
-    uint8_t xa = vs->c0 > vs->x ? vs->c0 : vs->x;
-    uint8_t xb = vs->c1 < vs->xr ? vs->c1 : vs->xr;
+    uint8_t xa = w->c0 > w->x ? w->c0 : w->x;
+    uint8_t xb = w->c1 < vs->xr ? w->c1 : vs->xr;
     if (xa >= xb)
-        return 0;
-    vs->x = xb;
+        return false;
+    w->x = xb;
 
     // 2. a soft edge: no lines, and the child keeps both bounds. A cell
     // already walked over these columns (the eye on a vertex) isn't entered
@@ -1097,11 +1152,13 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     if (e->colour == PT_EDGE_SOFT) {
         uint8_t ci = visit_of(r, sd->adj);
         if (r->visits[ci].xr > xa)
-            return 0;
-        return enter(r, ci, pt_side_twin(sd), vs, xa, xb, vs->tmax, vs->bmin);
+            return false;
+        return enter(r, ci, pt_side_twin(sd), w, xa, xb, w->tmax, w->bmin, cw);
     }
 
-    pt_edgelines el = {.vs = vs, .sd = sd, .v1 = pt_map_side_v1(m, ca, vs->k)};
+    bool kept = vs->lines[0].x0 != PT_KEPT_NONE;
+    pt_edgelines el = {.w = w, .vs = vs, .sd = sd, .v1 = pt_map_side_v1(m, ca, vs->k),
+                       .kept = kept, .keep = !kept && w->c1 > vs->xr};
     pt_pattern wall = pt_shade(pt_u8((int32_t)e->colour - 1));
     pt_pattern ca_ceil = pt_shade(ca->ceil);
     pt_pattern ca_floor = pt_shade(ca->floor);
@@ -1109,15 +1166,14 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
 
     if (sd->adj == 0) {
         // 3. a solid wall: its ceiling line and floor line, toggles only
-        l = edge_line(r, &el, vs->hc, pt_pattern_xor(ca_ceil, wall));
-        clip_plain(r, &l, xa, xb, vs->tmax, vs->bmin);
-        l = edge_line(r, &el, vs->hf, pt_pattern_xor(wall, ca_floor));
-        clip_plain(r, &l, xa, xb, vs->tmax, vs->bmin);
-        return 0;
+        l = edge_line(r, &el, PT_K_CEIL, w->hc, pt_pattern_xor(ca_ceil, wall));
+        clip_plain(r, &l, xa, xb, w->tmax, w->bmin);
+        l = edge_line(r, &el, PT_K_FLOOR, w->hf, pt_pattern_xor(wall, ca_floor));
+        clip_plain(r, &l, xa, xb, w->tmax, w->bmin);
+        return false;    // (a wall always has a ceiling line: kept, if it's to be)
     }
 
     uint8_t ci = visit_of(r, sd->adj);
-    const pt_visit *vb = &r->visits[ci];
     const pt_cell *cb = &m->cells[sd->adj];
     pt_pattern cb_ceil = pt_shade(cb->ceil);
     pt_pattern cb_floor = pt_shade(cb->floor);
@@ -1133,18 +1189,18 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     // and the child just keeps the parent's bound on that side. The line is
     // then only a change of colour, and isn't even made if the shades match
     if (cb->ceil_z > ca->ceil_z) {
-        l = edge_line(r, &el, vs->hc, pt_pattern_xor(ca_ceil, wall));
-        clip_plain(r, &l, xa, xb, vs->tmax, vs->bmin);
+        l = edge_line(r, &el, PT_K_CEIL, w->hc, pt_pattern_xor(ca_ceil, wall));
+        clip_plain(r, &l, xa, xb, w->tmax, w->bmin);
     } else if (level_c && (cc.e | cc.o) != 0) {
-        l = edge_line(r, &el, vs->hc, cc);
-        clip_plain(r, &l, xa, xb, vs->tmax, vs->bmin);
+        l = edge_line(r, &el, PT_K_CEIL, w->hc, cc);
+        clip_plain(r, &l, xa, xb, w->tmax, w->bmin);
     }
     if (cb->floor_z < ca->floor_z) {
-        l = edge_line(r, &el, vs->hf, pt_pattern_xor(wall, ca_floor));
-        clip_plain(r, &l, xa, xb, vs->tmax, vs->bmin);
+        l = edge_line(r, &el, PT_K_FLOOR, w->hf, pt_pattern_xor(wall, ca_floor));
+        clip_plain(r, &l, xa, xb, w->tmax, w->bmin);
     } else if (level_f && (ff.e | ff.o) != 0) {
-        l = edge_line(r, &el, vs->hf, ff);
-        clip_plain(r, &l, xa, xb, vs->tmax, vs->bmin);
+        l = edge_line(r, &el, PT_K_FLOOR, w->hf, ff);
+        clip_plain(r, &l, xa, xb, w->tmax, w->bmin);
     }
 
     // 4. the bound-forming lines write the child's bounds over the
@@ -1157,28 +1213,34 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     // the child its bound's extent
     pt_pattern cbfb = pt_pattern_xor(cb_ceil, cb_floor);
     pt_open op = {.all = true, .xa = xa, .xb = xb};
-    uint8_t cbmin = vs->bmin;
+    uint8_t cbmin = w->bmin;
     if (!level_f) {
-        pt_height h = vs->hf;
+        uint8_t k = PT_K_FLOOR;
+        pt_height h = w->hf;
         pt_pattern col = ff;
         if (cb->floor_z < ca->floor_z) {
-            h = vb->hf;
+            k = PT_K_FLOOR_ADJ;
+            h = height_of(r, cb->floor_z);
             col = pt_pattern_xor(cb_floor, wall);
         }
-        l = edge_line(r, &el, h, col);
-        cbmin = clip_floor(r, &l, xa, xb, vs->tmax, vs->bmin, cbfb, &op);
+        l = edge_line(r, &el, k, h, col);
+        cbmin = clip_floor(r, &l, xa, xb, w->tmax, w->bmin, cbfb, &op);
     }
-    uint8_t ctmax = vs->tmax;
+    uint8_t ctmax = w->tmax;
     if (!level_c) {
-        pt_height h = vs->hc;
+        uint8_t k = PT_K_CEIL;
+        pt_height h = w->hc;
         pt_pattern col = cc;
         if (cb->ceil_z > ca->ceil_z) {
-            h = vb->hc;
+            k = PT_K_CEIL_ADJ;
+            h = height_of(r, cb->ceil_z);
             col = pt_pattern_xor(wall, cb_ceil);
         }
-        l = edge_line(r, &el, h, col);
-        ctmax = clip_ceil(r, &l, xa, xb, vs->tmax, cbmin, cbfb, &op);
+        l = edge_line(r, &el, k, h, col);
+        ctmax = clip_ceil(r, &l, xa, xb, w->tmax, cbmin, cbfb, &op);
     }
+    if (el.keep && vs->lines[0].x0 == PT_KEPT_NONE)
+        vs->lines[0].x0 = 0;    // no line at the cell's ceiling: still kept
 
     // 5. the child: the run of columns the two lines left open. A cell
     // already walked over them (the eye on a vertex) isn't entered again,
@@ -1187,34 +1249,34 @@ static uint8_t process_edge(pt_render *r, uint8_t vi)
     uint8_t ol, orr;
     open_run(r, &op, cbfb, bz, &ol, &orr);
     if (ol >= orr)
-        return 0;
+        return false;
     if (r->visits[ci].xr > ol) {
         close_columns(r, ol, orr, cbfb, bz);
-        return 0;
+        return false;
     }
-    return enter(r, ci, pt_side_twin(sd), vs, ol, orr, ctmax, cbmin);
+    return enter(r, ci, pt_side_twin(sd), w, ol, orr, ctmax, cbmin, cw);
 }
 
 // ---- the walk ----
 
-static void walk(pt_render *r, uint8_t vi, uint8_t depth);
+static void walk(pt_render *r, pt_walk *w, uint8_t depth);
 
 // Walk a child one level deeper, or, past the depth cap, close its columns
 // instead: the fix-up stands in for its whole stack, so the opening shows
 // the child's ceiling colour flat - a draw-distance cutoff rather than a
 // glitch.
-static void descend(pt_render *r, uint8_t ci, uint8_t depth)
+static void descend(pt_render *r, pt_walk *cw, uint8_t depth)
 {
     if (depth > PT_MAX_DEPTH) {
-        const pt_visit *vs = &r->visits[ci];
+        const pt_visit *vs = &r->visits[cw->vi];
         const pt_cell *c = &r->map->cells[vs->cell];
-        close_columns(r, vs->x, vs->xr, pt_pattern_xor(pt_shade(c->ceil), pt_shade(c->floor)),
-                      vs->bmin == PT_SCREEN_HEIGHT);
+        close_columns(r, cw->x, vs->xr, pt_pattern_xor(pt_shade(c->ceil), pt_shade(c->floor)),
+                      cw->bmin == PT_SCREEN_HEIGHT);
         if (vs->inst != 0)
-            inst_hide(r, vs->inst, vs->x, vs->xr);
+            inst_hide(r, vs->inst, cw->x, vs->xr);
         return;
     }
-    walk(r, ci, depth);
+    walk(r, cw, depth);
 }
 
 // Walk a visit: each edge of its cell from the one its cursor is on, until
@@ -1223,28 +1285,29 @@ static void descend(pt_render *r, uint8_t ci, uint8_t depth)
 // returns; the child through the last edge is walked in this same call (a
 // tail call: on the 6502 a JMP, no stack), so the depth grows only with
 // portals nested along a line of sight. The steps end a degenerate ring.
-static void walk(pt_render *r, uint8_t vi, uint8_t depth)
+static void walk(pt_render *r, pt_walk *w, uint8_t depth)
 {
     if (depth > r->depth_high)
         r->depth_high = depth;
     for (;;) {
-        pt_visit *vs = &r->visits[vi];
+        const pt_visit *vs = &r->visits[w->vi];
         const pt_cell *c = &r->map->cells[vs->cell];
         uint8_t steps = pt_u8((int32_t)c->num + 2);
         for (;;) {
             if (steps-- == 0)
                 return;
-            bool last = vs->c1 >= vs->xr;
-            uint8_t ci = process_edge(r, vi);
+            bool last = w->c1 >= vs->xr;
+            pt_walk cw;
+            bool child = process_edge(r, w, &cw);
             if (last) {
-                if (ci == 0)
+                if (!child)
                     return;
-                vi = ci;    // the tail call
+                *w = cw;    // the tail call
                 break;
             }
-            if (ci != 0)
-                descend(r, ci, pt_u8((int32_t)depth + 1));
-            side_next(r, vs);
+            if (child)
+                descend(r, &cw, pt_u8((int32_t)depth + 1));
+            side_next(r, w);
         }
     }
 }
@@ -1279,7 +1342,7 @@ static void unplot(pt_render *r)
 
 // ---- the frame ----
 
-// The camera's cell's visit, begun on the root portal, the whole screen: its
+// The camera's cell's walk, begun on the root portal, the whole screen: its
 // first edge is the side whose angles straddle the view's left edge (-128),
 // starting at or before it and ending after it, and its window starts
 // there, so the left edge's place is how far round that is. The angles put
@@ -1287,7 +1350,7 @@ static void unplot(pt_render *r)
 // does; should rounding leave none, the walk starts from the ring's first
 // side in the plain view window, from -512, and ends by its steps. Its
 // bounds are the screen's edges.
-static uint8_t root_visit(pt_render *r)
+static void root_walk(pt_render *r, pt_walk *w)
 {
     const pt_map *m = r->map;
     const pt_cell *c = &m->cells[r->cam_cell];
@@ -1310,18 +1373,14 @@ static uint8_t root_visit(pt_render *r)
     uint8_t vi = visit_of(r, r->cam_cell);
     pt_visit *vs = &r->visits[vi];
     vs->k = root;
-    vs->lo = lo;
-    vs->tl = tl;
-    vs->lo8 = (uint8_t)(128u - tl);    // the window start's view angle, -128 - tl
-    side_start(r, vs);
-    vs->x = 0;
     vs->xr = PT_SCREEN_WIDTH;
-    vs->tmax = 0;
-    vs->bmin = PT_SCREEN_HEIGHT;
-    vs->inst = inst_new(r, vs);
+    *w = (pt_walk) {.vi = vi, .x = 0, .tmax = 0, .bmin = PT_SCREEN_HEIGHT, .lo = lo, .tl = tl,
+                    .lo8 = (uint8_t)(128u - tl),    // the window start's view angle, -128 - tl
+                    .hc = height_of(r, c->ceil_z), .hf = height_of(r, c->floor_z)};
+    side_start(r, w);
+    vs->inst = inst_new(r, vs->cell, w->hf);
     if (vs->inst != 0)
         inst_clip(r, vs->inst, 0, PT_SCREEN_WIDTH, 0, PT_SCREEN_HEIGHT);
-    return vi;
 }
 
 static void frame(pt_render *r, uint8_t angle, uint8_t cell)
@@ -1352,7 +1411,9 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // the bottom in the junk row below: its extents say so, and top[] and
     // bot[] needn't hold them. Above row 0 is the camera cell's ceiling: the
     // fill starts each column from its colour
-    walk(r, root_visit(r), 1);
+    pt_walk w;
+    root_walk(r, &w);
+    walk(r, &w, 1);
     pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->lastp1);
     for (uint8_t k = 0; k < r->num_order; k++) {
         const pt_inst *in = &r->insts[r->order[k]];

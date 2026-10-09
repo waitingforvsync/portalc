@@ -50,36 +50,43 @@ typedef struct pt_height {
                           // (0 for m = 0, the eye's own height)
 } pt_height;
 
+// A line kept in its cell's visit record for a later visit: its columns on
+// the screen, [x0, x1), its row at x0 (u8.8, the rounding half in), its
+// gradient (sign bit + u7.8), and a row at or past its last column, for the
+// fast path. Its side of the screen and its colour come from its height and
+// its edge. 7 bytes.
+typedef struct pt_kept {
+    uint8_t x0, x1;
+    uint16_t y;
+    uint16_t g;
+    uint8_t rl;
+} pt_kept;
+
+// The most lines an edge makes: one at each of its two cells' ceilings and
+// floors, which are also the kept lines' slots
+#define PT_KEPT 4
+
 // A visited cell, made when an edge into it is first met and shared by
 // every later visit that frame. Visits of one cell run in increasing x and
-// never nest (a ray crosses a convex cell once), so the visit record holds
-// the portal being walked as well as the ring cursor: a later visit resumes
-// from the edge the previous one ended on. The portal's bounds themselves
-// are the renderer's per-column rows, over its columns. The walk recurses
-// on the index alone.
+// never nest (a ray crosses a convex cell once): a later visit resumes on the
+// side the last one stopped on, and that side's lines are the same as last
+// time, so the record keeps them. That's all it keeps: everything else a
+// walk needs it makes again on each visit (render.c's pt_walk). The portal's
+// bounds are the renderer's per-column rows, over its columns. The walk
+// recurses on the index alone.
 typedef struct pt_visit {
     uint8_t cell;         // back-reference, to clear the cell's index at frame end
-    uint8_t k;            // the current side's ring position, 0..num
-    uint8_t x;            // where the next edge's span starts: the end of the
-                          // last one (the portal's left column to begin with)
-    uint8_t xr;           // the portal's right column; 0 until first walked
-    uint8_t tmax, bmin;   // the bounds' extents over the portal: at least the
-                          // lowest top row, at most the highest bottom row.
-                          // 0 and 64 say the bound is the screen's edge all
-                          // along, and its rows aren't kept in top[] or bot[]
-    uint16_t lo;          // the cell's window, set when first walked: its
-                          // start, a world angle (10 bits). A vertex's place
-                          // in it is t = (angle - lo) & 1023
-    uint16_t tl;          // the view's left edge's place in the window, 0..768;
-                          // its right edge is 256 on
-    uint8_t lo8;          // the low byte of the window start's view angle: an
-                          // in-view t's view angle is the byte t + lo8
-    uint16_t t0, t1;      // the current side's ends' places (t1 a turn on, up
-                          // to 1,535, for the eye's own cell's last side)
-    uint8_t c0, c1;       // and their columns
-    pt_height hc, hf;     // the cell's ceiling and floor, as its lines see them
+    uint8_t k;            // the current side's ring position, 0..num: where the
+                          // last walk stopped
+    uint8_t xr;           // the right column of the portal last walked through;
+                          // 0 until first walked
     uint8_t inst;         // its sprite as seen this frame, 0 for none
+    pt_kept lines[PT_KEPT];    // side k's, by height: the cell's ceiling, the next
+                               // cell's, the cell's floor, the next cell's; none
+                               // kept when lines[0].x0 is PT_KEPT_NONE
 } pt_visit;
+
+#define PT_KEPT_NONE 255    // lines[0].x0 with none kept: a column is 0..128
 
 // A sprite seen this frame: where it goes on the screen, its depth for the
 // order, and the rows it shows in each column it covers, gathered from its

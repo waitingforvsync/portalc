@@ -1707,6 +1707,32 @@ capture says they're done. That's safe, as nothing reads T before the
 fill, and the clip writes the child's bounds to `top[]` and `bot[]` as it
 goes, whatever happens to the plotting.
 
+**Back in, simpler.** The lines alone, kept in the visit record itself, with
+no memo pool. An edge makes at most one line at each of its
+two cells' ceilings and floors, so that's four slots by height, 7 bytes a
+line (x0, x1, the row at x0, the gradient, the far row). Only the side a
+walk stops on keeps them, and only if it ends right of the portal, as a
+later visit starts at or past this one's right column and can't resume on
+any other. Byte-identical frames. On map 0, 2.6 lines a frame kept and 2.6
+used again; ends worked out go from 7.9 a frame to 6.6, lines made from
+15.2 to 12.6. The stress map keeps 0.1 a frame and uses none.
+
+x1 stays: a line clipped at its right end leaves the screen before the
+side's end, and on a revisit 1.2% of the kept lines do it inside the new
+columns. Without x1, finding that point again is a division.
+
+And with the lines kept, the record slimmed after all: the side, the
+portal's right column, the sprite and the lines, 32 bytes (it was 26 and no
+lines). The window, the side's ends and columns, the portal's left column
+and bounds, and the heights all belong to the walk in progress, made again
+each time it enters the cell: about 40 cycles to place and column the side
+again, and 30 a height. A revisit centres its window on its own portal,
+which gives the same columns. "Kept" is lines[0].x0 = 255, cleared when the
+walk moves to another side, and a side with no ceiling line marks it with
+a 0. It can't just be inferred: a child past the depth cap is entered but
+never walked, and a walk can end on its step guard, both leaving a side
+with no lines made. Byte-identical frames.
+
 ## Considered and dropped
 
 - **Dropping the vertical dither.** Fill the even scanlines and store each

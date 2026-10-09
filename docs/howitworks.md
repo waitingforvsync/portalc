@@ -626,10 +626,18 @@ split across two visits carry on exactly where it left off.
 The walk goes front to back, a cell at a time, through the portals it can
 see, and finishes a column's whole subtree before moving on.
 
-**Visits.** A cell gets a visit record the first time it's met, with its
-heights' logs, and every later visit that frame shares it. A ray crosses a
-convex cell once, so a cell's visits run left to right and never overlap,
-and each later one resumes on the side the last stopped on.
+**Visits.** A cell gets a visit record the first time it's met, and every
+later visit that frame shares it. A ray crosses a convex cell once, so a
+cell's visits run left to right and never overlap, and each later one
+resumes on the side the last stopped on.
+
+The record keeps only what a later visit can't make again quickly: the side
+the last walk stopped on, the right column of the portal it came through,
+the cell's sprite, and that side's lines (Revisits, below). 32 bytes, 28 of
+them lines. The rest is the walk's: its window, its current side's ends and
+columns, its portal's left column and bounds, and the cell's heights (a
+subtract and a byte log each). A walk makes them each time it enters the
+cell, and its recursion keeps them while a child's walk runs.
 
 ![Visit windows](hiw-window.svg)
 
@@ -653,7 +661,10 @@ t + lo8.
   - tl, which is 128 - tl as a byte. In the example the side is cell 6's
   wall, from v4 at angle 706, and tl = 414.
 - **A cell seen through a portal** spans under a half turn, with the
-  portal's middle among it, so its window is centred there. If the portal's
+  portal's middle among it, so its window is centred there, made again on
+  each visit. Every portal into the cell has its middle among it, so any
+  of them gives a window holding the cell in one piece, and the same
+  columns. If the portal's
   middle is at place mid in the parent's window, the child's starts 512
   before it: lo' = lo + mid - 512. Every place shifts by the opposite
   amount, t' = t + 512 - mid, so tl' = tl + 512 - mid, and lo8' = lo8 + mid
@@ -708,14 +719,21 @@ and the opening shows its ceiling colour flat. A draw distance, not a
 glitch.
 
 **Revisits.** A second visit to a cell skips the first's setup (its window,
-its first side, its sprite) and finds its polar forms in the cache. But the
-side it resumes on, the one straddling the two visits' columns, gets its
-ends and all its lines made again from scratch, then a multiply to start
-them partway. On map 0's random poses that's 1.53 revisits a frame and 2.58
-lines made twice, in 44% of frames (26 lines in the worst). The stress map
-never sees a cell through two portals side by side, so it never pays.
-`main` kept a line's pieces and carried them on; `polar` gave that up with
-the piece pool.
+its first side, its sprite) and finds its polar forms in the cache. The
+side it resumes on, the one straddling the two visits' columns, has the
+same lines as last time: they were made over the edge's whole span in the
+view, whatever the portal. So the visit record keeps them, up to four, one
+at each of the two cells' ceilings and floors, as 7 bytes each: the
+columns the line's on the screen over, its row at the first and its
+gradient, and the far row for the fast path. The revisit works out no ends
+and makes no lines, just a multiply to start each one partway.
+
+Only the side a walk stops on keeps its lines, and only if it ends right of
+the portal: a later visit starts at or past this one's right column, so
+it can't resume on any other. On map 0's random poses that's 2.6 lines a
+frame kept and 2.6 used again, nearly every one. The stress map never sees
+a cell through two portals side by side, so it keeps 0.1 a frame and uses
+none.
 
 ## The clip: bounds per column
 
@@ -993,13 +1011,6 @@ subtract, the byte exp and two lookups: about 150 cycles. Map 0 makes 11.8
 polar forms a frame (23.6 logs) from 16.7 distinct coordinates, and the
 stress map 16.9 (33.8 logs) from 12.0. About 1k a frame and 2.8k. A move
 along one axis would keep the other axis's logs.
-
-**Keeping the resumed side.** A revisit remakes the side it resumes on. The
-visit record already holds that side's places and columns, so it could hold
-its ends too (two log depths and the column count's log, about 6 bytes),
-and with 2 above a remade line would cost two exps and a multiply. Very
-roughly half of what the reverted memo in NOTES.md saved, with almost none
-of its machinery.
 
 **Doom's clipper at the span's ends**, rather than stepping a line on by a
 multiply, would save about 0.3k a frame on map 0 and nothing on the stress

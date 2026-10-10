@@ -1,5 +1,13 @@
-\ portal.6502 - the release program: PORTAL on the disc.
-HARNESS = FALSE
-SUITE = 0                       ; (no checks: test builds pick theirs with -D)
-PROG_NAME = "PORTAL"
-INCLUDE "src/top.6502"
+\ portal.6502 - PORTAL on the disc: the engine. So far, all it does is come
+\ back.
+
+SECTION Portal, org = &1200, load = &FFFF1200, filename = "PORTAL"
+
+\\ The entry point, from !BOOT.
+.start
+{
+    ZA_ENTRY                        ; *RUN comes in here
+    RTS
+}
+
+ENDSECTION

@@ -19,10 +19,3 @@ set(CMAKE_C_EXTENSIONS OFF)
 set(RICHC_RUN_TESTS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(src)
-
-# the Beeb port's host tools follow main's engine: on polar they wait for the
-# port, off unless asked for
-option(PORTALC_BEEB_HOST "Build the Beeb port's host tools" OFF)
-if(PORTALC_BEEB_HOST)
-    add_subdirectory(beeb/host)
-endif()

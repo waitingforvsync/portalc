@@ -1,17 +1,56 @@
-\ boot.6502 - !BOOT: machine code at &400 (as spritescale's), which silences
-\ the beep, prints the title and *RUNs PORTAL.
+\ boot.6502 - !BOOT, *RUN by SHIFT-BREAK (the disc's *OPT 4,2): machine
+\ code at &400, as spritescale's.
 
 SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
-    LDA #15 : LDX #0 : JSR &FFF4    ; *FX15,0: flush the buffers
+
+\\ Silence the beep, find a bank of sideways RAM (an error if there's
+\\ none), print the title, run PORTAL.
+.boot
+{
+    ZA_ENTRY                            ; *RUN comes in here
+
+    \ silence the beep
+    CLI
+    LDA #15:LDX #0:JSR &FFF4            ; *FX15,0: flush the buffers
+
+    \ sideways RAM: a bank whose first byte takes a write
+    SEI                                 ; nothing pages it out under us
+    LDX #15
+.probe
+    STX &FE30                           ; ROMSEL: bank X at &8000
+    LDA &8000:TAY
+    EOR #&FF:STA &8000
+    CMP &8000                           ; Z: it took
+    STY &8000                           ; put it back
+    BEQ found
+    DEX
+    BPL probe
+    LDA &F4:STA &FE30                   ; the OS's bank back
+    CLI
+    BRK
+    EQUB 0
+    EQUS "PORTAL needs sideways RAM", 0
+.found
+    LDA &F4:STA &FE30
+    CLI
+
+    \ print the title
     LDX #0
-.@  LDA cmd+1,X
-    JSR &FFE3                       ; OSASCI
+.@  LDA message,X
+    JSR &FFE3                           ; OSASCI
     INX
     CMP #0
     BNE @-
+
+    \ run PORTAL
     LDX #LO(cmd)
     LDY #HI(cmd)
-    JMP &FFF7                       ; OSCLI
+    JMP &FFF7                           ; OSCLI
+
 .cmd
-    EQUS "/PORTAL", 13, 13, 0
+    EQUS "/"
+.message
+    EQUS "PORTAL", 13, 13, 0
+}
+
 ENDSECTION

@@ -1,6 +1,0 @@
-\ harness.6502 - the test harness: HARNESS on the disc, built with
-\ -D TESTBUF=0 or 1 (PLAN.md section 5.3). The release code, plus the
-\ mailbox, the clock and the checks' shims.
-HARNESS = TRUE
-PROG_NAME = "HARNESS"
-INCLUDE "src/top.6502"

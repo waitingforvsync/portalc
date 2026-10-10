@@ -1,8 +1,6 @@
 {
     "baron.sourceFiles": [
+        "beeb/boot.6502",
         "beeb/portal.6502"
-    ],
-    "baron.defines": [
-        "MAP=0"
     ]
 }

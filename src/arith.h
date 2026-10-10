@@ -155,4 +155,21 @@ uint16_t pt_mulg_u16(uint16_t g, uint8_t dx);
 // quarter.
 uint8_t pt_rpost(uint16_t d2);
 
+// ---- the tables themselves ----
+
+// Every table as built, for the Beeb port's check that its loader builds
+// the same. Entry 0 of nrm and k8 is unused, as are rpost's below 256 / 8:
+// all 0.
+typedef struct pt_arith_tables {
+    uint8_t nrm[256], k8[256];
+    uint8_t logf[256], expf[256], atan[256], lhyp[256], sinq[256], a2c[256];
+    uint8_t lsec[128], lsx[128];
+    uint16_t lsec16[256];
+    uint16_t sq1[512], sq2[512];
+    uint8_t rpost[PT_RPOST_END / 8];
+} pt_arith_tables;
+
+// A copy of them all.
+void pt_arith_tables_get(pt_arith_tables *t);
+
 #endif

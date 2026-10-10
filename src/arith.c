@@ -8,6 +8,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "mode5.h"
 #include "richc/macros.h"
@@ -515,3 +516,21 @@ static uint16_t mulu16_frac_round(uint16_t a, uint8_t f)
     return pt_u16((int32_t)lo + hi);
 }
 
+void pt_arith_tables_get(pt_arith_tables *t)
+{
+    RC_ASSERT(inited_);
+    memcpy(t->nrm, nrm_, sizeof t->nrm);
+    memcpy(t->k8, k8_, sizeof t->k8);
+    memcpy(t->logf, logf_, sizeof t->logf);
+    memcpy(t->expf, expf_, sizeof t->expf);
+    memcpy(t->atan, atan_, sizeof t->atan);
+    memcpy(t->lhyp, lhyp_, sizeof t->lhyp);
+    memcpy(t->sinq, sinq_, sizeof t->sinq);
+    memcpy(t->a2c, a2c_, sizeof t->a2c);
+    memcpy(t->lsec, lsec_, sizeof t->lsec);
+    memcpy(t->lsx, lsx_, sizeof t->lsx);
+    memcpy(t->lsec16, lsec16_, sizeof t->lsec16);
+    memcpy(t->sq1, sq1_, sizeof t->sq1);
+    memcpy(t->sq2, sq2_, sizeof t->sq2);
+    memcpy(t->rpost, rpost_, sizeof t->rpost);
+}

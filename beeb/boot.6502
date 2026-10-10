@@ -5,15 +5,18 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
 
 \\ Silence the beep, find a bank of sideways RAM (an error if there's
 \\ none), print the title, run PORTAL.
+
 .boot
 {
     ZA_ENTRY                            ; *RUN comes in here
 
     \ silence the beep
+
     CLI
     LDA #15:LDX #0:JSR &FFF4            ; *FX15,0: flush the buffers
 
     \ sideways RAM: a bank whose first byte takes a write
+
     SEI                                 ; nothing pages it out under us
     LDX #15
 .probe
@@ -25,16 +28,20 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
     BEQ found
     DEX
     BPL probe
+    
     LDA &F4:STA &FE30                   ; the OS's bank back
     CLI
     BRK
     EQUB 0
     EQUS "PORTAL needs sideways RAM", 0
+
 .found
+    STX &400                            ; the bank, for PORTAL (over our spent first byte)
     LDA &F4:STA &FE30
     CLI
 
     \ print the title
+
     LDX #0
 .@  LDA message,X
     JSR &FFE3                           ; OSASCI
@@ -43,6 +50,7 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
     BNE @-
 
     \ run PORTAL
+
     LDX #LO(cmd)
     LDY #HI(cmd)
     JMP &FFF7                           ; OSCLI

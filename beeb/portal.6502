@@ -1,13 +1,22 @@
-\ portal.6502 - PORTAL on the disc: the engine. So far, all it does is come
-\ back.
+\ portal.6502 - PORTAL on the disc: the loader, carrying the code that runs
+\ from main RAM and the code that runs from sideways RAM, each assembled
+\ where it runs, for the loader to copy there.
 
-SECTION Portal, org = &1200, load = &FFFF1200, filename = "PORTAL"
+INCLUDE "src/memory.6502"
 
-\\ The entry point, from !BOOT.
-.start
-{
-    ZA_ENTRY                        ; *RUN comes in here
-    RTS
-}
+SECTION Portal, org = LOADER_ORG, load = &FFFF0000+LOADER_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = &7C00
+    INCLUDE "src/entry.6502"
+    INCLUDE "src/tables.6502"
 
+.maincode_image
+    SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
+        INCLUDE "src/irq.6502"
+    ENDSECTION
+
+.swramcode_image
+    SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
+        INCLUDE "src/start.6502"
+    ENDSECTION
+
+.image_end
 ENDSECTION

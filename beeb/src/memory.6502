@@ -1,0 +1,39 @@
+\ memory.6502 - where everything lives once PORTAL has the machine: the zero
+\ page pool, main RAM's regions, and the pools of workspace in it (virtual
+\ sections, claimed piece by piece where they're used).
+\
+\   &0000  zero page: the pool, bar &FC
+\   &0100  the stack
+\   &0200  the OS's vectors and workspace: left alone (IRQ1V)
+\   &0400  Workspace: free throughout, once the loader has read !BOOT's bank
+\   &0D00  the NMI vector: an RTI, put there by the loader
+\   &0E00  Scratch: free once the loader's done (PORTAL loads at &1200)
+\   &3000  main RAM's code
+\   &3C00  the tables, made by the loader
+\   &4F00  T, the line buffer: 16 character rows, then a junk row
+\   &6000  screen A
+\   &7000  screen B
+\   &8000  sideways RAM's code, in the bank paged in for good
+
+ZA_POOL &00..&FB                        ; &FC: the MOS's IRQ entry saves A there
+
+BOOT_BANK = &0400                       ; the sideways RAM bank !BOOT found (it writes &400 itself)
+LOADER_ORG = &1200                      ; PORTAL, as loaded
+MAINCODE_ORG = &3000
+MAINCODE_END = &3C00
+TABLES_ORG = &3C00
+T_ORG = &4F00                           ; T proper
+T_JUNK = &5F00                          ; overruns off its bottom
+SCREEN_A = &6000
+SCREEN_B = &7000
+SWRAM_ORG = &8000
+SWRAM_END = &C000
+
+SECTION Workspace, org = &0400, guard = &0D00, virtual = TRUE
+ENDSECTION
+
+SECTION Scratch, org = &0E00, guard = MAINCODE_ORG, virtual = TRUE
+ENDSECTION
+
+SECTION Tables, org = TABLES_ORG, guard = T_ORG, virtual = TRUE
+ENDSECTION

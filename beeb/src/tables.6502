@@ -1,0 +1,244 @@
+\ tables.6502 - the tables, made by the loader exactly as arith.c makes
+\ them: the normalisers an octave at a time, every smooth table from a bit a
+\ delta (packed here, at assembly time, from its ideal values), lsec16's
+\ second half from logs, the quarter squares by recurrence, and rpost by
+\ restoring division.
+
+SECTION Tables
+.nrm        SKIP &100                   ; b << lz(b): the byte normalised (0: unused)
+.k8         SKIP &100                   ; 8 - lz(b): its bit length (0: unused)
+.logf       SKIP &100                   ; 256 log2(1 + j/256)
+.expf       SKIP &100                   ; 256 (2^(f/256) - 1)
+.atan       SKIP &100                   ; atan of ratio byte i, in steps, floored
+.lhyp       SKIP &100                   ; 256 log2 sec of the same
+.sinq       SKIP &100                   ; 256 sin over the right angle (from 246, 256)
+.a2c        SKIP &100                   ; view step's place -> column
+.lsec16lo   SKIP &100                   ; -256 log2 cos at each step's middle: lsec,
+.lsec16hi   SKIP &100                   ; then on past 45 degrees
+.sq1lo      SKIP &200                   ; i*i/4
+.sq1hi      SKIP &200
+.sq2lo      SKIP &200                   ; (i-255)*(i-255)/4
+.sq2hi      SKIP &200
+.rpostmem   SKIP 200-32                 ; 1.25 * 2^15 / d2, by d2 / 8, from 256
+ENDSECTION
+
+lsec = lsec16lo                         ; its first 128: under 45 degrees, bytes
+rpost = rpostmem-32
+lsx = T_ORG                             ; the loader's, for lsec16, in T before it's cleared
+LOG_STEP = 2137                         ; -256 log2(pi / 1024)
+
+\ The ideal values, as arith.c has them. Rounding is floor(x + 0.5), as
+\ there, not ROUND.
+
+FUNCTION log2(x) = LN(x)/LN(2)
+FUNCTION rounded(x) = FLOOR(x+0.5)
+FUNCTION f_sinq(j) = 256*SIN(j*(PI/512))
+FUNCTION f_atan(i) = ATAN((i+0.5)/256)*(512/PI)
+FUNCTION f_lhyp(i) = 128*log2(1+((i+0.5)/256)*((i+0.5)/256))
+FUNCTION f_logf(j) = 256*log2(1+j/256)
+FUNCTION f_expf(f) = 256*(2^(f/256)-1)
+FUNCTION f_lsec(i) = -256*log2(COS((i+0.5)*(PI/512)))
+FUNCTION f_lsx(j)
+    x = (j+0.5)*(PI/512)
+= -256*log2(SIN(x)/x)
+FUNCTION f_a2c(k) = 64+64*TAN((k-128+0.5)*(PI/512))
+
+\ A bit a delta: a table's first entry, then a bit for each delta after it,
+\ over a base for each byte of bits. The first byte holds the (n - 1) MOD 8
+\ odd deltas, under a set bit; every other, 8. A byte whose deltas fit the
+\ one before's base keeps it, so the bases run monotonically.
+
+FUNCTION pk_deltas(v) = v[1..]-v[..LEN(v)-2]
+
+FUNCTION pk_groups(d, k, nb, b)
+    IF b == nb
+        r = {}
+    ELIF b == 0
+        r = CONCAT({d[0..<k]}, pk_groups(d, k, nb, 1))
+    ELSE
+        r = CONCAT({d[k+8*(b-1)..<k+8*b]}, pk_groups(d, k, nb, b+1))
+    ENDIF
+= r
+
+FUNCTION pk_bases(gs, i, prev, has)
+    IF i == LEN(gs)
+        r = {}
+    ELSE
+        g = gs[i]
+        IF LEN(g) == 0
+            b = 0
+        ELIF has AND prev <= MIN(g) AND MAX(g) <= prev+1
+            b = prev
+        ELSE
+            b = MIN(g)
+        ENDIF
+        r = CONCAT(b, pk_bases(gs, i+1, b, LEN(g) > 0))
+    ENDIF
+= r
+
+FUNCTION pk_bits(gs, bs, k, i)
+    IF i == LEN(gs)
+        r = {}
+    ELSE
+        g = gs[i]
+        IF LEN(g) == 0
+            bb = 0
+        ELSE
+            ASSERT MIN(g) >= bs[i] AND MAX(g) <= bs[i]+1, "a delta off its byte's base"
+            bb = SUM((g > bs[i])*(1 << (0..<LEN(g))))
+        ENDIF
+        r = CONCAT(bb+(i == 0)*(1 << k), pk_bits(gs, bs, k, i+1))
+    ENDIF
+= r
+
+\\ Unpack table from v, its ideal values, packed here. The bytes of bits go
+\\ last first, so X counts them down, and the set bit, carried round in C,
+\\ empties each in turn.
+
+MACRO UNPACK table, v
+    n = LEN(v)
+    k = (n-1) MOD 8
+    nb = (n-1) DIV 8+1
+    gs = pk_groups(pk_deltas(v), k, nb, 0)
+    bs = pk_bases(gs, 0, 0, FALSE)
+
+    LDA #v[0]:STA table
+    LDY #1
+    LDX #nb-1
+    CLC
+.shift
+    ROR bits,X                          ; the next delta's bit, or the set bit
+    BEQ next                            ; the set bit: on to the next byte, in C
+    ADC bases,X                         ; and the byte's base
+    CLC
+    STA table,Y
+    INY
+    BCC shift                           ; (always)
+.next
+    DEX
+    BPL shift
+    BMI done                            ; (always)
+.bits
+    EQUB REVERSE(pk_bits(gs, bs, k, 0))
+.bases
+    EQUB REVERSE(bs)
+.done
+ENDMACRO
+
+\\ Make every table, as arith.c does.
+
+.make_tables
+{
+    ZA_AUTO1 step                       ; local: the normalisers' step
+    ZA_AUTO1 lo                         ; local: a log's fraction, a dividend's low byte
+    ZA_AUTO1 hi                         ; local: a log's whole part + 1
+    ZA_AUTO2 sum                        ; local: a quarter square, a remainder
+    ZA_AUTO2 dv                         ; local: a divisor
+    ZA_AUTO1 q                          ; local: a quotient
+
+    \ the normalisers, an octave at a time: the bytes of bit length k
+    \ normalise to 128 on, in steps of 2^(8 - k)
+
+    LDA #0:STA nrm:STA k8
+    LDX #1:LDY #1
+    LDA #128:STA step
+.octave
+    LDA #128
+.bytes
+    STA nrm,X
+    PHA:TYA:STA k8,X:PLA
+    INX
+    CLC:ADC step
+    BCC bytes
+    INY
+    LSR step
+    CPX #0
+    BNE octave
+
+    \ the tables of a bit a delta
+
+    UNPACK logf, rounded(f_logf(0..255))
+    UNPACK expf, rounded(f_expf(0..255))
+    UNPACK atan, FLOOR(f_atan(0..255))
+    UNPACK lhyp, rounded(f_lhyp(0..255))
+    UNPACK sinq, rounded(f_sinq(0..255))
+    UNPACK a2c, rounded(f_a2c(0..255))
+    UNPACK lsec, rounded(f_lsec(0..127))
+    UNPACK lsx, rounded(f_lsx(0..127))
+
+    \ lsec16 past 45 degrees, from logs: LOG_STEP - log2(2j + 1) + lsx[j] at
+    \ 255 - j, log2 of a byte as pt_log2_8 has it; under 45, high bytes of 0
+
+    LDY #127
+.lsec16
+    TYA:ASL A:ORA #1:TAX                ; 2j + 1
+    LDA k8,X:STA hi
+    LDA nrm,X:ASL A:TAX
+    LDA logf,X:STA lo
+    TYA:EOR #&FF:TAX                    ; 255 - j
+    SEC
+    LDA #LO(LOG_STEP+&100):SBC lo:STA sum
+    LDA #HI(LOG_STEP+&100):SBC hi:STA sum+1
+    CLC
+    LDA sum:ADC lsx,Y:STA lsec16lo,X
+    LDA sum+1:ADC #0:STA lsec16hi,X
+    LDA #0:STA lsec16hi,Y
+    DEY
+    BPL lsec16
+
+    \ the quarter squares: sq1[e] = sq1[e - 1] + e DIV 2, from 0, in two
+    \ pages; sq2[i] = sq1[ABS(i - 255)]
+
+    LDA #0:STA sum:STA sum+1
+    STA sq1lo:STA sq1hi
+    LDX #1
+.sq1a
+    TXA:LSR A                           ; e DIV 2
+    CLC:ADC sum:STA sum:STA sq1lo,X
+    LDA sum+1:ADC #0:STA sum+1:STA sq1hi,X
+    INX
+    BNE sq1a
+.sq1b
+    TXA:LSR A:ORA #&80                  ; (256 + X) DIV 2
+    CLC:ADC sum:STA sum:STA sq1lo+&100,X
+    LDA sum+1:ADC #0:STA sum+1:STA sq1hi+&100,X
+    INX
+    BNE sq1b
+.sq2
+    TXA:EOR #&FF:TAY                    ; i = X: sq1[255 - X]
+    LDA sq1lo,Y:STA sq2lo,X
+    LDA sq1hi,Y:STA sq2hi,X
+    LDA sq1lo+1,X:STA sq2lo+&100,X      ; i = 256 + X: sq1[X + 1]
+    LDA sq1hi+1,X:STA sq2hi+&100,X
+    INX
+    BNE sq2
+
+    \ rpost: (40960 + d - 1) / d for d = 8i, i from 32, a byte by restoring
+    \ division, 8 steps
+
+    LDX #32
+.posts
+    STX dv:LDA #0:STA dv+1
+    ASL dv:ROL dv+1:ASL dv:ROL dv+1:ASL dv:ROL dv+1
+    CLC
+    LDA dv:ADC #LO(40959):STA lo
+    LDA dv+1:ADC #HI(40959):STA sum
+    LDA #0:STA sum+1
+    LDY #8
+.divide
+    ASL lo:ROL sum:ROL sum+1            ; the dividend's next bit into the remainder
+    LDA sum:CMP dv
+    LDA sum+1:SBC dv+1
+    BCC under                           ; C: the divisor goes
+    LDA sum:SBC dv:STA sum
+    LDA sum+1:SBC dv+1:STA sum+1
+.under
+    ROL q
+    DEY
+    BNE divide
+    LDA q:STA rpost,X
+    INX
+    CPX #200
+    BNE posts
+    RTS
+}

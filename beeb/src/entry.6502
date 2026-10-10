@@ -1,0 +1,121 @@
+\ entry.6502 - the loader, PORTAL's entry point. It takes the machine over
+\ from the OS (as spritescale does), pages a bank of sideways RAM in for
+\ good, copies the payloads to where they run, makes the tables, and starts
+\ the engine. Once it's done, it's all Scratch.
+\
+\ The payloads go before anything else is written, sideways RAM's first:
+\ its image may lie under main RAM's code, the tables, T or the screens.
+\ Main RAM's code loads below where it runs, and the loader below all that
+\ it writes.
+
+ASSERT swramcode_image <= MAINCODE_ORG, "main RAM's code must load below where it runs"
+ASSERT LO(T_ORG) == 0 AND T_JUNK+&100 == SCREEN_A AND SCREEN_A+&1000 == SCREEN_B AND SCREEN_B+&1000 == &8000, "T and the screens are whole pages, running on to &8000"
+
+\\ Copy whole pages, forwards, from src to dst: X counts the pages, and the
+\\ operands' high bytes step on, self-modified (the loader runs once).
+
+MACRO COPY src, dst, pages
+    ASSERT pages >= 1 AND pages <= &FF, "COPY: 1 to 255 pages"
+    LDX #pages
+    LDY #0
+.loop
+    LDA src,Y
+    STA dst,Y
+    INY
+    BNE loop
+    INC loop+2                          ; src's high byte
+    INC loop+5                          ; dst's
+    DEX
+    BNE loop
+ENDMACRO
+
+\\ Take the machine over, page in the sideways RAM bank !BOOT found, set up
+\\ the screen, copy the payloads out, make the tables, clear T and the
+\\ screens, and start.
+
+.entry
+{
+    ZA_ENTRY
+
+    ZA_AUTO2 osbyte
+
+	CLD
+	CLI
+	
+	\\ Shut down the OS
+	
+	LDA &FFB7:STA osbyte
+	LDA &FFB8:STA osbyte+1
+	LDY #10
+	LDA (osbyte),Y:STA &20A:INY
+	LDA (osbyte),Y:STA &20B					; Fetch default OSBYTE vector
+
+	LDA #16:LDX #0:JSR &FFF4				; Disable ADC
+	LDA #143:LDX #12:LDY #255:JSR &FFF4		; claim NMIs
+	LDA #140:LDX #0:JSR &FFF4				; select tape filing system for safety
+	LDA #19:JSR &FFF4						; wait for vsync before changing CRTC
+
+    \ the machine: no OS from here on, and no interrupts but strays
+
+    SEI
+    LDX #&FF:TXS
+    LDA #&7F:STA &FE4E                      ; system VIA: every interrupt off
+    STA &FE6E                               ; user VIA: likewise
+    STA &FE43                               ; system VIA port A: the keyboard
+    LDA #&0F:STA &FE42                      ; port B's low half: the addressable latch
+    LDA #3:STA &FE40                        ; latch bit 3 low: we scan the keyboard
+    LDA #&04:STA &FE4C                      ; PCR: CA1 vsync, CA2 keyboard
+    LDA #LO(irq):STA &204                   ; IRQ1V
+    LDA #HI(irq):STA &205
+
+    \ sideways RAM: the bank !BOOT found, paged in for good (no OS to tell)
+
+    LDA BOOT_BANK:STA &FE30                 ; ROMSEL
+
+    \ the screen: a shrunken MODE 5, 128 by 128 at SCREEN_A, KBRG
+
+    LDX #13
+.crtc
+    STX &FE00:LDA crtcregs,X:STA &FE01      ; CRTC register X
+    DEX
+    BPL crtc
+    LDA #&C4:STA &FE20                      ; video ULA: MODE 5's
+    LDX #15
+.pal
+    LDA paldata,X:STA &FE21                 ; video ULA: the palette
+    DEX
+    BPL pal
+
+    \ the payloads, to where they run: sideways RAM's first
+
+    COPY swramcode_image, SWRAM_ORG, (image_end-swramcode_image+&FF) DIV &100
+    COPY maincode_image, MAINCODE_ORG, (swramcode_image-maincode_image+&FF) DIV &100
+
+    \ the tables
+
+    JSR make_tables
+
+    \ T and the screens, clear: T must start each frame empty
+
+    LDA #0:TAY
+    LDX #HI(&8000-T_ORG)                ; pages: T, its junk row and both screens
+.clear
+    STA T_ORG,Y
+    INY
+    BNE clear
+    INC clear+2                         ; the operand's high byte
+    DEX
+    BNE clear
+
+    \ go
+
+    CLI
+    JMP start
+}
+
+.crtcregs
+    EQUB 63, 32, 45, &24, 38, 0, 16, 26, 0, 7, 32, 8, HI(SCREEN_A DIV 8), LO(SCREEN_A DIV 8)
+
+physcols = {0, 4, 1, 2}                 ; black, blue, red, green
+.paldata
+    EQUB (0..15)*16 + (physcols[(0..15) DIV 8*2 + (0..15) DIV 2 MOD 2] EOR 7)

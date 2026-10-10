@@ -516,6 +516,20 @@ slide iterations, the hop walk) with new pieces:
   log sine lookup and an exp, no multiplies at all. The catch is that
   log sine near zero is steep, exactly where collision wants it accurate.
 - **The edge's length** joins the edge, for the foot cap.
+- **A candidate is its wall, looked up once:** the start vertex, the
+  direction and the foot cap, not a cell and a ring position to go back
+  through for each test.
+- **The slide reuses the resolve's distances.** The slide wants each wall's
+  distance from where the move starts, and the resolve has just worked it
+  out from there, unless it pushed (5% of ticks on a walk that hugs the
+  walls). And a wall farther than
+  the radius plus 16 can't be reached by a move of under 12 units, with a
+  unit for truncation and one for each product's rounding, so the slide
+  doesn't look at it.
+- **Standing still costs nothing.** A tick with no move, after one that
+  didn't move either and whose resolve pushed nothing, would find nothing
+  to do, so it doesn't look. Turning on the spot costs the camera
+  nothing.
 - **The posts stay.** They're cheap, and they keep the radius off wall
   ends, which keeps the eye off vertices.
 - **The posts' division is a byte table.** A post pushes the move out by
@@ -576,20 +590,25 @@ k=3   -363 .. -25       0 .. 54              -363 .. -25    0 .. 54
 The walk went in at k=1, took it for the last edge (it ends at 128), and
 drew nothing.
 
-So each visit has a window, a whole turn, `[lo, lo + 1024)`, that its
-cell's angles are read in. A cell seen through a portal spans under a half
-turn, the portal's middle among it, so a window centred there holds the
-whole cell in one piece, and clockwise along the sides facing the eye the
-angles only go up. The eye's own cell spans the whole turn: its window
-starts where the walk does, at the side across the view's left edge.
+So each visit has a window, a whole turn, that its cell's angles are read
+in. A cell seen through a portal spans under a half turn, the portal's
+middle among it, so a window centred there holds the whole cell in one
+piece, and clockwise along the sides facing the eye the angles only go up.
+The eye's own cell spans the whole turn: its window starts where the walk
+does, at the side across the view's left edge.
 
-The visit keeps its window as `lo`, its start, a world angle, so a
-vertex's place in it is one 10-bit subtract, t = (angle - lo) & 1023; and
-`tl`, where the view's left edge sits in it (the right is 256 on), so two
-compares give the column 0, the column 128, or the view angle, which is
-the byte t + `lo8`, and `pt_view_col`. A child's window comes from its
-parent's: `lo` moves by the portal's middle less 512, and `tl` and `lo8`
-the other way.
+A vertex's place is its angle from the view's left edge, `vl` (the
+camera's angle less 128), u = (angle - vl) & 1023: one 10-bit subtract,
+the same in every window. All a window adds is where the turn splits: a
+place at or past the visit's `wrap` is a turn less, negative. Then the
+high byte gives the column: negative 0, not zero 128, and zero means the
+low byte is `pt_view_col`'s index, the view angle plus 128. A child's
+window splits half a turn past the portal's middle, its places' average.
+
+It used to keep `lo`, the window's start, `tl`, the left edge's place in
+it, and `lo8`, so the view angle was the byte t + `lo8`. A review found
+`lo8` was always 128 - `tl`, and `lo` + `tl` always the left edge itself:
+three numbers for one. Byte-identical frames.
 
 A side's end is the next side's start, so the visit carries the current
 side's two places and columns, and moving on costs one vertex: its place
@@ -804,9 +823,14 @@ there the difference is taken in whole rows instead.
 An end's at or past the screen's edge when its offset's log reaches 13 *
 256, the high byte 13: `CMP #13`, and the carry says near, before any exp.
 ceil(delta) is the high byte plus one for any fraction: `CMP #1` on the
-low byte, `ADC #0` into the high. Delta is logs and can be a column over,
-so the count comes back to the last column whose row is still on the
-screen.
+low byte, `ADC #0` into the high. Delta is logs, so I had it step back
+while the last column's row was off the screen. It never did, in 676,000
+near lines over 400,000 poses of both maps, and it can't, quite: g and
+delta come from the same log, so g × (delta - 1) is under the distance
+again, out by roundings only (0.5% of under 32 rows, a sixteenth for the
+eighths, a quarter of a row for g's own over 128 columns), and the
+rounding half leaves half a row past either edge. Now it's one step and an
+assert.
 
 The columns kept are whole ones, counted from the far end. A floor line
 whose far end is 20 rows below the middle at column 40, and whose near end
@@ -973,10 +997,13 @@ still go through it (below).
 
 **A bound at the screen's edge isn't kept.** `tmax` 0 says the top is row
 0 all along, and `bmin` 64 that the bottom is the junk row. The clips then
-use those, and don't read `top` or `bot`, so the root's bounds are never
-written, and nothing resets the arrays each frame (that was 256 stores).
-A bound line that lends its parent's bound writes it out, since the child
-may keep the rest of its bound in the array.
+don't read `top` or `bot`, so the root's bounds are never written, and
+nothing resets the arrays each frame (that was 256 stores). A scan reads a
+constant row of 0s or 64s in their place, which on the 6502 is just where
+its `CMP top,X` points, patched once a scan. A bound line that lends its
+parent's bound writes it out only where that's the screen's edge, as the
+child may keep the rest of its bound in the array. Anywhere else it's
+there already.
 
 **Room.** There used to be `open[]` here, a byte a column for the child's
 open columns, filled once a bound line closed one, and the child was
@@ -1014,8 +1041,9 @@ to 53, and the line over 54 to 59, starting from the row and fraction the
 scan stepped to. Nothing toggled a pixel at a time, and no multiply to
 pick the line up again.
 
-Hidden columns are gathered like visible ones: a run on one row in one
-colour, ended when either changes. A run in the junk row is dropped.
+Hidden columns are gathered like visible ones: a run on one row, ended when
+the row changes. They're all the line's colour, so that's all a run
+holds. A run in the junk row is dropped.
 
 On the 6502, a column of the scan is a 16-bit add, `CMP top,X`, `CMP
 bot,X` and a branch or two: about 30 cycles. The runs' bookkeeping only
@@ -1674,7 +1702,7 @@ with the glue as sketched. Decided so far:
 | 2 | Flatten children seen through narrow portals | 1k to 2.4k | no: a narrow portal between wider ones onto the same cell would leave a stripe |
 | 3 | A cheaper polar form | ~1.8k | later, with the arithmetic as macros |
 | 4 | Row-0 toggles into the fill's start values, a byte column each | ~1.3k | to do |
-| 5 | Height logs per cell, kept across frames until the eye's height changes | ~1.4k | to do |
+| 5 | Height logs per cell, kept across frames until the eye's height changes | ~1.4k | half done: once a cell a frame (After a review) |
 | 6 | Each side's patterns and level flags made with the map | ~1k | to do |
 | 7 | End offsets reused between neighbouring sides | ~0.85k | to do |
 | 8 | The hot arithmetic inlined | ~1k | yes: macros, later |
@@ -1746,6 +1774,76 @@ walk moves to another side, and a side with no ceiling line marks it with
 a 0. It can't just be inferred: a child past the depth cap is entered but
 never walked, and a walk can end on its step guard, both leaving a side
 with no lines made. Byte-identical frames.
+
+**Into a pool after all.** 28 bytes of lines in every record, 896 in all,
+for 1.4 sides a frame. So the lines moved out to a pool, a side's four
+slots an entry, and the record keeps the entry's index, 0 for none: no
+more 255s and 0s in x0. A walk takes an entry only for the side it stops
+on, if it runs on past the portal; everything else is fire and forget. 8
+entries, entry 0 the null one, as for visits:
+
+| sides kept in a frame (map 0) | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9+ |
+|---|---|---|---|---|---|---|---|---|---|---|
+| frames of 102,768 | 46,746 | 20,659 | 14,373 | 7,445 | 5,184 | 3,409 | 2,467 | 1,028 | 588 | 869 |
+
+So the 7 take every keep in 98.6% of frames. One that doesn't fit isn't
+kept, and its next visit makes the lines again. Map 9 keeps one at most.
+Byte-identical frames, and the record is down to 11 bytes, the heights
+included (After a review, below).
+
+## After a review
+
+A sweep of the code as it stood, for state nothing needs, code nothing
+reaches and work done twice, and the clip gone over column by column.
+Byte-identical frames throughout: the sweep's framebuffers, both maps'
+comparer records, and 800,000 camera ticks.
+
+**The clip is fine.** I went looking for slack in the clamping and found
+very little:
+
+| per frame | map 0 | map 9 |
+|---|---|---|
+| fast paths an exact far row would add, for `rl` | 0.28 | 0.04 |
+| lines the screen pre-clip would take against any bound | 0.001 | 0 |
+| scans that find nothing hidden | 0.48 (6 columns) | 0.08 (0.9 columns) |
+
+So 83 of map 0's 89 scanned columns a frame are real occlusion.
+
+**What went:**
+
+- `lo8` and `lo`: the window is one number now (Columns from angles).
+- The heights, from the walk into the visit record, made once a cell a
+  frame. Re-entries, soft edges and a bound line at the next cell's height
+  all made them again: 14.7 a frame on map 0, about 10 now. `pt_walk` is 12
+  bytes, from 23. And a height's m: its log is 0 just when m is.
+- `pt_end`'s column: always the walk's c0 or c1, so an edge with columns
+  in its portal is never edge-on, and that branch went.
+- A hidden run's colour (always the line's), a multiply made twice when the
+  fast path said no, the stores lending a bound that's already in the
+  array, and the near clip's step back (Ends from logs).
+- The tail call's copy: the child's walk is made right over the parent's.
+- The guards: the walk's step count, `enter`'s, the already-walked checks
+  and the root's fallback. None fires for an eye inside a cell, including
+  123,000 frames from eyes exactly on edges' lines (1,926 of those points
+  on a side, portals included). All they ever caught were eyes outside
+  every cell, which the camera can't reach. Asserts now, and no 6502.
+- `pt_sinq` (the test reads the table back through `pt_mul_sin(256, j)`),
+  and two high-water marks nobody read.
+
+The camera's went too: 9.6 dot products a tick to 6.4 on map 0, and 15.5
+to 9.9 on map 9 (Collision).
+
+**Measured and dropped.** Holding a kept side's runs and extending them on
+the next visit, as planned above: 2.2 runs a frame merge on map 0, about
+0.6k roughly costed, and none on map 9. Not worth the state.
+
+Walls split by soft edges came out of the same count. Map 9 has 9.3 joins a
+frame where two walls in line meet at a vertex, in different cells, and
+their lines agree pixel for pixel in 5.4 of them. Over all of them, 11% of
+the second lines' columns are a row off. One line for each straight run of
+walls would make every join exact, merge the runs (about 2.4k a frame on
+map 9, 0.3k on map 0) and skip making the second line (2k or so more). But
+it moves pixels, and the map would have to know its chains. Not for now.
 
 ## Considered and dropped
 

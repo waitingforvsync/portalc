@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 420" width="820" height="420" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
 <rect width="820" height="420" fill="#ffffff"/>
-<text x="60.0" y="38.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="bold" xml:space="preserve">cell 6, the eye's own: a whole turn from lo = 706 (v4)</text>
+<text x="60.0" y="38.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="bold" xml:space="preserve">cell 6, the eye's own: places -414 to 610, split at v4</text>
 <rect x="333.2" y="60.0" width="169.0" height="52.0" fill="#2563eb" stroke="none" stroke-width="1" fill-opacity="0.08"/>
 <text x="417.7" y="54.0" font-size="11" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve">the view</text>
 <line x1="333.2" y1="102.0" x2="333.2" y2="112.0" stroke="#2563eb" stroke-width="1.2" stroke-linecap="round"/>
@@ -11,15 +11,17 @@
 <text x="502.2" y="126.0" font-size="10" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve">col 128</text>
 <line x1="60.0" y1="100.0" x2="735.8" y2="100.0" stroke="#1d1b18" stroke-width="1.5" stroke-linecap="round"/>
 <line x1="60.0" y1="96.0" x2="60.0" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="60.0" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 0</text>
-<line x1="229.0" y1="96.0" x2="229.0" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="229.0" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 256</text>
-<line x1="397.9" y1="96.0" x2="397.9" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="397.9" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 512</text>
-<line x1="566.9" y1="96.0" x2="566.9" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="566.9" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 768</text>
+<text x="60.0" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u -414</text>
+<line x1="164.3" y1="96.0" x2="164.3" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="164.3" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u -256</text>
+<line x1="333.2" y1="96.0" x2="333.2" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="333.2" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 0</text>
+<line x1="502.2" y1="96.0" x2="502.2" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="502.2" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 256</text>
+<line x1="671.1" y1="96.0" x2="671.1" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="671.1" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 512</text>
 <line x1="735.8" y1="96.0" x2="735.8" y2="104.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="735.8" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 1024</text>
+<text x="735.8" y="142.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 610</text>
 <path d="M60.0,100.0 Q199.6,66.0 339.2,100.0" fill="none" stroke="#1d1b18" stroke-width="2"/>
 <text x="199.6" y="78.0" font-size="10" text-anchor="middle" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v4-v0</text>
 <path d="M339.2,100.0 Q458.0,66.0 576.8,100.0" fill="none" stroke="#8a8478" stroke-width="1.5" stroke-dasharray="4 3"/>
@@ -37,7 +39,7 @@
 <text x="343.2" y="113.0" font-size="10" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v0</text>
 <text x="580.8" y="113.0" font-size="10" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v5</text>
 <text x="739.8" y="113.0" font-size="10" text-anchor="start" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v4</text>
-<text x="60.0" y="238.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="bold" xml:space="preserve">cell 2, through v0-v5: centred on the portal, lo = 797</text>
+<text x="60.0" y="238.0" font-size="12" text-anchor="start" fill="#1d1b18" font-weight="bold" xml:space="preserve">cell 2, through v0-v5: centred on the portal's middle, 189, split at 701</text>
 <rect x="273.2" y="260.0" width="169.0" height="52.0" fill="#2563eb" stroke="none" stroke-width="1" fill-opacity="0.08"/>
 <text x="357.7" y="254.0" font-size="11" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve">the view</text>
 <line x1="273.2" y1="302.0" x2="273.2" y2="312.0" stroke="#2563eb" stroke-width="1.2" stroke-linecap="round"/>
@@ -48,15 +50,17 @@
 <text x="442.1" y="326.0" font-size="10" text-anchor="middle" fill="#2563eb" font-weight="normal" xml:space="preserve">col 128</text>
 <line x1="60.0" y1="300.0" x2="735.8" y2="300.0" stroke="#1d1b18" stroke-width="1.5" stroke-linecap="round"/>
 <line x1="60.0" y1="296.0" x2="60.0" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="60.0" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 0</text>
-<line x1="229.0" y1="296.0" x2="229.0" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="229.0" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 256</text>
-<line x1="397.9" y1="296.0" x2="397.9" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="397.9" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 512</text>
-<line x1="566.9" y1="296.0" x2="566.9" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="566.9" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 768</text>
+<text x="60.0" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u -323</text>
+<line x1="104.2" y1="296.0" x2="104.2" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="104.2" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u -256</text>
+<line x1="273.2" y1="296.0" x2="273.2" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="273.2" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 0</text>
+<line x1="442.1" y1="296.0" x2="442.1" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="442.1" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 256</text>
+<line x1="611.1" y1="296.0" x2="611.1" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
+<text x="611.1" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 512</text>
 <line x1="735.8" y1="296.0" x2="735.8" y2="304.0" stroke="#8a8478" stroke-width="1" stroke-linecap="round"/>
-<text x="735.8" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">t 1024</text>
+<text x="735.8" y="342.0" font-size="10" text-anchor="middle" fill="#8a8478" font-weight="normal" xml:space="preserve">u 701</text>
 <path d="M279.1,300.0 Q338.9,266.0 398.6,300.0" fill="none" stroke="#1d1b18" stroke-width="2"/>
 <text x="338.9" y="278.0" font-size="10" text-anchor="middle" fill="#1d1b18" font-weight="normal" xml:space="preserve" paint-order="stroke" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">v0-v1</text>
 <path d="M398.6,300.0 Q414.1,266.0 429.6,300.0" fill="none" stroke="#8a8478" stroke-width="1.5" stroke-dasharray="4 3"/>

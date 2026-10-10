@@ -54,7 +54,7 @@ pt_camera_tick           camera.c   turn, move, slide off walls; the vertex
                                     cache looks from the new spot; which cell
 pt_render_view           render.c
   frame
-    root_visit                      the eye's cell, from the side across the
+    root_walk                       the eye's cell, from the side across the
                                     view's left edge
     walk                            the cell's sides in turn, clockwise
       process_edge                  a side: its columns, its lines, its child
@@ -354,8 +354,9 @@ columns puts them at ±64, and the screen's 128 columns span it exactly:
 X = 64 + 64 tan v
 ```
 
-`a2c` holds round(X) at the middle of every in-view step. The index is `v
-EOR $80`: flipping the sign bit of a signed byte turns -128..127 into 0..255.
+`a2c` holds round(X) at the middle of every in-view step, indexed by the
+step's place from the view's left edge, v + 128, 0..255. As a byte that's
+`v EOR $80`, but the walk has the place to hand anyway (Windows, below).
 Column c's centre is at c + 0.5, so the first column whose centre lies right
 of X is round(X), and that's a vertex's column. An edge covers the half-open
 run of columns [sx, ex): those whose centre rays cross it. The next edge
@@ -390,8 +391,9 @@ straight ahead: the middle of step |k| - 1. In two's complement |k| - 1 is
 ~k, so a negative v is looked up at `~v`.
 
 v0 in the example, from cell 6: its angle is 105 and the camera's 224, so
-v = -119. `a2c[9]` = 7, its column. `lsec[118]` = 108, so its depth's log
-is 2,000 - 108 = 1,892: 168 units. About 30 cycles for both, no multiply.
+v = -119, place 9 from the view's left edge. `a2c[9]` = 7, its column.
+`lsec[118]` = 108, so its depth's log is 2,000 - 108 = 1,892: 168 units.
+About 30 cycles for both, no multiply.
 
 ## Rows: perspective as a subtraction
 
@@ -593,8 +595,14 @@ the extra 8 × 256 keeps 8 bits of fraction in n. 32 × 256 - o_far is under
 32 rows, so like a gradient's difference it goes in as a byte in eighths of
 a row, and its log is a byte's. The count is n rounded up,
 counting the far end's own column (`CMP #1` on the fraction, `ADC #0` into
-the whole part). Logs can be a column over, so it steps back while the
-last column's row would be off the screen.
+the whole part).
+
+Could the logs overshoot, and count a column whose row is off the screen?
+g and n come from the same log, so g × n is the distance back again, out
+only by roundings: 0.5% of under 32 rows, a sixteenth of a row for the
+eighths, and g's own, a quarter of a row at most over 128 columns. Every
+row has the rounding half in it, which leaves half a row past either edge.
+So no, just. An assert agrees, over 676,000 near lines.
 
 In the figure's zoom, cell 6's wall has its ceiling 38.2 rows up at column
 0, past the top. From v0 at column 7, 30.5 rows up, n = (32 - 30.5) / 1.086
@@ -633,43 +641,53 @@ resumes on the side the last stopped on.
 
 The record keeps only what a later visit can't make again quickly: the side
 the last walk stopped on, the right column of the portal it came through,
-the cell's sprite, and that side's lines (Revisits, below). 32 bytes, 28 of
-them lines. The rest is the walk's: its window, its current side's ends and
-columns, its portal's left column and bounds, and the cell's heights (a
-subtract and a byte log each). A walk makes them each time it enters the
+the cell's sprite, where that side's lines went if it kept them (Revisits,
+below), and the cell's ceiling and floor as its lines see them (a subtract
+and a byte log each, made with the record). 11 bytes. The rest is the
+walk's, 12 bytes: its window, its current side's ends and columns, and its
+portal's left column and bounds. A walk makes them each time it enters the
 cell, and its recursion keeps them while a child's walk runs.
 
 ![Visit windows](hiw-window.svg)
 
-**Windows.** A visit reads its cell's angles in a window, a whole turn from
-a start angle `lo`. A vertex's place in it is
+**Windows.** A vertex's place is its angle from the view's left edge, vl,
+the camera's angle less 128:
 
 ```
-t = (angle - lo) mod 1024
+u = (angle - vl) mod 1024
 ```
 
-one 10-bit subtract. `tl` is the place of the view's left edge, so the view
-is [tl, tl + 256): left of it is column 0, right of it 128, and in it the
-view angle is lo + t - camera. Only its low byte matters there, so the visit
-keeps `lo8`, the low byte of lo - camera, and the view angle is the byte
-t + lo8.
+One 10-bit subtract, the same for every visit. The view is places 0 to 255,
+and there the place is `a2c`'s index. The catch is behind the eye: mod
+1024, a vertex just left of the view comes out at 1,000-odd, way off to the
+right. So each visit reads its cell in a window of one turn, split where
+the cell isn't: a place at or past the visit's `wrap` counts a turn less,
+negative, left of the view.
+
+```
+if u >= wrap: u = u - 1024     ; CMP, and SBC #4 on the high byte
+high byte negative             ; column 0
+high byte not zero             ; column 128
+otherwise                      ; a2c[low byte]
+```
 
 - **The eye's own cell** spans the whole turn, so its window starts where
-  the walk does: at the side across the view's left edge, from the start of
-  that side. Then tl is how far round from there the left edge is, (camera
-  - 128 - lo) mod 1024, and at t = tl the view angle is -128, so lo8 = -128
-  - tl, which is 128 - tl as a byte. In the example the side is cell 6's
-  wall, from v4 at angle 706, and tl = 414.
+  the walk does: at the side across the view's left edge, whose start goes
+  in at minus how far round the edge is from it. In the example the side is
+  cell 6's wall, from v4 at angle 706. vl is 224 - 128 = 96, so v4 is at
+  (706 - 96) mod 1024 = 610, and that's the split: wrap is 610, and v4
+  goes in at -414.
 - **A cell seen through a portal** spans under a half turn, with the
   portal's middle among it, so its window is centred there, made again on
-  each visit. Every portal into the cell has its middle among it, so any
-  of them gives a window holding the cell in one piece, and the same
-  columns. If the portal's
-  middle is at place mid in the parent's window, the child's starts 512
-  before it: lo' = lo + mid - 512. Every place shifts by the opposite
-  amount, t' = t + 512 - mid, so tl' = tl + 512 - mid, and lo8' = lo8 + mid
-  (512 is a whole number of 256s). Cell 2's window is centred on the portal
-  from v0 to v5.
+  each visit: wrap is the middle's place plus 512. Every portal into the
+  cell has its middle among it, so any of them gives a window holding the
+  cell in one piece. And places don't depend on the window, only on where
+  it splits, so they all give the same columns. Cell 2's portal runs from
+  v0, at 9, to v5, at 369, so its middle is at 189, and wrap is 701.
+
+Cell 3 is seen twice in the example, through cell 2 and then through cell
+1, in windows split at 725 and 786. Its vertices' places are the same both
+times.
 
 **Facing.** Seen from the eye, a side that faces it turns clockwise, its end
 by less than a half turn on from its start, so in the window its places
@@ -677,15 +695,16 @@ rise. One that faces away (a cell seen through a portal has a run of them,
 the portal back among them) turns the other way:
 
 ```
-d = (t_end - t_start) mod 1024
-faces the eye if d ≤ 512: its end is at t_start + d
+d = (u_end - u_start) mod 1024
+faces the eye if d ≤ 512: its end is at u_start + d
 faces away otherwise: it spans nothing
 ```
 
 In the eye's own cell every side faces it, the turns add up to the whole
-turn, and the last side runs on past 1024 to reach the view's right edge. A
-side's end is the next side's start, so the visit carries the current side's
-places and columns, and moving on costs one vertex.
+turn, and the last side runs on to the split, past the view's right edge:
+cell 6's v5-v4 runs from 369 to 610. A side's end is the next side's
+start, so the visit carries the current side's places and columns, and
+moving on costs one vertex.
 
 **An edge**, in `process_edge`:
 
@@ -713,27 +732,35 @@ places and columns, and moving on costs one vertex.
 **Recursion.** A child through any edge but the visit's last is walked
 recursively, and the visit carries on from its own column afterwards. The
 child through the last edge is walked in the same call, a tail call (a
-`JMP` on the 6502), so the stack only grows with portals nested along a
-line of sight. Past 16 deep, a child isn't walked: its columns are closed,
-and the opening shows its ceiling colour flat. A draw distance, not a
-glitch.
+`JMP` on the 6502). Its walk is made right over the parent's, which is
+done with, so there's nothing to copy, and the stack only grows with
+portals nested along a line of sight. Past 16 deep, a child isn't walked:
+its columns are closed, and the opening shows its ceiling colour flat. A
+draw distance, not a glitch.
 
-**Revisits.** A second visit to a cell skips the first's setup (its window,
-its first side, its sprite) and finds its polar forms in the cache. The
+**Revisits.** A second visit to a cell skips the first's setup (its first
+side, its sprite, its heights) and finds its polar forms in the cache. The
 side it resumes on, the one straddling the two visits' columns, has the
 same lines as last time: they were made over the edge's whole span in the
-view, whatever the portal. So the visit record keeps them, up to four, one
-at each of the two cells' ceilings and floors, as 7 bytes each: the
-columns the line's on the screen over, its row at the first and its
-gradient, and the far row for the fast path. The revisit works out no ends
-and makes no lines, just a multiply to start each one partway.
+view, whatever the portal. So the first visit keeps them in a small pool,
+up to four, one at each of the two cells' ceilings and floors, 7 bytes
+each: the columns the line's on the screen over, its row at the first and
+its gradient, and the far row for the fast path. The record points at
+them. The revisit works out no ends and makes no lines, just a multiply to
+start each one partway.
 
 Only the side a walk stops on keeps its lines, and only if it ends right of
 the portal: a later visit starts at or past this one's right column, so
-it can't resume on any other. On map 0's random poses that's 2.6 lines a
-frame kept and 2.6 used again, nearly every one. The stress map never sees
-a cell through two portals side by side, so it keeps 0.1 a frame and uses
-none.
+it can't resume on any other. Every other line is made, plotted and
+forgotten. In the example, cell 3's wall runs on past cell 2's portal, so
+the visit through cell 2 keeps its two lines, and the visit through cell
+1 uses them.
+
+On map 0's random poses that's 1.4 sides a frame kept, and 2.6 lines used
+again. The pool has room for 7 sides, which takes every keep in 98.6% of
+frames (15 is the most I've seen in one), and a side that doesn't fit is
+just made again next time. The stress map never sees a cell through two
+portals side by side, so it keeps 0.03 sides a frame and uses none.
 
 ## The clip: bounds per column
 
@@ -751,8 +778,8 @@ exactly one toggle:
 | line | on or above the top | between | on or below the bottom |
 |---|---|---|---|
 | plain | toggle at the top | plot | toggle at the bottom |
-| floor, B's bottom | close B: toggle at the top, `colour ⊕ cbfb` | plot; it's B's bottom | lend A's bottom: toggle there |
-| ceiling, B's top | lend A's top: toggle there | plot; it's B's top | close B: toggle at B's bottom, `colour ⊕ cbfb` |
+| floor, B's bottom | toggle at A's top; B's bottom is that, no room | plot; it's B's bottom | lend A's bottom: toggle there |
+| ceiling, B's top | lend A's top: toggle there | plot; it's B's top | toggle at B's bottom; B's top is that, no room |
 
 Both rules come from the fill's sum, S(r) = start ⊕ T(0) ⊕ ... ⊕ T(r): a
 toggle changes every row from its own down.
@@ -769,20 +796,15 @@ and the bound belong to whatever nearer surface hides it, and stay as they
 are. A line exactly on its bound toggles the same pixel either way, so ties
 don't matter.
 
-**Closing a child folds its whole stack into one toggle.** `cbfb` is B's
-ceiling ⊕ floor. In a column where B is open, everything seen through B
-turns B's ceiling colour, just inside its top, into B's floor colour, just
-inside its bottom, so the toggles in between add up to ceiling ⊕ floor.
-Where B is closed (its top meets its bottom) none of those rows exist, and
-all of it lands on one row: the closing line's colour ⊕ `cbfb`.
-
 It's quicker than it sounds, because most lines never look at a column:
 
 - **No colour.** A plain line with nothing to change is dropped.
 - **The screen's edge.** If the visit's bound on the line's side is the
   screen's edge all along, the columns the near clip cut off are known
   without looking: off the top, one flat run on row 0; off the bottom, the
-  junk row, which nobody sees.
+  junk row, which nobody sees. Such a bound isn't in `top` or `bot` at all:
+  the visit's extent, 0 or 64, says so, and a scan reads a constant row of
+  0s or 64s in its place. On the 6502 that's just where its `CMP` points.
 - **The fast path.** Each visit keeps its bounds' extents: `tmax`, at least
   the lowest top, and `bmin`, at most the highest bottom. A straight line's
   rows only run one way, so over a span they're all between its row at the
@@ -791,7 +813,7 @@ It's quicker than it sounds, because most lines never look at a column:
   plotter whole. 72% of the lines clipped on map 0 do.
 - **The scan,** for the rest: a step and two compares a column, gathering
   visible stretches for the line plotters and hidden ones, which sit on one
-  bound row in one colour, for the flat plotter.
+  bound row, in the line's colour, for the flat plotter.
 
 A bound line with no room for the child in a column (the floor line on or
 above the top, or the ceiling line on or below the child's bottom) merges
@@ -876,19 +898,19 @@ cell 6, the eye's       columns 0..128
     cell 1              115..128    forms cell 1's bottom, rows 57..64
       step v6-v7, into              back up: the riser's foot is past the
       cell 3 again      115..128    screen, so only its top line shows
-        wall v1-v2      115..128   made again for this visit
+        wall v1-v2      115..128   its lines kept from the first visit
 ```
 
 ![The toggle buffer and the frame](hiw-screen.svg)
 
 Four cells, five visits, eight edges processed (two of them soft), eleven
-lines. Cell 6's wall is so near that both its lines run off the screen: its
+lines, nine of them made. Cell 6's wall is so near that both its lines run off the screen: its
 ceiling line ends up as one run of toggles along row 0, its floor line lands
 in the junk row, and the fill makes the whole strip wall. The big wall's two
-lines go straight to the plotter on the fast path. Cell 3 is seen twice, so
-its wall's two lines are made twice: once for columns 90 to 115, through
-cell 2, and again for 115 to 128, through cell 1, carried on from the same
-vertices with a multiply.
+lines go straight to the plotter on the fast path. Cell 3 is seen twice, for
+columns 90 to 115 through cell 2 and for 115 to 128 through cell 1. Its
+wall runs on past 115, so the first visit keeps its two lines, and the
+second carries them on with a multiply and makes none.
 
 ## The tables
 

@@ -295,12 +295,6 @@ void pt_arith_init(void)
 
 // ---- angles and logs ----
 
-uint16_t pt_sinq(uint8_t j)
-{
-    RC_ASSERT(inited_);
-    return j >= PT_SIN_ONE ? 256 : sinq_[j];
-}
-
 uint16_t pt_log2(uint16_t x)
 {
     RC_ASSERT(inited_);
@@ -427,10 +421,10 @@ int16_t pt_logsin(uint16_t a)
     return pt_i16(-(int32_t)lsec16_[255 - j]);
 }
 
-uint8_t pt_view_col(int8_t v)
+uint8_t pt_view_col(uint8_t u)
 {
     RC_ASSERT(inited_);
-    return a2c_[(uint8_t)v ^ 0x80];
+    return a2c_[u];
 }
 
 // ---- directions ----

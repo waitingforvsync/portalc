@@ -31,6 +31,11 @@
 #define PT_SPRITE_NEAR_L (5 * 256)     // sprites nearer than 32 units (main's
                                        // limit: 16x for the boulder and the
                                        // obelisk) aren't drawn; a depth's log
+#define PT_MAX_KEPT 8                  // sides' lines kept in a frame, for later
+                                       // visits; entry 0 is null. The other 7
+                                       // take every keep in 98.6% of map 0's
+                                       // frames (1.4 a frame, 15 the most seen);
+                                       // past that a later visit makes them again
 
 // A plotted run, as the unplotter wants it: columns [x0, x1) from the row at
 // x0 (u8.8, the rounding half in), stepping by g (plot.h's gradient). Six
@@ -41,20 +46,20 @@ typedef struct pt_rec {
     uint16_t g;
 } pt_rec;
 
-// A height as an edge's lines see it.
+// A height as an edge's lines see it, m = |z - eye_z| in the map's 8-unit z
+// steps.
 typedef struct pt_height {
-    uint8_t m;            // |z - eye_z|, in the map's 8-unit z steps
     uint8_t below;        // z below the eye (z increases downwards)
     int16_t l;            // 256 log2(64 * 8m) + 8 * 256: less a depth's log,
-                          // the log of a row's offset from the middle, u8.8
-                          // (0 for m = 0, the eye's own height)
+                          // the log of a row's offset from the middle, u8.8.
+                          // 0 for m = 0, the eye's own height (otherwise it's
+                          // 17 * 256 at least, so its high byte tells)
 } pt_height;
 
-// A line kept in its cell's visit record for a later visit: its columns on
-// the screen, [x0, x1), its row at x0 (u8.8, the rounding half in), its
-// gradient (sign bit + u7.8), and a row at or past its last column, for the
-// fast path. Its side of the screen and its colour come from its height and
-// its edge. 7 bytes.
+// A line kept for a later visit: its columns on the screen, [x0, x1), its
+// row at x0 (u8.8, the rounding half in), its gradient (sign bit + u7.8),
+// and a row at or past its last column, for the fast path. Its side of the
+// screen and its colour come from its height and its edge. 7 bytes.
 typedef struct pt_kept {
     uint8_t x0, x1;
     uint16_t y;
@@ -63,15 +68,17 @@ typedef struct pt_kept {
 } pt_kept;
 
 // The most lines an edge makes: one at each of its two cells' ceilings and
-// floors, which are also the kept lines' slots
+// floors, which are also a kept side's slots
 #define PT_KEPT 4
 
 // A visited cell, made when an edge into it is first met and shared by
 // every later visit that frame. Visits of one cell run in increasing x and
 // never nest (a ray crosses a convex cell once): a later visit resumes on the
 // side the last one stopped on, and that side's lines are the same as last
-// time, so the record keeps them. That's all it keeps: everything else a
-// walk needs it makes again on each visit (render.c's pt_walk). The portal's
+// time. So a walk that stops on a side running on past its portal keeps the
+// side's lines in the pool for the next, and the record points at them.
+// That's all it keeps besides the cell's heights: everything else a walk
+// needs it makes again on each visit (render.c's pt_walk). The portal's
 // bounds are the renderer's per-column rows, over its columns. The walk
 // recurses on the index alone.
 typedef struct pt_visit {
@@ -81,12 +88,9 @@ typedef struct pt_visit {
     uint8_t xr;           // the right column of the portal last walked through;
                           // 0 until first walked
     uint8_t inst;         // its sprite as seen this frame, 0 for none
-    pt_kept lines[PT_KEPT];    // side k's, by height: the cell's ceiling, the next
-                               // cell's, the cell's floor, the next cell's; none
-                               // kept when lines[0].x0 is PT_KEPT_NONE
+    uint8_t kept;         // side k's lines in the pool, 0 for none
+    pt_height hc, hf;     // the cell's ceiling and floor, as its lines see them
 } pt_visit;
-
-#define PT_KEPT_NONE 255    // lines[0].x0 with none kept: a column is 0..128
 
 // A sprite seen this frame: where it goes on the screen, its depth for the
 // order, and the rows it shows in each column it covers, gathered from its
@@ -117,6 +121,8 @@ typedef struct pt_render {
     // camera for the frame being rendered
     uint8_t eye_z;           // in 8-unit z steps, like the cell heights
     uint16_t cam4;           // facing, in 1024ths of a turn (the camera's 256ths, x4)
+    uint16_t vl;             // the view's left edge, cam4 - 128 (10 bits): the
+                             // walk measures vertices' angles from it
     uint8_t cam_cell;
     pt_vcache *vc;           // the app's vertex cache, shared with the camera
 
@@ -133,11 +139,14 @@ typedef struct pt_render {
     uint8_t cell_visit[PT_MAX_CELLS];    // each cell's visit record, 0 = none
     uint8_t depth_high;              // deepest walk nesting across frames, for stats
 
+    // the sides' lines kept for later visits, by slot, as the visits point
+    pt_kept kept[PT_MAX_KEPT][PT_KEPT];
+    uint8_t num_kept;
+
     // the frame's plotted runs, for the unplotter, and each byte column's
     // last toggled row + 1, for the fill
     pt_rec recs[PT_MAX_RECS];
     uint8_t num_recs;
-    uint8_t recs_high;               // high-water mark across frames, for stats
     uint8_t lastp1[PT_SCREEN_WIDTH / 4];
 
     // the sprites seen, the order they're drawn in, far to near, and their
@@ -148,7 +157,6 @@ typedef struct pt_render {
     uint8_t num_order;
     uint8_t clipmem[PT_CLIP_POOL];
     uint16_t clip_used;
-    uint16_t clip_high;              // high-water mark across frames, for stats
 
     bool sprites;                    // draw sprites
 } pt_render;

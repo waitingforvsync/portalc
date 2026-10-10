@@ -26,11 +26,16 @@
 #define HIT_EPS 2    // whole units: truncation slack for the approach test
 
 typedef struct cand {
-    uint8_t cell;
-    uint8_t k;         // the side's ring position
+    uint8_t v;         // the wall's start vertex
     uint16_t angle;    // its direction
+    int16_t len;       // the foot's cap along it, its edge's len8 in units
     uint8_t capped;    // neighbour's wall: only hits in front, foot on segment
 } cand;
+
+// A tick's move changes a wall's distance by under 12 units, plus a unit
+// for the position's truncation and one for each product's rounding: a wall
+// farther than this at the start of the move can't be met by it.
+#define FAR_SLACK 16
 
 // Collect a corner vertex, keeping the list free of duplicates.
 static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
@@ -56,25 +61,28 @@ static uint16_t side_angle(const pt_map *m, const pt_cell *c, uint8_t k)
 // out of range. The sub-unit position fraction exists only so the move
 // vector can accumulate diagonal steps; against a radius of PT_CAM_RADIUS
 // units the truncated unit is noise.
-static int16_t side_across(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t a,
-                           uint16_t x, uint16_t y)
+static int16_t side_across(const pt_map *m, uint8_t v0, uint16_t a, uint16_t x, uint16_t y)
 {
-    pt_vertex v = m->verts[pt_map_side(m, c, k)->v];
+    pt_vertex v = m->verts[v0];
     return pt_dot_dir(pt_i16((int32_t)x - v.x), pt_i16((int32_t)y - v.y), (uint16_t)(a + 256u));
-}
-
-static int16_t side_along(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t a, uint16_t x,
-                          uint16_t y)
-{
-    pt_vertex v = m->verts[pt_map_side(m, c, k)->v];
-    return pt_dot_dir(pt_i16((int32_t)x - v.x), pt_i16((int32_t)y - v.y), a);
 }
 
 // The foot of the perpendicular lies on the segment (capped a few units
 // short at the far end: the endpoint regions belong to the posts).
-static bool foot_in_range(const pt_map *m, const pt_cell *c, uint8_t k, int16_t t)
+static bool foot_in_range(const pt_map *m, const cand *cd, uint16_t x, uint16_t y)
 {
-    return t >= 0 && t <= pt_i16((int32_t)m->edges[pt_map_side(m, c, k)->edge].len8 << 3);
+    pt_vertex v = m->verts[cd->v];
+    int16_t t = pt_dot_dir(pt_i16((int32_t)x - v.x), pt_i16((int32_t)y - v.y), cd->angle);
+    return t >= 0 && t <= cd->len;
+}
+
+// The wall at position k of cell c's ring as a candidate: what the tests
+// above need of it, looked up once.
+static cand make_cand(const pt_map *m, const pt_cell *c, uint8_t k, uint8_t capped)
+{
+    const pt_side *sd = pt_map_side(m, c, k);
+    return (cand) {.v = sd->v, .angle = side_angle(m, c, k),
+                   .len = pt_i16((int32_t)m->edges[sd->edge].len8 << 3), .capped = capped};
 }
 
 // a * b for a byte b, known to fit 16 bits: two lookups, the high
@@ -184,62 +192,6 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
     if (input & PT_IN_TURNR)
         c->angle = (uint8_t)(c->angle + PT_CAM_TURN_SPEED);
 
-    const pt_cell *cc = &m->cells[c->cell];
-    uint16_t px = pt_u16((int32_t)(c->x >> 8));
-    uint16_t py = pt_u16((int32_t)(c->y >> 8));
-
-    // 0. candidate walls (ours, plus every overlapped neighbour's) and the
-    // corner vertices at their endpoints, collected while the ring (and so
-    // the wall's end vertex) is in hand
-    cand cands[MAX_CAND];
-    uint8_t nc = 0;
-    uint8_t posts[MAX_CAND];
-    uint8_t np = 0;
-    for (uint8_t k = 0; k <= cc->num; k++) {
-        const pt_side *sd = pt_map_side(m, cc, k);
-        uint16_t a = side_angle(m, cc, k);
-        if (sd->adj == 0) {
-            RC_ASSERT(nc < MAX_CAND);
-            cands[nc++] = (cand) {.cell = c->cell, .k = k, .angle = a, .capped = 0};
-            add_post(posts, &np, sd->v);
-            add_post(posts, &np, pt_map_side_v1(m, cc, k));
-        } else if (side_across(m, cc, k, a, px, py) < PT_CAM_RADIUS) {
-            const pt_cell *nb = &m->cells[sd->adj];
-            for (uint8_t j = 0; j <= nb->num; j++) {
-                const pt_side *nd = pt_map_side(m, nb, j);
-                if (nd->adj == 0) {
-                    RC_ASSERT(nc < MAX_CAND);
-                    cands[nc++] = (cand) {
-                        .cell = sd->adj, .k = j, .angle = side_angle(m, nb, j), .capped = 1};
-                    add_post(posts, &np, nd->v);
-                    add_post(posts, &np, pt_map_side_v1(m, nb, j));
-                }
-            }
-        }
-    }
-
-    // 1. resolve: restore the invariant if a slide or transition left us too
-    // close; neighbour walls and posts count too, or a corner shared with
-    // the next cell wedges the slide before its own resolve can see it
-    for (uint8_t i = 0; i < nc; i++) {
-        const pt_cell *wc = &m->cells[cands[i].cell];
-        uint8_t k = cands[i].k;
-        uint16_t a = cands[i].angle;
-        int16_t across = side_across(m, wc, k, a, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
-        if (across >= PT_CAM_RADIUS)
-            continue;
-        if (cands[i].capped && across < 0)
-            continue;
-        if (!foot_in_range(m, wc, k,
-                           side_along(m, wc, k, a, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)))))
-            continue;
-        // the push: whole units shifted to s.8 along the inward normal, the
-        // direction a quarter turn on from the side's
-        RC_ASSERT(PT_CAM_RADIUS - across <= 127);
-        pt_xy pv = pt_dir(pt_i16((PT_CAM_RADIUS - (int32_t)across) << 8), (uint16_t)(a + 256u));
-        c->x = apply(c->x, pv.x);
-        c->y = apply(c->y, pv.y);
-    }
     // desired displacement from the input: the facing step, exact (a whole
     // number of units along the camera's angle, four 1024ths a step)
     pt_xy f = pt_dir((int16_t)(PT_CAM_MOVE_SPEED << 8), (uint16_t)(c->angle << 2));
@@ -264,6 +216,77 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
         mx = pt_i16((int32_t)mx + fy);
         my = pt_i16((int32_t)my - fx);
     }
+
+    // standing still where the last tick did, its resolve pushing nothing:
+    // this one's would find nothing either, and the cell's the same
+    if (mx == 0 && my == 0 && c->settled)
+        return;
+
+    const pt_cell *cc = &m->cells[c->cell];
+    uint16_t px = pt_u16((int32_t)(c->x >> 8));
+    uint16_t py = pt_u16((int32_t)(c->y >> 8));
+
+    // 0. candidate walls (ours, plus every overlapped neighbour's) and the
+    // corner vertices at their endpoints, collected while the ring (and so
+    // the wall's end vertex) is in hand
+    cand cands[MAX_CAND];
+    uint8_t nc = 0;
+    uint8_t posts[MAX_CAND];
+    uint8_t np = 0;
+    for (uint8_t k = 0; k <= cc->num; k++) {
+        const pt_side *sd = pt_map_side(m, cc, k);
+        uint16_t a = side_angle(m, cc, k);
+        if (sd->adj == 0) {
+            RC_ASSERT(nc < MAX_CAND);
+            cands[nc++] = make_cand(m, cc, k, 0);
+            add_post(posts, &np, sd->v);
+            add_post(posts, &np, pt_map_side_v1(m, cc, k));
+        } else if (side_across(m, sd->v, a, px, py) < PT_CAM_RADIUS) {
+            const pt_cell *nb = &m->cells[sd->adj];
+            for (uint8_t j = 0; j <= nb->num; j++) {
+                const pt_side *nd = pt_map_side(m, nb, j);
+                if (nd->adj == 0) {
+                    RC_ASSERT(nc < MAX_CAND);
+                    cands[nc++] = make_cand(m, nb, j, 1);
+                    add_post(posts, &np, nd->v);
+                    add_post(posts, &np, pt_map_side_v1(m, nb, j));
+                }
+            }
+        }
+    }
+
+    // 1. resolve: restore the invariant if a slide or transition left us too
+    // close; neighbour walls and posts count too, or a corner shared with
+    // the next cell wedges the slide before its own resolve can see it. The
+    // slide below wants each candidate's distance from where it starts:
+    // these, if nothing pushes, else made again on first need (INT16_MIN
+    // marks not yet made; no distance comes near it)
+    int16_t cur_y[MAX_CAND];
+    bool pushed = false;
+    for (uint8_t i = 0; i < nc; i++) {
+        uint16_t a = cands[i].angle;
+        uint16_t qx = pt_u16((int32_t)(c->x >> 8));
+        uint16_t qy = pt_u16((int32_t)(c->y >> 8));
+        int16_t across = side_across(m, cands[i].v, a, qx, qy);
+        cur_y[i] = across;
+        if (across >= PT_CAM_RADIUS)
+            continue;
+        if (cands[i].capped && across < 0)
+            continue;
+        if (!foot_in_range(m, &cands[i], qx, qy))
+            continue;
+        // the push: whole units shifted to s.8 along the inward normal, the
+        // direction a quarter turn on from the side's
+        RC_ASSERT(PT_CAM_RADIUS - across <= 127);
+        pt_xy pv = pt_dir(pt_i16((PT_CAM_RADIUS - (int32_t)across) << 8), (uint16_t)(a + 256u));
+        c->x = apply(c->x, pv.x);
+        c->y = apply(c->y, pv.y);
+        pushed = true;
+    }
+    if (pushed)
+        for (uint8_t i = 0; i < nc; i++)
+            cur_y[i] = INT16_MIN;
+    c->settled = !pushed && mx == 0 && my == 0;
     if (mx == 0 && my == 0) {
         transition(c, m, vc);    // the resolve may still have pushed it
         return;
@@ -274,13 +297,9 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
     // brings the centre closer than it already is, so a tangent graze never
     // wedges. With no wall in the way, a corner vertex may still deflect
     // the move; the next iteration then re-checks the walls.
-    // Each candidate's distance at the current position is fixed through the
-    // slide iterations: computed on first need, then reused (INT16_MIN
-    // marks not yet computed; no distance comes near it)
-    int16_t cur_y[MAX_CAND];
-    for (uint8_t i = 0; i < nc; i++)
-        cur_y[i] = INT16_MIN;
     bool blocked = false;
+    uint16_t sx = pt_u16((int32_t)(c->x >> 8));    // where the move starts
+    uint16_t sy = pt_u16((int32_t)(c->y >> 8));
     for (uint8_t iter = 0; iter < 3; iter++) {
         uint16_t qx = pt_u16((int32_t)(apply(c->x, mx) >> 8));
         uint16_t qy = pt_u16((int32_t)(apply(c->y, my) >> 8));
@@ -288,18 +307,18 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
         uint16_t hit = 0;
         bool have_hit = false;
         for (uint8_t i = 0; i < nc; i++) {
-            const pt_cell *wc = &m->cells[cands[i].cell];
-            uint8_t k = cands[i].k;
+            if (cur_y[i] != INT16_MIN && cur_y[i] >= PT_CAM_RADIUS + FAR_SLACK)
+                continue;    // too far to reach this tick
             uint16_t a = cands[i].angle;
-            int16_t across = side_across(m, wc, k, a, qx, qy);
+            int16_t across = side_across(m, cands[i].v, a, qx, qy);
             if (cands[i].capped && across < 0)
                 continue;
             if (across >= worst)
                 continue;
-            if (!foot_in_range(m, wc, k, side_along(m, wc, k, a, qx, qy)))
+            if (!foot_in_range(m, &cands[i], qx, qy))
                 continue;
             if (cur_y[i] == INT16_MIN)
-                cur_y[i] = side_across(m, wc, k, a, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
+                cur_y[i] = side_across(m, cands[i].v, a, sx, sy);
             if (across + HIT_EPS >= cur_y[i])
                 continue;
             worst = across;

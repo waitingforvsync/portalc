@@ -50,16 +50,6 @@ typedef struct pt_xy {
 // angle is a world angle less the camera's, and in view when it's in
 // [-128, 128): 45 degrees either side. Logs are 256 * log2, in 16 bits.
 
-// sin of j 256ths of a right angle at scale 256: 0..256. From PT_SIN_ONE on
-// the sine is 256, so a multiply by it compares the index first and skips
-// the table and the multiply; below that, only index 0 reads 0:
-//   CPX #PT_SIN_ONE : BCS one : LDA sinq,X : BEQ zero : ...
-// A cosine is sin(256 - a): 256 for a <= 256 - PT_SIN_ONE, and otherwise
-// never 0, read one entry on at index a EOR $FF:
-//   CPX #256 - PT_SIN_ONE + 1 : BCC one : TXA : EOR #$FF : TAY : LDA sinq + 1,Y
-#define PT_SIN_ONE 246
-uint16_t pt_sinq(uint8_t j);
-
 // 256 * log2(x) for x >= 1, within ~0.2% of x plus the table's half step:
 // the 8 bits under x's leading one, rounded, index a fraction table.
 uint16_t pt_log2(uint16_t x);
@@ -109,15 +99,27 @@ uint16_t pt_lsec16(uint8_t i);
 // -2,137 a half step off the axis.
 int16_t pt_logsin(uint16_t a);
 
-// The screen column of view angle v's middle, 0..128: the first column whose
-// centre lies right of it.
-uint8_t pt_view_col(int8_t v);
+// The screen column of the middle of step u of the view, counted from its
+// left edge (view angle u - 128), 0..128: the first column whose centre
+// lies right of it.
+uint8_t pt_view_col(uint8_t u);
 
 // ---- directions ----
 // Multiplies by the sine and cosine of a world angle in 1024ths, each
 // product rounded to nearest, from the quarter table (its 1.0 compared,
 // never looked up). An edge's frame is two dot products: along its
 // direction a, and across it at a + 256, towards its cell's inside.
+
+// The quarter table, sinq, is sin of j 256ths of a right angle at scale
+// 256: 0..256. From PT_SIN_ONE on the sine is 256, so a multiply by it
+// compares the index first and skips the table and the multiply; below
+// that, only index 0 reads 0:
+//   CPX #PT_SIN_ONE : BCS one : LDA sinq,X : BEQ zero : ...
+// A cosine is sin(256 - a): 256 for a <= 256 - PT_SIN_ONE, and otherwise
+// never 0, read one entry on at index a EOR $FF:
+//   CPX #256 - PT_SIN_ONE + 1 : BCC one : TXA : EOR #$FF : TAY : LDA sinq + 1,Y
+// pt_mul_sin(256, j) reads it back.
+#define PT_SIN_ONE 246
 
 // v sin a and v cos a, in v's own fixed point.
 int16_t pt_mul_sin(int16_t v, uint16_t a);

@@ -7,6 +7,7 @@
 #ifndef PT_CAMERA_H_
 #define PT_CAMERA_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "arith.h"
@@ -39,6 +40,7 @@ typedef struct pt_camera {
     uint32_t y;       // u16.8
     uint8_t angle;    // 256ths of a turn; 0 faces world +x
     uint8_t cell;
+    bool settled;     // the last tick stood still, and its resolve pushed nothing
 } pt_camera;
 
 // Place the camera, and have the vertex cache look from there; the position

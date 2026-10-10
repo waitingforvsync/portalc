@@ -102,13 +102,13 @@ RC_TEST_STEP(arith, packed_tables, fix)
     (void)fix;
     for (uint32_t j = 0; j < 256; j++) {
         uint16_t want = (uint16_t)lround(256.0 * sin(j * (PI / 512.0)));
-        RC_CHECK(pt_sinq((uint8_t)j), ==, want);
+        RC_CHECK(pt_mul_sin(256, (uint16_t)j), ==, (int16_t)want);    // the table, read back
         RC_CHECK(want == 256, ==, j >= PT_SIN_ONE);    // where the sine reaches 1
     }
     for (int32_t v = -128; v < 128; v++) {
         double mid = v < 0 ? -v - 0.5 : v + 0.5;
         RC_CHECK(pt_lsec((int8_t)v), ==, (uint8_t)lround(-256.0 * log2(cos(mid * (PI / 512.0)))));
-        RC_CHECK(pt_view_col((int8_t)v), ==,
+        RC_CHECK(pt_view_col((uint8_t)(v + 128)), ==,
                  (uint8_t)lround(64.0 + 64.0 * tan((v + 0.5) * (PI / 512.0))));
     }
 }

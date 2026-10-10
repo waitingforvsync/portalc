@@ -84,16 +84,24 @@ RC_TEST(mode5, dither_alignment)
 
 RC_TEST(mode5, junk_rows)
 {
-    // rows just off the screen land in the junk character rows either side,
-    // leaving the screen itself untouched
+    // a run starts on the screen or in the junk row below it, and stepping
+    // off either edge lands in the junk character rows either side, leaving
+    // the screen itself untouched
     static uint8_t mem[PT_FB_GUARD + PT_FB_BYTES + PT_FB_GUARD];
     uint8_t *fb = mem + PT_FB_GUARD;
     pt_pattern red = pt_shade(PT_SH_RRRR);
-    for (uint8_t col = 0; col < PT_SCREEN_WIDTH; col++) {
-        pt_mode5_plot(fb, col, 0xFF, red);                                  // row -1
-        pt_mode5_plot(fb, col, (uint8_t)-PT_FB_GUARD_ROWS, red);            // the top junk row
-        pt_mode5_plot(fb, col, PT_SCREEN_HEIGHT, red);
-        pt_mode5_plot(fb, col, PT_SCREEN_HEIGHT + PT_FB_GUARD_ROWS - 1, red);    // the last
+    for (uint8_t bc = 0; bc < PT_SCREEN_WIDTH / 4; bc++) {
+        pt_mode5_cur up = pt_mode5_at(bc, 0);
+        pt_mode5_up(&up);
+        pt_mode5_eor(fb, up, 0xFF, red);                                    // row -1
+        for (uint8_t i = 1; i < PT_FB_GUARD_ROWS; i++)
+            pt_mode5_up(&up);
+        pt_mode5_eor(fb, up, 0xFF, red);                                    // the top junk row
+        pt_mode5_cur down = pt_mode5_at(bc, PT_SCREEN_HEIGHT);
+        pt_mode5_eor(fb, down, 0xFF, red);                                  // row H
+        for (uint8_t i = 1; i < PT_FB_GUARD_ROWS; i++)
+            pt_mode5_down(&down);
+        pt_mode5_eor(fb, down, 0xFF, red);                                  // the last
     }
     for (uint32_t i = 0; i < PT_FB_BYTES; i++)
         RC_CHECK(fb[i], ==, (uint8_t)0);

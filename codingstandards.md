@@ -14,15 +14,23 @@ in `src/`, which models it. Read this before writing any.
 - Labels lowercase. Memory-map constants of our own are upper case
   (`SCREEN_A`, `T_ORG`).
 - Every routine braced, `{ }`, and anything else where it makes sense.
-- A routine's header comment goes above it, in `\\` lines, brief, then a
-  blank line, then its label.
-- `ZA_AUTO`s straight after the open brace, then a blank line, then the
-  code. A `ZA_AUTO` can have a trailing comment: in, out or local, and what
-  it is.
-- A routine's parts are separated by a blank line, a single `\ ` comment
-  saying what comes next, and another blank line.
-- Trailing `;` comments where they help, all on one column: column 40, in
-  every file.
+- Every whole-line comment is `\\`: the file's header, the notes between
+  routines, a routine's header and its parts'. Only trailing comments use
+  `;`.
+- A routine's header comment goes above it, brief, then a blank line, then
+  its label.
+- Declare each `ZA_AUTO` next to where it's used: after the open brace for
+  one the whole routine uses, after a part's `\\` comment for one only that
+  part uses. Every part gets its own, named for what it holds there: never
+  one variable reused for unrelated jobs. Baron shares the bytes wherever
+  the lives don't overlap.
+- `ZA_AUTO`s, then a blank line, then the code. A `ZA_AUTO` can have a
+  trailing comment: in, out or local, and what it is.
+- A routine's parts are separated by a blank line, a `\\` comment saying
+  what comes next, and another blank line.
+- Spaces, never tabs.
+- Trailing `;` comments where they help, all on one column, far enough out
+  to clear the code.
 - Comments terse throughout.
 
 ```
@@ -32,7 +40,9 @@ in `src/`, which models it. Read this before writing any.
 {
     ZA_AUTO1 strips                     ; local: byte columns left
 
-    \ set up
+    \\ set up
+
+    ZA_AUTO1 width                      ; local: the plotted width
 
     JSR plot_setup
     LDA plot_setup.scale+1:BNE engine   ; 1x and up
@@ -47,13 +57,20 @@ in `src/`, which models it. Read this before writing any.
 - `ZA_ENTRY` only on roots, routines nothing calls (a `*RUN` entry point).
   A routine reached by a `JSR` or `JMP` gets no marker.
 - `ZA_INTERRUPT` on every interrupt or `BRK` handler.
+- `ZA_UNREACHABLE` straight after every branch that's always taken (`CLC:BCC
+  start`, any branch on a known flag), after a `JSR` that never returns, and
+  after a `BRK`'s message. It prunes the path that never happens, so Baron
+  holds nothing live for it; without it the allocator packs worse.
 - `ZA_WIPE` straight after a loop that wipes zero page wholesale.
 - `ZA_INDEXEDBY` on an indexed access whose index set is known.
 - `ZA_DISCARD` before a loop that rebuilds a multi-byte variable through
   indexed stores: an indexed store proves nothing.
-- Check the allocation by hand in the `-v` listing's `[auto]` lines: no two
-  variables share a byte while both are live. Baron's allocator has had
-  bugs before.
+- Check the allocation by hand in the `-v` listing's `[auto]` lines, every
+  build that changes them: no two variables share a byte while both are
+  live. Baron's allocator has had bugs before.
+- Baron takes an OS call as touching nothing in the pool, but the pool runs
+  over the OS's zero page. Until the loader takes the machine over, nothing
+  may be live across an OS call or an interrupt in the OS's bytes.
 
 ### Hardware
 
@@ -85,14 +102,21 @@ The rest:
 - Follow the flags through the code, C most of all:
   - hoist `CLC`/`SEC` out of a loop whose body never touches C and whose
     exit leaves it known;
-  - a branch on a known flag is a `JMP`, a byte shorter;
+  - a branch on a known flag is a `JMP`, a byte shorter (with a
+    `ZA_UNREACHABLE` after it);
   - the instructions that keep C: loads, stores, transfers, `INX`/`DEX`/
     `INY`/`DEY`, `INC`/`DEC`, `AND`/`ORA`/`EOR`, `BIT`;
   - a value can live in C: never let a `CMP` sit between an `ADC` and the
     `ROR` that wants its carry;
-  - a known C folds a constant: `EOR #&FF:ADC #k+1` with C clear is k - x.
-- Keep the hot byte in A in shift loops: `LSR q+1:ROR A` beats `ROR q` by 3
-  cycles a bit, stored once at the end.
+  - a known C folds a constant: `EOR #&FF:ADC #k+1` with C clear is k - x;
+  - a shift's carry is known when the bit it shifts out is: three `ROL dv+1`
+    into a byte that started at 0 leave C clear, so the add after needs no
+    `CLC`.
+- Never shift a multi-byte value in memory while A is free: hold one byte
+  in A, `ASL A:ROL dv+1` rather than `ASL dv:ROL dv+1`. Hold the byte the
+  next instruction wants, the low byte where an add follows. In a loop it's
+  3 cycles a bit better, `LSR q+1:ROR A` against `ROR q`, stored once at the
+  end.
 - Hot-path code like multiplies goes inline, as a `MACRO`.
 
 ### Memory

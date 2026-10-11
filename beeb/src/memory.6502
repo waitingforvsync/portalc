@@ -1,19 +1,19 @@
-\ memory.6502 - where everything lives once PORTAL has the machine: the zero
-\ page pool, main RAM's regions, and the pools of workspace in it (virtual
-\ sections, claimed piece by piece where they're used).
-\
-\   &0000  zero page: the pool, bar &FC
-\   &0100  the stack
-\   &0200  the OS's vectors and workspace: left alone (IRQ1V)
-\   &0400  Workspace: free throughout, once the loader has read !BOOT's bank
-\   &0D00  the NMI vector: an RTI, put there by the loader
-\   &0E00  Scratch: free once the loader's done (PORTAL loads at &1200)
-\   &3000  main RAM's code
-\   &3C00  the tables, made by the loader
-\   &4F00  T, the line buffer: 16 character rows, then a junk row
-\   &6000  screen A
-\   &7000  screen B
-\   &8000  sideways RAM's code, in the bank paged in for good
+\\ memory.6502 - where everything lives once PORTAL has the machine: the zero
+\\ page pool, main RAM's regions, and the pools of workspace in it (virtual
+\\ sections, claimed piece by piece where they're used).
+\\
+\\   &0000  zero page: the pool, bar &FC
+\\   &0100  the stack
+\\   &0200  the OS's vectors and workspace: left alone (IRQ1V)
+\\   &0400  Workspace: free throughout, once the loader has read !BOOT's bank
+\\   &0D00  the NMI vector: an RTI, put there by the loader
+\\   &0E00  Scratch: free once the loader's done (PORTAL loads at &1200)
+\\   &3000  main RAM's code
+\\   &3C00  the tables, made by the loader
+\\   &4F00  T, the line buffer: 16 character rows, then a junk row
+\\   &6000  screen A
+\\   &7000  screen B
+\\   &8000  sideways RAM's code, in the bank paged in for good
 
 ZA_POOL &00..&FB                        ; &FC: the MOS's IRQ entry saves A there
 

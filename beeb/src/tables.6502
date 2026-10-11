@@ -1,8 +1,13 @@
-\ tables.6502 - the tables, made by the loader exactly as arith.c makes
-\ them: the normalisers an octave at a time, every smooth table from a bit a
-\ delta (packed here, at assembly time, from its ideal values), lsec16's
-\ second half from logs, the quarter squares by recurrence, and rpost by
-\ restoring division.
+\\ tables.6502 - the tables, made by the loader exactly as arith.c makes
+\\ them: the normalisers an octave at a time, every smooth table from a bit a
+\\ delta (packed here, at assembly time, from its ideal values), lsec16's
+\\ second half from logs, the quarter squares by recurrence, and rpost by
+\\ restoring division.
+
+RPOST_START = POST_NEAR DIV 8           ; rpost's first index, 32
+RPOST_END = CAM_RADIUS*CAM_RADIUS DIV 8 ; its end, 200: the camera's circle
+RPOST_DIVIDEND = POST_SCALE DIV 8-1     ; (see make_tables), 5119
+ASSERT POST_SCALE MOD 8 == 0 AND HI(RPOST_DIVIDEND) < RPOST_START, "rpost: a byte quotient over i"
 
 SECTION Tables
 .nrm        SKIP &100                   ; b << lz(b): the byte normalised (0: unused)
@@ -19,19 +24,16 @@ SECTION Tables
 .sq1hi      SKIP &200
 .sq2lo      SKIP &200                   ; (i-255)*(i-255)/4
 .sq2hi      SKIP &200
-.rpostmem   SKIP 200-32                 ; 1.25 * 2^15 / d2, by d2 / 8, from 256
+.rpostmem   SKIP RPOST_END-RPOST_START  ; POST_SCALE / d2, by d2 / 8
 ENDSECTION
 
 lsec = lsec16lo                         ; its first 128: under 45 degrees, bytes
-rpost = rpostmem-32
+rpost = rpostmem-RPOST_START
 lsx = T_ORG                             ; the loader's, for lsec16, in T before it's cleared
-LOG_STEP = 2137                         ; -256 log2(pi / 1024)
 
-\ The ideal values, as arith.c has them. Rounding is floor(x + 0.5), as
-\ there, not ROUND.
+\\ The ideal values, as arith.c has them.
 
 FUNCTION log2(x) = LN(x)/LN(2)
-FUNCTION rounded(x) = FLOOR(x+0.5)
 FUNCTION f_sinq(j) = 256*SIN(j*(PI/512))
 FUNCTION f_atan(i) = ATAN((i+0.5)/256)*(512/PI)
 FUNCTION f_lhyp(i) = 128*log2(1+((i+0.5)/256)*((i+0.5)/256))
@@ -43,10 +45,21 @@ FUNCTION f_lsx(j)
 = -256*log2(SIN(x)/x)
 FUNCTION f_a2c(k) = 64+64*TAN((k-128+0.5)*(PI/512))
 
-\ A bit a delta: a table's first entry, then a bit for each delta after it,
-\ over a base for each byte of bits. The first byte holds the (n - 1) MOD 8
-\ odd deltas, under a set bit; every other, 8. A byte whose deltas fit the
-\ one before's base keeps it, so the bases run monotonically.
+ideal_logf = ROUND(f_logf(0..255))
+ideal_expf = ROUND(f_expf(0..255))
+ideal_atan = FLOOR(f_atan(0..255))
+ideal_lhyp = ROUND(f_lhyp(0..255))
+ideal_sinq = ROUND(f_sinq(0..255))
+ideal_a2c = ROUND(f_a2c(0..255))
+ideal_lsec = ROUND(f_lsec(0..127))
+ideal_lsx = ROUND(f_lsx(0..127))
+
+LOG_STEP = ROUND(-256*log2(PI/1024))    ; 2137.2, for lsec16: a step's angle, its log negated
+
+\\ A bit a delta: a table's first entry, then a bit for each delta after it,
+\\ over a base for each byte of bits. The first byte holds the (n - 1) MOD 8
+\\ odd deltas, under a set bit; every other, 8. A byte whose deltas fit the
+\\ one before's base keeps it, so the bases run monotonically.
 
 FUNCTION pk_deltas(v) = v[1..]-v[..LEN(v)-2]
 
@@ -91,53 +104,78 @@ FUNCTION pk_bits(gs, bs, k, i)
     ENDIF
 = r
 
-\\ Unpack table from v, its ideal values, packed here. The bytes of bits go
-\\ last first, so X counts them down, and the set bit, carried round in C,
-\\ empties each in turn.
+\\ The first entry a byte of bits makes: the first byte's deltas make 1 to
+\\ k, and byte b's the 8 after k + 8(b - 1).
 
-MACRO UNPACK table, v
-    n = LEN(v)
-    k = (n-1) MOD 8
-    nb = (n-1) DIV 8+1
-    gs = pk_groups(pk_deltas(v), k, nb, 0)
-    bs = pk_bases(gs, 0, 0, FALSE)
+FUNCTION pk_entry(k, b)
+    IF b == 0
+        e = 1
+    ELSE
+        e = k+8*(b-1)+1
+    ENDIF
+= e
 
-    LDA #v[0]:STA table
-    LDY #1
-    LDX #nb-1
-    CLC
-.shift
-    ROR bits,X                          ; the next delta's bit, or the set bit
-    BEQ next                            ; the set bit: on to the next byte, in C
-    ADC bases,X                         ; and the byte's base
-    CLC
-    STA table,Y
-    INY
-    BCC shift                           ; (always)
+\\ A table's packing, from its ideal values v: the deltas by byte, the
+\\ bytes' bases, and the bytes of bits, stored last first.
+
+FUNCTION pk_k(v) = (LEN(v)-1) MOD 8
+FUNCTION pk_nb(v) = (LEN(v)-1) DIV 8+1
+FUNCTION pk_gs(v) = pk_groups(pk_deltas(v), pk_k(v), pk_nb(v), 0)
+FUNCTION pk_bs(v) = pk_bases(pk_gs(v), 0, 0, FALSE)
+FUNCTION pk_packed(v) = REVERSE(pk_bits(pk_gs(v), pk_bs(v), pk_k(v), 0))
+
+\\ Unpack table from its ideal values v, its bits PACKed at bits, as
+\\ beebdoom does. X counts the bytes of bits down, and the set bit, carried
+\\ round in C, empties each in turn. A byte's base comes from compares, not
+\\ a table: the bases only run one way, so each step is 1 more for the bytes
+\\ before it (falling: CPX on the byte) or the entries after it (rising: CPY
+\\ on the entry). The compare also clears the carry from the sine's 255 to
+\\ 256.
+
+MACRO UNPACK table, v, bits
+    k = pk_k(v)
+    nb = pk_nb(v)
+    bs = pk_bs(v)
+    blo = MIN(bs)
+    bhi = MAX(bs)
+    falling = MIN(bs[..nb-2]-bs[1..]) >= 0
+    ASSERT falling OR MAX(bs[..nb-2]-bs[1..]) <= 0, "UNPACK: the bases must run one way"
+    ASSERT blo < bhi OR MAX(v) <= 255, "UNPACK: a wrap needs a compare to clear its carry"
+
+    LDA #v[0]:LDY #0:LDX #nb-1
+    CLC:BCC start                       ; (always)
+    ZA_UNREACHABLE
+.loop
+    ADC #blo                            ; the delta's bit, over the least base
+    FOR t = blo+1..<bhi+1
+        IF falling
+            CPX #nb-SUM((bs >= t)*1):ADC #0
+        ELSE
+            CPY #pk_entry(k, FIND((bs >= t)*1, 1)):ADC #0
+        ENDIF
+    NEXT
+.start
+    STA table,Y:INY
 .next
-    DEX
-    BPL shift
-    BMI done                            ; (always)
-.bits
-    EQUB REVERSE(pk_bits(gs, bs, k, 0))
-.bases
-    EQUB REVERSE(bs)
-.done
+    ROR bits,X:BNE loop                 ; the next delta's bit, or the set bit
+    DEX:BPL next                        ; the set bit, in C, goes on
+ENDMACRO
+
+\\ A table's bits, packed from its ideal values v, for UNPACK, which shifts
+\\ them out.
+
+MACRO PACK v
+    EQUB pk_packed(v)
 ENDMACRO
 
 \\ Make every table, as arith.c does.
 
 .make_tables
 {
-    ZA_AUTO1 step                       ; local: the normalisers' step
-    ZA_AUTO1 lo                         ; local: a log's fraction, a dividend's low byte
-    ZA_AUTO1 hi                         ; local: a log's whole part + 1
-    ZA_AUTO2 sum                        ; local: a quarter square, a remainder
-    ZA_AUTO2 dv                         ; local: a divisor
-    ZA_AUTO1 q                          ; local: a quotient
+    \\ the normalisers, an octave at a time: the bytes of bit length k
+    \\ normalise to 128 on, in steps of 2^(8 - k)
 
-    \ the normalisers, an octave at a time: the bytes of bit length k
-    \ normalise to 128 on, in steps of 2^(8 - k)
+    ZA_AUTO1 step                       ; local: 2^(8 - k)
 
     LDA #0:STA nrm:STA k8
     LDX #1:LDY #1
@@ -155,90 +193,131 @@ ENDMACRO
     CPX #0
     BNE octave
 
-    \ the tables of a bit a delta
+    \\ the tables of a bit a delta
 
-    UNPACK logf, rounded(f_logf(0..255))
-    UNPACK expf, rounded(f_expf(0..255))
-    UNPACK atan, FLOOR(f_atan(0..255))
-    UNPACK lhyp, rounded(f_lhyp(0..255))
-    UNPACK sinq, rounded(f_sinq(0..255))
-    UNPACK a2c, rounded(f_a2c(0..255))
-    UNPACK lsec, rounded(f_lsec(0..127))
-    UNPACK lsx, rounded(f_lsx(0..127))
+    UNPACK logf, ideal_logf, bits_logf
+    UNPACK expf, ideal_expf, bits_expf
+    UNPACK atan, ideal_atan, bits_atan
+    UNPACK lhyp, ideal_lhyp, bits_lhyp
+    UNPACK sinq, ideal_sinq, bits_sinq
+    UNPACK a2c, ideal_a2c, bits_a2c
+    UNPACK lsec, ideal_lsec, bits_lsec
+    UNPACK lsx, ideal_lsx, bits_lsx
 
-    \ lsec16 past 45 degrees, from logs: LOG_STEP - log2(2j + 1) + lsx[j] at
-    \ 255 - j, log2 of a byte as pt_log2_8 has it; under 45, high bytes of 0
+    \\ lsec16 past 45 degrees, from logs: LOG_STEP - log2(2j + 1) + lsx[j] at
+    \\ 255 - j, log2 of a byte as pt_log2_8 has it; under 45, high bytes of 0
+
+    ZA_AUTO1 logfrac                    ; local: log2(2j + 1)'s fraction
+    ZA_AUTO1 logk8                      ; local: its whole part + 1
+    ZA_AUTO2 lsecv                      ; local: the entry
 
     LDY #127
 .lsec16
     TYA:ASL A:ORA #1:TAX                ; 2j + 1
-    LDA k8,X:STA hi
+    LDA k8,X:STA logk8
     LDA nrm,X:ASL A:TAX
-    LDA logf,X:STA lo
+    LDA logf,X:STA logfrac
     TYA:EOR #&FF:TAX                    ; 255 - j
     SEC
-    LDA #LO(LOG_STEP+&100):SBC lo:STA sum
-    LDA #HI(LOG_STEP+&100):SBC hi:STA sum+1
+    LDA #LO(LOG_STEP+&100):SBC logfrac:STA lsecv
+    LDA #HI(LOG_STEP+&100):SBC logk8:STA lsecv+1
     CLC
-    LDA sum:ADC lsx,Y:STA lsec16lo,X
-    LDA sum+1:ADC #0:STA lsec16hi,X
+    LDA lsecv:ADC lsx,Y:STA lsec16lo,X
+    LDA lsecv+1:ADC #0:STA lsec16hi,X
     LDA #0:STA lsec16hi,Y
     DEY
     BPL lsec16
 
-    \ the quarter squares: sq1[e] = sq1[e - 1] + e DIV 2, from 0, in two
-    \ pages; sq2[i] = sq1[ABS(i - 255)]
+    \\ the quarter squares, x*x DIV 4 for x = 0..511, in one loop over two
+    \\ pages (as starglobe's): sq1[x + 1] = sq1[x] + (x + 1) DIV 2, delta
+    \\ stepped on even x. Then sq2[x] = sq1[255 - x], and sq1[x - 255] past
+    \\ 255, X counting up as Y counts down
 
-    LDA #0:STA sum:STA sum+1
-    STA sq1lo:STA sq1hi
-    LDX #1
-.sq1a
-    TXA:LSR A                           ; e DIV 2
-    CLC:ADC sum:STA sum:STA sq1lo,X
-    LDA sum+1:ADC #0:STA sum+1:STA sq1hi,X
+    ZA_AUTO2 quarter                    ; local: x*x DIV 4
+    ZA_AUTO1 delta                      ; local: (x + 1) DIV 2
+
+    LDX #0
+    STX quarter:STX quarter+1
+    STX delta
+    LDY #2                              ; pages
+.sq1
+    LDA quarter+1
+.sq1h
+    STA sq1hi,X                         ; the operand's high byte steps on
+    LDA quarter
+.sq1l
+    STA sq1lo,X                         ; likewise
+    CLC:ADC delta:STA quarter
+    BCC @+:INC quarter+1:.@
+    TXA:LSR A:BCS @+:INC delta:.@       ; delta steps on even x
     INX
-    BNE sq1a
-.sq1b
-    TXA:LSR A:ORA #&80                  ; (256 + X) DIV 2
-    CLC:ADC sum:STA sum:STA sq1lo+&100,X
-    LDA sum+1:ADC #0:STA sum+1:STA sq1hi+&100,X
-    INX
-    BNE sq1b
+    BNE sq1
+    INC sq1h+2
+    INC sq1l+2
+    DEY
+    BNE sq1
+    DEY                                 ; X = 0, Y = 255
 .sq2
-    TXA:EOR #&FF:TAY                    ; i = X: sq1[255 - X]
-    LDA sq1lo,Y:STA sq2lo,X
-    LDA sq1hi,Y:STA sq2hi,X
-    LDA sq1lo+1,X:STA sq2lo+&100,X      ; i = 256 + X: sq1[X + 1]
+    LDA sq1lo,X:STA sq2lo,Y             ; sq2[255 - x] = sq1[x]
+    LDA sq1hi,X:STA sq2hi,Y
+    LDA sq1lo+1,X:STA sq2lo+&100,X      ; sq2[256 + x] = sq1[x + 1]
     LDA sq1hi+1,X:STA sq2hi+&100,X
+    DEY
     INX
     BNE sq2
 
-    \ rpost: (40960 + d - 1) / d for d = 8i, i from 32, a byte by restoring
-    \ division, 8 steps
+    \\ rpost: (POST_SCALE + d - 1) DIV d for d = 8i, i from RPOST_START,
+    \\ which is 1 + RPOST_DIVIDEND DIV i: a byte divisor, so the remainder
+    \\ (under i) lives in A, the carry out of ROL A its ninth bit, as beebdoom
+    \\ divides. The quotient shifts in behind the dividend's low byte, and the
+    \\ SEC, out of the last ROL, adds the 1
 
-    LDX #32
+    ZA_AUTO1 divisor                    ; local: i
+    ZA_AUTO1 quotient                   ; local: the dividend's low byte, then the quotient
+
+    LDX #RPOST_START
 .posts
-    STX dv:LDA #0:STA dv+1
-    ASL dv:ROL dv+1:ASL dv:ROL dv+1:ASL dv:ROL dv+1
-    CLC
-    LDA dv:ADC #LO(40959):STA lo
-    LDA dv+1:ADC #HI(40959):STA sum
-    LDA #0:STA sum+1
+    STX divisor
+    LDA #LO(RPOST_DIVIDEND):STA quotient
+    LDA #HI(RPOST_DIVIDEND)             ; the remainder: 19, under i
     LDY #8
+    SEC
 .divide
-    ASL lo:ROL sum:ROL sum+1            ; the dividend's next bit into the remainder
-    LDA sum:CMP dv
-    LDA sum+1:SBC dv+1
-    BCC under                           ; C: the divisor goes
-    LDA sum:SBC dv:STA sum
-    LDA sum+1:SBC dv+1:STA sum+1
+    ROL quotient                        ; the dividend's next bit out, the last quotient bit in
+    ROL A
+    BCS goes                            ; 256 or more: over i
+    CMP divisor
+    BCC under
+.goes
+    SBC divisor
+    SEC                                 ; the quotient's bit
 .under
-    ROL q
     DEY
     BNE divide
-    LDA q:STA rpost,X
+    ROL quotient                        ; its last bit in, the SEC out
+    LDA quotient:ADC #0
+    STA rpost,X
     INX
-    CPX #200
+    CPX #RPOST_END
     BNE posts
     RTS
 }
+
+\\ The tables' bits, for make_tables to unpack (and empty).
+
+.bits_logf
+    PACK ideal_logf
+.bits_expf
+    PACK ideal_expf
+.bits_atan
+    PACK ideal_atan
+.bits_lhyp
+    PACK ideal_lhyp
+.bits_sinq
+    PACK ideal_sinq
+.bits_a2c
+    PACK ideal_a2c
+.bits_lsec
+    PACK ideal_lsec
+.bits_lsx
+    PACK ideal_lsx

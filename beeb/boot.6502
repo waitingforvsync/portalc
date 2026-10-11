@@ -1,5 +1,5 @@
-\ boot.6502 - !BOOT, *RUN by SHIFT-BREAK (the disc's *OPT 4,2): machine
-\ code at &400, as spritescale's.
+\\ boot.6502 - !BOOT, *RUN by SHIFT-BREAK (the disc's *OPT 4,2): machine
+\\ code at &400, as spritescale's.
 
 SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
 
@@ -10,12 +10,12 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
 {
     ZA_ENTRY                            ; *RUN comes in here
 
-    \ silence the beep
+    \\ silence the beep
 
     CLI
     LDA #15:LDX #0:JSR &FFF4            ; *FX15,0: flush the buffers
 
-    \ sideways RAM: a bank whose first byte takes a write
+    \\ sideways RAM: a bank whose first byte takes a write
 
     SEI                                 ; nothing pages it out under us
     LDX #15
@@ -34,13 +34,14 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
     BRK
     EQUB 0
     EQUS "PORTAL needs sideways RAM", 0
+    ZA_UNREACHABLE                      ; the BRK doesn't come back
 
 .found
     STX &400                            ; the bank, for PORTAL (over our spent first byte)
     LDA &F4:STA &FE30
     CLI
 
-    \ print the title
+    \\ print the title
 
     LDX #0
 .@  LDA message,X
@@ -49,7 +50,7 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
     CMP #0
     BNE @-
 
-    \ run PORTAL
+    \\ run PORTAL
 
     LDX #LO(cmd)
     LDY #HI(cmd)

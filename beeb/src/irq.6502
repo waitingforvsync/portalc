@@ -1,5 +1,5 @@
-\ irq.6502 - the interrupt handler, in main RAM so it's there whatever's
-\ paged in at &8000. Every source is off, so it only catches strays.
+\\ irq.6502 - the interrupt handler, in main RAM so it's there whatever's
+\\ paged in at &8000. Every source is off, so it only catches strays.
 
 \\ Put A back as the MOS's IRQ entry found it, and return.
 

@@ -1,8 +1,9 @@
-\ portal.6502 - PORTAL on the disc: the loader, carrying the code that runs
-\ from main RAM and the code that runs from sideways RAM, each assembled
-\ where it runs, for the loader to copy there.
+\\ portal.6502 - PORTAL on the disc: the loader, carrying the code that runs
+\\ from main RAM and the code that runs from sideways RAM, each assembled
+\\ where it runs, for the loader to copy there.
 
 INCLUDE "src/memory.6502"
+INCLUDE "src/constants.6502"
 
 SECTION Portal, org = LOADER_ORG, load = &FFFF0000+LOADER_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = &7C00
     INCLUDE "src/entry.6502"

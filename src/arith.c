@@ -73,7 +73,9 @@ static bool inited_;
 //
 // The 6502 builds a table of a smooth function from its first entry and a
 // bit for each delta after it, over a base for each byte of bits (0, 1 or
-// 2, from comparing the byte index on the 6502: a run of bases per table).
+// 2, from compares on the 6502: the bases run one way, so each step is 1
+// more for the bytes before it, CPX on the byte index, where they fall, or
+// the entries after it, CPY on the entry, where they rise).
 // The bits come out by ROR through the carry. The first byte holds fewer
 // than 8, with a set bit just above them; that bit, carried round into
 // each next byte, sits above its 8, so a byte has run out when ROR leaves
@@ -83,6 +85,7 @@ static bool inited_;
 //   .loop
 //       ADC #0                      ; the delta's bit
 //       CPX #run : ADC #0           ; the byte's base, as runs need
+//                                   ; (CPY #entry where they rise)
 //   .start
 //       STA table,Y : INY
 //   .next

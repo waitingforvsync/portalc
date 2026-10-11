@@ -1,4 +1,4 @@
-\ start.6502 - the engine, from sideways RAM. So far, it waits.
+\\ start.6502 - the engine, from sideways RAM. So far, it waits.
 
 \\ The engine, once the loader's done.
 

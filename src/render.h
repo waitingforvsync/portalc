@@ -82,7 +82,8 @@ typedef struct pt_kept {
 // bounds are the renderer's per-column rows, over its columns. The walk
 // recurses on the index alone.
 typedef struct pt_visit {
-    uint8_t cell;         // the cell visited
+    uint8_t cell;         // the cell visited: it clears the cell's index when
+                          // the capture's done
     uint8_t k;            // the current side's ring position, 0..num: where the
                           // last walk stopped
     uint8_t xr;           // the right column of the portal last walked through;
@@ -136,7 +137,8 @@ typedef struct pt_render {
     pt_visit visits[PT_MAX_VISITS];
     uint8_t num_visits;
     uint8_t visits_high;             // high-water mark across frames, for stats
-    uint8_t cell_visit[PT_MAX_CELLS];    // each cell's visit record, 0 = none
+    uint8_t cell_visit[PT_MAX_CELLS];    // each cell's visit record, 0 = none: all
+                                         // 0 between captures
     uint8_t depth_high;              // deepest walk nesting across frames, for stats
 
     // the sides' lines kept for later visits, by slot, as the visits point

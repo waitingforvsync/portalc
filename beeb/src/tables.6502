@@ -36,6 +36,18 @@ lsec = lsec16lo                         ; its first 128: under 45 degrees, bytes
 rpost = rpostmem-RPOST_START
 lsx = SCRATCH_ORG                       ; the loader's, for lsec16: in Scratch, the payloads out
 
+\\ The multiply's pointers into the quarter squares, live throughout: each
+\\ at its table's page. A multiply by a puts a in sq1's low bytes and
+\\ a EOR &FF in sq2's, so (ptr),Y with b in Y reads sq1[a + b] and
+\\ sq2[255 - a + b] = sq1[a - b].
+
+ZA_AUTO2 sq1loptr
+ZA_AUTO2 sq1hiptr
+ZA_AUTO2 sq2loptr
+ZA_AUTO2 sq2hiptr
+
+ASSERT (LO(sq1lo) OR LO(sq1hi) OR LO(sq2lo) OR LO(sq2hi)) == 0, "the quarter squares start on pages, for the pointers"
+
 \\ The ideal values, as arith.c has them.
 
 FUNCTION log2(x) = LN(x)/LN(2)
@@ -270,6 +282,14 @@ ENDMACRO
     DEY
     INX
     BNE sq2
+
+    \\ the multiply's pointers: each table's page, the low bytes 0 (X is)
+
+    STX sq1loptr:STX sq1hiptr:STX sq2loptr:STX sq2hiptr
+    LDA #HI(sq1lo):STA sq1loptr+1
+    LDA #HI(sq1hi):STA sq1hiptr+1
+    LDA #HI(sq2lo):STA sq2loptr+1
+    LDA #HI(sq2hi):STA sq2hiptr+1
 
     \\ rpost: (POST_SCALE + d - 1) DIV d for d = 8i, i from RPOST_START,
     \\ which is 1 + RPOST_DIVIDEND DIV i: a byte divisor, so the remainder

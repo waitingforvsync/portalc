@@ -1337,9 +1337,7 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     const pt_map *m = r->map;
     RC_ASSERT(cell >= 1 && cell < m->num_cells);
 
-    // an empty visit cache, zeroed whole: the 6502's is in the capture's
-    // workspace, which isn't kept from one frame to the next
-    memset(r->cell_visit, 0, sizeof r->cell_visit);
+    // the visit cache is empty: the last capture emptied it
     r->num_visits = 1;
 
     r->cam_cell = cell;
@@ -1364,6 +1362,12 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     pt_walk w;
     root_walk(r, &w);
     walk(r, &w, 1);
+
+    // empty the visit cache while the visits are still there (on the 6502
+    // they go with the capture's workspace): each clears its own cell's
+    // index, so only the cells visited are touched
+    for (uint8_t i = 1; i < r->num_visits; i++)
+        r->cell_visit[r->visits[i].cell] = 0;
     pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->lastp1);
     for (uint8_t k = 0; k < r->num_order; k++) {
         const pt_inst *in = &r->insts[r->order[k]];

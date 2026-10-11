@@ -31,18 +31,19 @@ ZA_AUTO1 keys                           ; the keys held at any of them, as the I
 .count
     INC framectr
 
-    \\ the keys, on top of those gathered already: each one's held bit rolls
-    \\ into A, the last key's into bit 0
+    \\ the keys, on top of those gathered already: each one's bit rolls into
+    \\ A, clear if it's held, the last key's into bit 0. Then flipped
 
     STX xsave:STY ysave
     LDA #0
     LDX #LEN(keylist)-1
-.key
+.keyloop
     LDY keycodes,X:STY &FE4F            ; system VIA port A: the key
-    ROL &FE4F                           ; bit 7, held, into C (the write back's harmless)
+    CPY &FE4F                           ; C clear if held: bits 0-6 read back as Y, bit 7 the key
     ROL A
     DEX
-    BPL key
+    BPL keyloop
+    EOR #(1 << LEN(keylist))-1          ; set if held
     ORA keys:STA keys
     LDX xsave:LDY ysave
 

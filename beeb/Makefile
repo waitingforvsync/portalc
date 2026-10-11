@@ -5,6 +5,7 @@
 #                 running, if there is one, or else in a new one
 #   make test     check the loader's tables against the C's, in b2: the one
 #                 running, or one of its own with no window
+#   make map      remake src/map.6502 from the C's demo scene
 #   make clean
 #
 # A running b2 is driven through its HTTP API on port 48075: reset into the
@@ -47,7 +48,11 @@ test: $(BUILD)/portal.ssd
 	$(CBUILD)/src/portalc_tables > $(BUILD)/tables.json
 	$(PY) host/test_tables.py $< $(BUILD)/portal.json $(BUILD)/tables.json
 
+map:
+	cmake --build $(CBUILD) --target portalc_mapasm
+	$(CBUILD)/src/portalc_mapasm > src/map.6502
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test clean
+.PHONY: all run test map clean

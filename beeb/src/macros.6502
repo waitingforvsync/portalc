@@ -1,0 +1,10 @@
+\\ macros.6502 - macros for any file.
+
+\\ Start a table of size bytes on the next page if it would cross into it:
+\\ an indexed read across a page costs a cycle.
+
+MACRO FITPAGE size
+    IF (P% AND &FF)+size > &100
+        ALIGN &100
+    ENDIF
+ENDMACRO

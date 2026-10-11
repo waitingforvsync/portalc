@@ -57,9 +57,12 @@ in `src/`, which models it. Read this before writing any.
 - `ZA_ENTRY` only on roots, routines nothing calls (a `*RUN` entry point).
   A routine reached by a `JSR` or `JMP` gets no marker.
 - `ZA_INTERRUPT` on every interrupt or `BRK` handler.
-- State the interrupt shares with the main loop is a `ZA_AUTO` at file
-  scope, outside any routine, so it's live throughout: in `src/irq.6502`,
-  which owns it.
+- State that several routines share (what the interrupt shares with the
+  main loop, the multiply's pointers) is a `ZA_AUTO` at file scope, outside
+  any routine, in the file that owns it: `src/irq.6502`, `src/tables.6502`.
+  File scope only makes the name global: Baron still places it by
+  liveness, so until something reads it, it shares bytes with whatever's
+  alive. Check its bytes once its readers exist.
 - `ZA_UNREACHABLE` straight after every branch that's always taken (`CLC:BCC
   start`, any branch on a known flag), after a `JSR` that never returns, and
   after a `BRK`'s message. It prunes the path that never happens, so Baron
@@ -129,6 +132,9 @@ The rest:
 
 - Struct of arrays: every field of a record is a table of its own
   (`vs_k,Y`, `vs_xr,Y`), and a field that's an array is tables end to end.
+- A table that's read indexed keeps to one page, as a page crossing costs
+  a cycle: `FITPAGE` before it (`src/macros.6502`), or an `ASSERT` where
+  its place is fixed.
 - Workspace comes from the virtual sections in `src/memory.6502`, claimed
   where it's used, from the pool its lifetime fits: `Persist`, `Frame`,
   `Capture`, `Between`, the junk rows, or the loader's `Scratch`.
@@ -136,6 +142,10 @@ The rest:
   capture, fill, sprites, unplot), and give tables that never coexist the
   same addresses: separate virtual sections over one range, since Baron
   has no unions.
+- A cache indexed by another table's index (cell to visit, vertex to
+  entry) is emptied through its entries: each holds its key, and clears
+  that one index, so only what was used is touched, never the whole table.
+  The index table lives where it keeps its zeroes between uses.
 - T's junk rows (`JunkTop` and `JunkBot`) are workspace too. Only the
   plotters (in the capture) and the unplotter write them, and nothing reads
   them, so they hold state that's dead from the first plot to the end of
@@ -162,6 +172,8 @@ The C is a model of the BBC build, so it's written the 6502's way.
 - No pointer that can be NULL standing for "none": not for an optional
   parameter, not for a field. Pass the value (an empty set rather than
   NULL), or a flag and a value.
+- Caches are emptied as the 6502 empties them, through their entries'
+  back-references, not with a `memset`.
 - Tables are built as the 6502 builds them (bit-a-delta packing,
   recurrences, division loops), not from floating point at run time, and
   read the 6502's way (`pt_log2` through `nrm` and `k8`).

@@ -1,7 +1,12 @@
 \\ unplot.6502 - clearing the last frame's lines out of T.
 
-\\ Clear every run the last frame recorded, so T's all zero again. A stub
-\\ for now.
+\\ Clear every run the last frame recorded, so T's all zero again. A stub for now.
+\\
+\\ Inputs:
+\\     the records: the last frame's runs
+\\
+\\ Outputs:
+\\     T: all 0
 
 .unplot
 {

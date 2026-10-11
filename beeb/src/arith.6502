@@ -1,0 +1,105 @@
+\\ arith.6502 - the arithmetic macros: arith.c's logs and exps, from the loader's tables.
+\\ A log is 256 log2: a fraction byte and a whole part.
+
+\\ 256 log2 b, as pt_log2_8.
+\\
+\\ Inputs:
+\\     X: b, 1 to 255
+\\
+\\ Outputs:
+\\     A: the fraction
+\\     Y: the whole part
+\\     X: preserved
+
+MACRO LOG2_8
+    LDY nrm,X:LDA logf,Y                ; the bits under b's leading one: exact
+    LDY k8,X:DEY                        ; b's bit length, less 1
+ENDMACRO
+
+\\ 256 log2 x, as pt_log2, for x under 2^bits: the bound picks how the low byte is shifted.
+\\
+\\ Inputs:
+\\     bits: x's bound, 9 to 16 (a byte's log is LOG2_8's)
+\\     A: x's low byte
+\\     X: x's high byte, loaded last, so Z is set if it's 0 (x >= 1)
+\\
+\\ Outputs:
+\\     A: the fraction
+\\     X: the whole part
+\\     Y: corrupted
+
+MACRO LOG2_16 bits
+    ASSERT bits >= 9 AND bits <= 16, "LOG2_16: x under 2^9 to 2^16 (a byte's is LOG2_8's)"
+
+    BNE big
+    TAY                                 ; under 256: the low byte's log
+    LDX k8,Y
+    LDA nrm,Y:TAY:LDA logf,Y
+    DEX:BPL done                        ; (always: 0 to 7)
+    ZA_UNREACHABLE
+.big
+    IF bits == 9
+        TAY:LDX #8:LDA logf,Y           ; the high byte is 1: the low byte is the rest, exactly
+    ELSE
+
+        \\ the low byte shifted down k - 1, k the high byte's bit length: C, the last bit out
+
+        IF bits == 10
+            CPX #2:BCC join             ; k = 1: none, C clear
+            LSR A                       ; k = 2
+        ELIF bits == 11
+            CPX #2:BCC join             ; k = 1: none, C clear
+            CPX #4:BCC one              ; k = 2
+            LSR A                       ; k = 3
+.one
+            LSR A
+        ELIF bits == 12
+            CPX #4:BCS three            ; k = 3 or 4
+            CPX #2:BCC join             ; k = 1: none, C clear
+            BCS one                     ; k = 2 (always)
+            ZA_UNREACHABLE
+.three
+            CPX #8:BCC two              ; k = 3
+            LSR A                       ; k = 4
+.two
+            LSR A
+.one
+            LSR A
+        ELSE
+            LDY k8,X:CLC                ; a shift at a time
+            DEY:BEQ join                ; k = 1: none
+.shift
+            LSR A:DEY:BNE shift
+        ENDIF
+
+        \\ the rest of x under its leading one, rounded, and k
+
+.join
+        ORA nrm,X:ADC #0                ; a carry out is the next octave's 0
+        TAY
+        LDA k8,X:ADC #7:TAX             ; 7 + k, and that carry
+        LDA logf,Y
+    ENDIF
+.done
+ENDMACRO
+
+\\ 2^(l / 256), as pt_exp2, for l under 8 * 256: a byte, or 256.
+\\
+\\ Inputs:
+\\     X: l's low byte
+\\     Y: l's high byte, 0 to 7
+\\
+\\ Outputs:
+\\     A: the byte
+\\     C: set if it's 256, with A 0
+\\     X, Y: preserved
+
+MACRO EXP2_8
+    STY skip+1                          ; 7 - Y shifts: the run's first Y skipped
+    LDA expf,X:SEC:ROR A                ; 1.f halved, its 1 from C
+.skip
+    BMI run                             ; (always: bit 7 is set) self-modified
+.run
+    LSR A:LSR A:LSR A:LSR A:LSR A:LSR A:LSR A
+    ADC #0                              ; rounded by the last bit out
+ENDMACRO

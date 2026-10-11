@@ -21,10 +21,12 @@ static uint16_t sq2_[512];
 
 // Normalising tables, indexed by a byte b >= 1 with lz(b) its leading zero
 // bits (entry 0 unused):
-//   nrm_[b]   = b << lz(b), the byte shifted up until bit 7 is set
+//   nrm_[b]   = b << (lz(b) + 1), a byte: the bits under its leading one,
+//               at the top, which is how both logs index logf_
 //   k8_[b]    = 8 - lz(b), the byte's bit length (1..8)
 // Built an octave at a time: the bytes with bit length k normalise to 128
-// on up in steps of 2^(8 - k), the step halving each octave.
+// on up in steps of 2^(8 - k), the step halving each octave, and the
+// leading one goes as each is stored.
 static uint8_t nrm_[256];
 static uint8_t k8_[256];
 
@@ -170,11 +172,11 @@ static void build(uint8_t *table, uint32_t n, double (*f)(uint32_t), bool floore
 }
 
 // 256 log2 b for a byte: the bits under its leading one are fewer than 8, so
-// the normalised byte, its leading one shifted out, is the fraction exactly
+// they index the fraction exactly
 static uint16_t log2_8_(uint8_t b)
 {
     RC_ASSERT(b > 0);
-    return (uint16_t)((k8_[b] - 1) << 8 | logf_[(uint8_t)(nrm_[b] << 1)]);
+    return (uint16_t)((k8_[b] - 1) << 8 | logf_[nrm_[b]]);
 }
 
 // 256 log2 x. The leading one's place is the whole part, and the 8 bits
@@ -182,12 +184,11 @@ static uint16_t log2_8_(uint8_t b)
 // next octave's fraction 0. k8 finds the place and nrm lines up the high
 // byte's bits under its leading one; the low byte's go under them, shifted
 // down k - 1 with LSR A, the last bit out rounding:
-//   LDX hi : BEQ small
-//   LDA nrm,X : ASL A : STA t        ; hi's bits under its leading one
-//   LDY k8,X : LDA lo : CLC
+//   LDA lo : LDX hi : BEQ small
+//   LDY k8,X : CLC
 //   DEY : BEQ join                    ; k = 1: lo is the rest, exactly
 // .sh LSR A : DEY : BNE sh            ; C is the last bit out
-// .join ORA t : ADC #0                ; carry out: the next octave's 0
+// .join ORA nrm,X : ADC #0            ; carry out: the next octave's 0
 // Under 256 it's the byte's log (log2_8_).
 static uint16_t log2_(uint16_t x)
 {
@@ -202,7 +203,7 @@ static uint16_t log2_(uint16_t x)
         c = lo & 1;
         lo = (uint8_t)(lo >> 1);
     }
-    uint16_t j = pt_u16((int32_t)((uint8_t)(nrm_[hi] << 1) | lo) + c);
+    uint16_t j = pt_u16((int32_t)(nrm_[hi] | lo) + c);
     if (j == 256)
         return (uint16_t)((8 + k) << 8);
     return (uint16_t)((7 + k) << 8 | logf_[j]);
@@ -246,12 +247,13 @@ void pt_arith_init(void)
     build(a2c_, 256, f_a2c, false);
 
     // an octave at a time: b = 2^(k-1) .. 2^k - 1 normalise to 128, 128 +
-    // step, ..., the step 2^(8 - k); the last octave's end wraps b to 0
+    // step, ..., the step 2^(8 - k), stored with the leading one shifted
+    // out; the last octave's end wraps b to 0
     //   LDX #1 : LDY #1 : LDA #128 : STA step
     // .octave
     //   LDA #128
     // .entry
-    //   STA nrm,X : PHA : TYA : STA k8,X : PLA
+    //   PHA : ASL A : STA nrm,X : TYA : STA k8,X : PLA
     //   INX : CLC : ADC step : BCC entry
     //   INY : LSR step : CPX #0 : BNE octave
     uint8_t b = 1;
@@ -259,7 +261,7 @@ void pt_arith_init(void)
     for (uint8_t k = 1; k <= 8; k++, step >>= 1) {
         uint16_t v = 128;
         do {
-            nrm_[b] = (uint8_t)v;
+            nrm_[b] = (uint8_t)(v << 1);
             k8_[b] = k;
             b++;
             v = (uint16_t)(v + step);

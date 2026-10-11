@@ -1,27 +1,31 @@
-\\ portal.6502 - PORTAL on the disc: the code that runs from sideways RAM
-\\ and the code that runs from main RAM, each assembled where it runs, then
-\\ the loader, which copies them there. The loader starts at T's top junk
-\\ row, or higher where the payloads need the room.
+\\ portal.6502 - PORTAL on the disc: the sideways RAM and main RAM code, each assembled where it
+\\ runs, then the loader that copies them there.
 
 INCLUDE "src/memory.6502"
 INCLUDE "src/constants.6502"
 INCLUDE "src/macros.6502"
+INCLUDE "src/arith.6502"
 
 SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
 .swramcode_image
     SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
         INCLUDE "src/start.6502"
         INCLUDE "src/clear.6502"
+        INCLUDE "src/map.6502"
+        INCLUDE "src/vcache.6502"
         INCLUDE "src/camera.6502"
         INCLUDE "src/unplot.6502"
         INCLUDE "src/capture.6502"
         INCLUDE "src/fill.6502"
         INCLUDE "src/sprites.6502"
+        IF DEFINED(TEST)
+            INCLUDE "test/arith.6502"   ; make test's build: the macros' check
+        ENDIF
     ENDSECTION
 
 .maincode_image
     SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
-        INCLUDE "src/map.6502"
+        INCLUDE "src/mapdata.6502"
         INCLUDE "src/irq.6502"
     ENDSECTION
 

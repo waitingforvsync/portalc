@@ -1,10 +1,15 @@
 \\ clear.6502 - clearing T and the screens: T must start each frame empty.
 
-ASSERT LO(T_JUNK_TOP) == 0 AND T_JUNK_BOT+&100 == SCREEN_A AND SCREEN_A+&1000 == SCREEN_B AND SCREEN_B+&1000 == &8000, "T, its junk rows and the screens are whole pages, running on to &8000"
+ASSERT LO(T_JUNK_TOP) == 0 AND T_JUNK_BOT+&100 == SCREEN_A, "T: whole pages, up to screen A"
+ASSERT SCREEN_A+&1000 == SCREEN_B AND SCREEN_B+&1000 == &8000, "the screens: up to &8000"
 
-\\ Clear T, its junk rows and both screens: whole pages, T_JUNK_TOP to
-\\ &8000, the STA's operand stepping on, self-modified, from the top junk
-\\ row's page.
+\\ Clear T, its junk rows and both screens, then turn the display on.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     T_JUNK_TOP to &8000: all 0
 
 .clear_buffers
 {
@@ -19,9 +24,9 @@ ASSERT LO(T_JUNK_TOP) == 0 AND T_JUNK_BOT+&100 == SCREEN_A AND SCREEN_A+&1000 ==
     DEX
     BNE loop
 
-    \\ Enable screen display
-    
-    LDA #8:STA &FE00
-    LDA #&C0:STA &FE01
+    \\ the display on
+
+    LDA #8:STA &FE00                    ; CRTC R8
+    LDA #&C0:STA &FE01                  ; display on, cursor off
     RTS
 }

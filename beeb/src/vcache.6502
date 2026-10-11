@@ -1,0 +1,45 @@
+\\ vcache.6502 - the vertex cache: vertices' polar forms from the camera, made as they're needed.
+\\ It keeps no position, so the camera resets it whenever camx or camy changes.
+
+ASSERT MAX_VCACHE < 256, "the vertex cache: an entry's number is a byte"
+ASSERT MAX_VERTS <= 256, "the vertex cache: a vertex's number is a byte"
+
+ZA_AUTO1 vc_num                         ; the last entry made: 0 when empty
+
+\\ The entries are numbered from 1: entry 0's bytes are unused.
+
+SECTION Persist
+    FITPAGE MAX_VERTS
+.vc_slot    SKIP MAX_VERTS              ; each vertex's entry, 0 for none
+    FITPAGE MAX_VCACHE+1
+.vc_vert    SKIP MAX_VCACHE+1           ; each entry's vertex
+    FITPAGE MAX_VCACHE+1
+.vc_anglo   SKIP MAX_VCACHE+1           ; its world angle: the step within the quadrant
+    FITPAGE MAX_VCACHE+1
+.vc_anghi   SKIP MAX_VCACHE+1           ; and the quadrant, 0 to 3
+    FITPAGE MAX_VCACHE+1
+.vc_lrlo    SKIP MAX_VCACHE+1           ; 256 log2 of its length in whole units
+    FITPAGE MAX_VCACHE+1
+.vc_lrhi    SKIP MAX_VCACHE+1
+ENDSECTION
+
+\\ Empty the cache, clearing only the slots its entries hold.
+\\
+\\ Inputs:
+\\     vc_num: the entries
+\\
+\\ Outputs:
+\\     vc_num: 0
+
+.vcache_reset
+{
+    LDX vc_num:BEQ done
+    LDA #0
+.loop
+    LDY vc_vert,X:STA vc_slot,Y
+    DEX
+    BNE loop
+    STX vc_num
+.done
+    RTS
+}

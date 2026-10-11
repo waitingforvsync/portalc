@@ -55,10 +55,10 @@ typedef struct pt_xy {
 uint16_t pt_log2(uint16_t x);
 
 // The same for a byte b >= 1, with the same answers and no shifts: under 256
-// the bits under the leading one are fewer than 8, so the normalised byte,
-// its leading one shifted out, indexes the fraction exactly.
-//   LDX b : LDA nrm,X : ASL A : TAY : LDA logf,Y    ; the fraction
-//   LDY k8,X : DEY                                  ; the whole part
+// the bits under the leading one are fewer than 8, so they index the
+// fraction exactly, and nrm holds them.
+//   LDX b : LDY nrm,X : LDA logf,Y    ; the fraction
+//   LDY k8,X : DEY                    ; the whole part
 uint16_t pt_log2_8(uint8_t b);
 
 // 2^(l / 256), rounded, saturating at 0xFFFF: pt_log2's inverse, within ~0.2%.

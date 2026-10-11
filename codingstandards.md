@@ -17,8 +17,14 @@ in `src/`, which models it. Read this before writing any.
 - Every whole-line comment is `\\`: the file's header, the notes between
   routines, a routine's header and its parts'. Only trailing comments use
   `;`.
-- A routine's header comment goes above it, brief, then a blank line, then
-  its label.
+- Lines go to 100 columns at most.
+- A file's header comment says what's in the file, in two lines at most.
+- A routine's or macro's header says what it's for, in two lines at most.
+  Then a blank `\\` line, `Inputs:` with an indented list, one to a line,
+  another blank `\\` line, and `Outputs:` likewise. What it preserves or
+  corrupts goes under `Outputs:` where it matters, most of all for a macro.
+  How it works goes in its trailing comments, if anywhere. Then a blank
+  line, then its label.
 - Declare each `ZA_AUTO` next to where it's used: after the open brace for
   one the whole routine uses, after a part's `\\` comment for one only that
   part uses. Every part gets its own, named for what it holds there: never
@@ -34,7 +40,14 @@ in `src/`, which models it. Read this before writing any.
 - Comments terse throughout.
 
 ```
-\\ Plot one sprite: spr, scale, sprx and spry in.
+\\ Plot one sprite.
+\\
+\\ Inputs:
+\\     spr, scale: the sprite and its scale
+\\     sprx, spry: where
+\\
+\\ Outputs:
+\\     none
 
 .plot_sprite
 {
@@ -58,8 +71,9 @@ in `src/`, which models it. Read this before writing any.
   A routine reached by a `JSR` or `JMP` gets no marker.
 - `ZA_INTERRUPT` on every interrupt or `BRK` handler.
 - State that several routines share (what the interrupt shares with the
-  main loop, the multiply's pointers) is a `ZA_AUTO` at file scope, outside
-  any routine, in the file that owns it: `src/irq.6502`, `src/tables.6502`.
+  main loop, the multiply's pointers, the camera's position) is a
+  `ZA_AUTO` at file scope, outside any routine, in the file that owns it:
+  `src/irq.6502`, `src/tables.6502`, `src/camera.6502`.
   File scope only makes the name global: Baron still places it by
   liveness, so until something reads it, it shares bytes with whatever's
   alive. Check its bytes once its readers exist.
@@ -123,9 +137,14 @@ The rest:
   next instruction wants, the low byte where an add follows. In a loop it's
   3 cycles a bit better, `LSR q+1:ROR A` against `ROR q`, stored once at the
   end.
-- An index that's off by one (as it came out of the sum that made it)
-  stays as it is: fold the one into the address, `LDA table-1,X` or
-  `LDA table+1,X`, never an `INX`/`DEX` first.
+- An index that's one short (as it came out of the sum that made it)
+  stays as it is: fold the one into the address, `LDA table+1,X`, never an
+  `INX` first.
+- Never a base before the table, `table-1,X`: with the table on a page
+  boundary, that's the page before, and every access pays the crossing.
+  A table numbered from 1 (the vertex cache's entries) keeps its element
+  0, unused, and is read as it is. One numbered from 0 (vc_slot, by
+  vertex) is looped over upwards, or down to 0.
 - Hot-path code like multiplies goes inline, as a `MACRO`.
 
 ### Memory
@@ -135,6 +154,8 @@ The rest:
 - A table that's read indexed keeps to one page, as a page crossing costs
   a cycle: `FITPAGE` before it (`src/macros.6502`), or an `ASSERT` where
   its place is fixed.
+- Tables are sized by the map's caps (`MAX_VERTS`, `src/constants.6502`),
+  never by a literal or the demo map's counts: bigger maps are coming.
 - Workspace comes from the virtual sections in `src/memory.6502`, claimed
   where it's used, from the pool its lifetime fits: `Persist`, `Frame`,
   `Capture`, `Between`, the junk rows, or the loader's `Scratch`.
@@ -150,6 +171,16 @@ The rest:
   plotters (in the capture) and the unplotter write them, and nothing reads
   them, so they hold state that's dead from the first plot to the end of
   the unplot: the camera tick's temporaries, the sprite pass's own.
+
+### Checking
+
+- What the C has, the 6502 matches byte for byte, and `make test` checks
+  it in b2: the loader's tables against `portalc_tables`, the macros
+  against `portalc_arithref`.
+- A macro or routine is run over every input where that's feasible,
+  summed where the answers won't fit, in make test's own build
+  (`-D TEST=TRUE`, `test/`), which leaves them at the top of the sideways
+  RAM bank. Break it once on purpose, to see the check fail.
 
 ### Baron's gotchas
 

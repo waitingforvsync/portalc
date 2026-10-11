@@ -3,9 +3,10 @@
 #   make          build/portal.ssd: !BOOT (*OPT 4,2) and PORTAL
 #   make run      boot it in b2 as a Master 128 (MOS 3.20): in the b2 that's
 #                 running, if there is one, or else in a new one
-#   make test     check the loader's tables against the C's, in b2: the one
-#                 running, or one of its own with no window
-#   make map      remake src/map.6502 from the C's demo scene
+#   make test     check the loader's tables, and the arithmetic macros (in a
+#                 build of their own, -D TEST=TRUE), against the C's, in b2:
+#                 the one running, or one of its own with no window
+#   make map      remake src/mapdata.6502 from the C's demo scene
 #   make clean
 #
 # A running b2 is driven through its HTTP API on port 48075: reset into the
@@ -22,13 +23,17 @@ B2_URL = http://127.0.0.1:48075
 B2_WIN = b2
 
 SRC = boot.6502 portal.6502
-DEPS = $(SRC) $(wildcard src/*.6502)
+DEPS = $(SRC) $(wildcard src/*.6502) $(wildcard test/*.6502)
 
 all: $(BUILD)/portal.ssd
 
 $(BUILD)/portal.ssd: $(DEPS) | $(BUILD)
 	$(BARON) -v --symbols $(BUILD)/portal.json -o $@ --title PORTAL --opt 2 $(SRC) \
 	    > $(BUILD)/portal.lst
+
+$(BUILD)/portal_test.ssd: $(DEPS) | $(BUILD)
+	$(BARON) -v -D TEST=TRUE --symbols $(BUILD)/portal_test.json -o $@ --title PORTAL --opt 2 $(SRC) \
+	    > $(BUILD)/portal_test.lst
 
 $(BUILD):
 	mkdir -p $@
@@ -43,14 +48,16 @@ run: $(BUILD)/portal.ssd
 	    nohup $(B2) --config='$(B2_CONFIG)' -0 $< -b > $(BUILD)/b2.log 2>&1 & \
 	fi
 
-test: $(BUILD)/portal.ssd
-	cmake --build $(CBUILD) --target portalc_tables
+test: $(BUILD)/portal.ssd $(BUILD)/portal_test.ssd
+	cmake --build $(CBUILD) --target portalc_tables portalc_arithref
 	$(CBUILD)/src/portalc_tables > $(BUILD)/tables.json
-	$(PY) host/test_tables.py $< $(BUILD)/portal.json $(BUILD)/tables.json
+	$(PY) -B host/test_tables.py $(BUILD)/portal.ssd $(BUILD)/portal.json $(BUILD)/tables.json
+	$(CBUILD)/src/portalc_arithref > $(BUILD)/arith.json
+	$(PY) -B host/test_arith.py $(BUILD)/portal_test.ssd $(BUILD)/portal_test.json $(BUILD)/arith.json
 
 map:
 	cmake --build $(CBUILD) --target portalc_mapasm
-	$(CBUILD)/src/portalc_mapasm > src/map.6502
+	$(CBUILD)/src/portalc_mapasm > src/mapdata.6502
 
 clean:
 	rm -rf $(BUILD)

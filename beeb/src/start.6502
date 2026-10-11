@@ -1,11 +1,18 @@
 \\ start.6502 - the engine, from sideways RAM: the main loop.
 
-\\ Clear T and the screens, then draw frame after frame into the buffer not
-\\ on show, each shown at the vsync after it's done.
+\\ Clear T and the screens and ready the map, then draw frame after frame into the buffer not on
+\\ show, each shown at the vsync after it's done. It never returns.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     none
 
 .start
 {
     JSR clear_buffers
+    JSR map_init
 
 .frame
     JSR update_camera

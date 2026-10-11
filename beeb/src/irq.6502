@@ -1,16 +1,25 @@
-\\ irq.6502 - the interrupt handler, in main RAM so it's there whatever's
-\\ paged in at &8000. Vsync is the only source: it shows a finished frame
-\\ when asked, counts vsyncs, and gathers the keys held. The camera takes
-\\ the count and the keys, and clears them.
+\\ irq.6502 - the interrupt handler, in main RAM so it's there whatever's paged in at &8000.
+\\ Vsync is its only source.
 
 \\ What it shares with the main loop: live throughout.
 
-ZA_AUTO1 base                           ; the page of the buffer to draw into: HI(SCREEN_A) or HI(SCREEN_B)
-ZA_AUTO1 request_swap                   ; 1: show base at the next vsync, which takes the other and clears it
+ZA_AUTO1 base                           ; the page to draw into: HI(SCREEN_A) or HI(SCREEN_B)
+ZA_AUTO1 request_swap                   ; 1: show base at the next vsync, which swaps and clears it
 ZA_AUTO1 framectr                       ; vsyncs since the camera cleared it: its ticks
 ZA_AUTO1 keys                           ; the keys held at any of them, as the IN_ bits
 
-\\ The vsync: swap if asked, count it, gather the keys.
+\\ The vsync: show the frame drawn, if asked, count it, and gather the keys held.
+\\
+\\ Inputs:
+\\     base: the buffer drawn into
+\\     request_swap: 1 to show it
+\\
+\\ Outputs:
+\\     base: the other, if it was shown
+\\     request_swap: 0
+\\     framectr: one more
+\\     keys: those held now, added
+\\     A, X, Y: preserved
 
 .irq
 {
@@ -24,15 +33,15 @@ ZA_AUTO1 keys                           ; the keys held at any of them, as the I
 
     LDA request_swap:BEQ count
     LDA #12:STA &FE00                   ; CRTC R12: the start address's high byte
-    LDA base:LSR A:LSR A:LSR A          ; HI(base DIV 8), base being a page (R13, the low byte, stays 0)
+    LDA base:LSR A:LSR A:LSR A          ; HI(base DIV 8): R13, the low byte, stays 0
     STA &FE01
     LDA base:EOR #HI(SCREEN_A EOR SCREEN_B):STA base
     LSR request_swap                    ; 1, to 0
 .count
     INC framectr
 
-    \\ the keys, on top of those gathered already: each one's bit rolls into
-    \\ A, clear if it's held, the last key's into bit 0. Then flipped
+    \\ the keys, on top of those gathered already: each one's bit rolls into A, clear if it's held,
+    \\ the last key's into bit 0. Then flipped
 
     STX xsave:STY ysave
     LDA #0
@@ -54,7 +63,8 @@ ZA_AUTO1 keys                           ; the keys held at any of them, as the I
 \\ The keys' internal numbers (INKEY's, negated, less 1), by input bit.
 
 keylist = {&21, &51, &41, &32, &66, &67} ; W S A D , .
-ASSERT IN_FWD == 1 AND IN_BACK == 2 AND IN_LEFT == 4 AND IN_RIGHT == 8 AND IN_TURNL == 16 AND IN_TURNR == 32, "keylist: a key per input bit, in order"
+ASSERT IN_FWD == 1 AND IN_BACK == 2 AND IN_LEFT == 4, "keylist: a key per input bit, in order"
+ASSERT IN_RIGHT == 8 AND IN_TURNL == 16 AND IN_TURNR == 32, "keylist: a key per input bit, in order"
 
 .keycodes
     EQUB keylist

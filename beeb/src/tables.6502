@@ -1,8 +1,5 @@
-\\ tables.6502 - the tables, made by the loader exactly as arith.c makes
-\\ them: the normalisers an octave at a time, every smooth table from a bit a
-\\ delta (packed here, at assembly time, from its ideal values), lsec16's
-\\ second half from logs, the quarter squares by recurrence, rpost by
-\\ restoring division, and T's rows' pages.
+\\ tables.6502 - the tables, made by the loader exactly as arith.c makes them: the smooth ones
+\\ from a bit a delta, packed here at assembly time, the rest by recurrence, logs and division.
 
 RPOST_START = POST_NEAR DIV 8           ; rpost's first index, 32
 RPOST_END = CAM_RADIUS*CAM_RADIUS DIV 8 ; its end, 200: the camera's circle
@@ -12,7 +9,7 @@ ASSERT POST_SCALE MOD 8 == 0 AND HI(RPOST_DIVIDEND) < RPOST_START, "rpost: a byt
 ASSERT T_ORG+SCREEN_HEIGHT DIV 4*&100 == T_JUNK_BOT, "T: four rows a page, then the junk row"
 
 SECTION Tables
-.nrm        SKIP &100                   ; b << lz(b): the byte normalised (0: unused)
+.nrm        SKIP &100                   ; the bits under b's leading one (0: unused)
 .k8         SKIP &100                   ; 8 - lz(b): its bit length (0: unused)
 .logf       SKIP &100                   ; 256 log2(1 + j/256)
 .expf       SKIP &100                   ; 256 (2^(f/256) - 1)
@@ -30,23 +27,21 @@ SECTION Tables
 .trowhi     SKIP SCREEN_HEIGHT+1        ; row y's page in T, to the junk row's
 ENDSECTION
 
-ASSERT HI(trowhi) == HI(trowhi+SCREEN_HEIGHT), "trowhi: within a page, so trowhi,X never crosses one"
+ASSERT HI(trowhi) == HI(trowhi+SCREEN_HEIGHT), "trowhi: within a page"
 
 lsec = lsec16lo                         ; its first 128: under 45 degrees, bytes
 rpost = rpostmem-RPOST_START
 lsx = SCRATCH_ORG                       ; the loader's, for lsec16: in Scratch, the payloads out
 
-\\ The multiply's pointers into the quarter squares, live throughout: each
-\\ at its table's page. A multiply by a puts a in sq1's low bytes and
-\\ a EOR &FF in sq2's, so (ptr),Y with b in Y reads sq1[a + b] and
-\\ sq2[255 - a + b] = sq1[a - b].
+\\ The multiply's pointers into the quarter squares, live throughout. A multiply by a puts a in
+\\ sq1's low bytes and a EOR &FF in sq2's, so (ptr),Y reads sq1[a + Y] and sq2[255 - a + Y].
 
 ZA_AUTO2 sq1loptr
 ZA_AUTO2 sq1hiptr
 ZA_AUTO2 sq2loptr
 ZA_AUTO2 sq2hiptr
 
-ASSERT (LO(sq1lo) OR LO(sq1hi) OR LO(sq2lo) OR LO(sq2hi)) == 0, "the quarter squares start on pages, for the pointers"
+ASSERT (LO(sq1lo) OR LO(sq1hi) OR LO(sq2lo) OR LO(sq2hi)) == 0, "the quarter squares: on pages"
 
 \\ The ideal values, as arith.c has them.
 
@@ -73,10 +68,9 @@ ideal_lsx = ROUND(f_lsx(0..127))
 
 LOG_STEP = ROUND(-256*log2(PI/1024))    ; 2137.2, for lsec16: a step's angle, its log negated
 
-\\ A bit a delta: a table's first entry, then a bit for each delta after it,
-\\ over a base for each byte of bits. The first byte holds the (n - 1) MOD 8
-\\ odd deltas, under a set bit; every other, 8. A byte whose deltas fit the
-\\ one before's base keeps it, so the bases run monotonically.
+\\ A bit a delta: a table's first entry, then a bit for each delta after it, over a base for each
+\\ byte of bits. The first byte holds the (n - 1) MOD 8 odd deltas, under a set bit; every other,
+\\ 8. A byte whose deltas fit the one before's base keeps it, so the bases run monotonically.
 
 FUNCTION pk_deltas(v) = v[1..]-v[..LEN(v)-2]
 
@@ -121,8 +115,7 @@ FUNCTION pk_bits(gs, bs, k, i)
     ENDIF
 = r
 
-\\ The first entry a byte of bits makes: the first byte's deltas make 1 to
-\\ k, and byte b's the 8 after k + 8(b - 1).
+\\ The first entry byte b of bits makes: 1 for the first, k + 8(b - 1) + 1 after it.
 
 FUNCTION pk_entry(k, b)
     IF b == 0
@@ -132,8 +125,8 @@ FUNCTION pk_entry(k, b)
     ENDIF
 = e
 
-\\ A table's packing, from its ideal values v: the deltas by byte, the
-\\ bytes' bases, and the bytes of bits, stored last first.
+\\ A table's packing, from its ideal values v: the deltas by byte, the bytes' bases, and the bytes
+\\ of bits, stored last first.
 
 FUNCTION pk_k(v) = (LEN(v)-1) MOD 8
 FUNCTION pk_nb(v) = (LEN(v)-1) DIV 8+1
@@ -141,13 +134,16 @@ FUNCTION pk_gs(v) = pk_groups(pk_deltas(v), pk_k(v), pk_nb(v), 0)
 FUNCTION pk_bs(v) = pk_bases(pk_gs(v), 0, 0, FALSE)
 FUNCTION pk_packed(v) = REVERSE(pk_bits(pk_gs(v), pk_bs(v), pk_k(v), 0))
 
-\\ Unpack table from its ideal values v, its bits PACKed at bits, as
-\\ beebdoom does. X counts the bytes of bits down, and the set bit, carried
-\\ round in C, empties each in turn. A byte's base comes from compares, not
-\\ a table: the bases only run one way, so each step is 1 more for the bytes
-\\ before it (falling: CPX on the byte) or the entries after it (rising: CPY
-\\ on the entry). The compare also clears the carry from the sine's 255 to
-\\ 256.
+\\ Unpack a table of a bit a delta, as beebdoom does.
+\\
+\\ Inputs:
+\\     table: where it goes
+\\     v: its ideal values, which the packing came from
+\\     bits: its bits, PACKed
+\\
+\\ Outputs:
+\\     table: made
+\\     bits: corrupted
 
 MACRO UNPACK table, v, bits
     k = pk_k(v)
@@ -164,10 +160,10 @@ MACRO UNPACK table, v, bits
     ZA_UNREACHABLE
 .loop
     ADC #blo                            ; the delta's bit, over the least base
-    FOR t = blo+1..<bhi+1
-        IF falling
+    FOR t = blo+1..<bhi+1               ; 1 more for each base above it, from a compare: the
+        IF falling                      ; bases run one way, so it's the bytes before this one
             CPX #nb-SUM((bs >= t)*1):ADC #0
-        ELSE
+        ELSE                            ; or the entries after it
             CPY #pk_entry(k, FIND((bs >= t)*1, 1)):ADC #0
         ENDIF
     NEXT
@@ -178,19 +174,31 @@ MACRO UNPACK table, v, bits
     DEX:BPL next                        ; the set bit, in C, goes on
 ENDMACRO
 
-\\ A table's bits, packed from its ideal values v, for UNPACK, which shifts
-\\ them out.
+\\ A table's bits, packed at assembly time, for UNPACK.
+\\
+\\ Inputs:
+\\     v: its ideal values
+\\
+\\ Outputs:
+\\     the bytes of bits, last first
 
 MACRO PACK v
     EQUB pk_packed(v)
 ENDMACRO
 
 \\ Make every table, as arith.c does.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     Tables: made
+\\     sq1loptr to sq2hiptr: the multiply's pointers
 
 .make_tables
 {
-    \\ the normalisers, an octave at a time: the bytes of bit length k
-    \\ normalise to 128 on, in steps of 2^(8 - k)
+    \\ the normalisers, an octave at a time: the bytes of bit length k normalise to 128 on, in
+    \\ steps of 2^(8 - k), and nrm takes them with the leading one shifted out
 
     ZA_AUTO1 step                       ; local: 2^(8 - k)
 
@@ -200,8 +208,8 @@ ENDMACRO
 .octave
     LDA #128
 .bytes
-    STA nrm,X
-    PHA:TYA:STA k8,X:PLA
+    PHA:ASL A:STA nrm,X
+    TYA:STA k8,X:PLA
     INX
     CLC:ADC step
     BCC bytes
@@ -221,8 +229,8 @@ ENDMACRO
     UNPACK lsec, ideal_lsec, bits_lsec
     UNPACK lsx, ideal_lsx, bits_lsx
 
-    \\ lsec16 past 45 degrees, from logs: LOG_STEP - log2(2j + 1) + lsx[j] at
-    \\ 255 - j, log2 of a byte as pt_log2_8 has it; under 45, high bytes of 0
+    \\ lsec16 past 45 degrees, from logs: LOG_STEP - log2(2j + 1) + lsx[j] at 255 - j, the log as
+    \\ pt_log2_8 has it; under 45, high bytes of 0
 
     ZA_AUTO1 logfrac                    ; local: log2(2j + 1)'s fraction
     ZA_AUTO1 logk8                      ; local: its whole part + 1
@@ -232,7 +240,7 @@ ENDMACRO
 .lsec16
     TYA:ASL A:ORA #1:TAX                ; 2j + 1
     LDA k8,X:STA logk8
-    LDA nrm,X:ASL A:TAX
+    LDA nrm,X:TAX
     LDA logf,X:STA logfrac
     TYA:EOR #&FF:TAX                    ; 255 - j
     SEC
@@ -245,10 +253,8 @@ ENDMACRO
     DEY
     BPL lsec16
 
-    \\ the quarter squares, x*x DIV 4 for x = 0..511, in one loop over two
-    \\ pages (as starglobe's): sq1[x + 1] = sq1[x] + (x + 1) DIV 2, delta
-    \\ stepped on even x. Then sq2[x] = sq1[255 - x], and sq1[x - 255] past
-    \\ 255, X counting up as Y counts down
+    \\ the quarter squares, x*x DIV 4 for x = 0..511 (as starglobe's): sq1[x + 1] = sq1[x] +
+    \\ (x + 1) DIV 2. Then sq2[x] = sq1[255 - x], and sq1[x - 255] past 255
 
     ZA_AUTO2 quarter                    ; local: x*x DIV 4
     ZA_AUTO1 delta                      ; local: (x + 1) DIV 2
@@ -291,11 +297,8 @@ ENDMACRO
     LDA #HI(sq2lo):STA sq2loptr+1
     LDA #HI(sq2hi):STA sq2hiptr+1
 
-    \\ rpost: (POST_SCALE + d - 1) DIV d for d = 8i, i from RPOST_START,
-    \\ which is 1 + RPOST_DIVIDEND DIV i: a byte divisor, so the remainder
-    \\ (under i) lives in A, the carry out of ROL A its ninth bit, as beebdoom
-    \\ divides. The quotient shifts in behind the dividend's low byte, and the
-    \\ SEC, out of the last ROL, adds the 1
+    \\ rpost: (POST_SCALE + d - 1) DIV d for d = 8i, which is 1 + RPOST_DIVIDEND DIV i, by
+    \\ restoring division as beebdoom's: the remainder in A, its ninth bit the carry out of ROL A
 
     ZA_AUTO1 divisor                    ; local: i
     ZA_AUTO1 quotient                   ; local: the dividend's low byte, then the quotient
@@ -320,14 +323,13 @@ ENDMACRO
     DEY
     BNE divide
     ROL quotient                        ; its last bit in, the SEC out
-    LDA quotient:ADC #0
+    LDA quotient:ADC #0                 ; plus the SEC: the 1
     STA rpost,X
     INX
     CPX #RPOST_END
     BNE posts
 
-    \\ T's rows' pages, for the plotters (T's the one buffer): row y's is
-    \\ T's plus y DIV 4, four rows to a page, 64 the junk row's
+    \\ T's rows' pages, for the plotters: row y's is T's plus y DIV 4, 64 the junk row's
 
     LDX #SCREEN_HEIGHT
 .trows

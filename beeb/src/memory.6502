@@ -1,7 +1,6 @@
-\\ memory.6502 - where everything lives once PORTAL has the machine: the zero
-\\ page pool, main RAM's regions, and the pools of workspace in it (virtual
-\\ sections, claimed piece by piece where they're used).
-\\
+\\ memory.6502 - where everything lives once PORTAL has the machine: the zero page pool, main
+\\ RAM's regions, and its pools of workspace, as virtual sections claimed where they're used.
+
 \\   &0000  zero page: the pool, bar &FC
 \\   &0100  the stack
 \\   &0200  the OS's vectors and workspace: left alone (IRQ1V)
@@ -22,7 +21,8 @@ ZA_POOL &00..&FB, &FD..&FF              ; &FC: the MOS's IRQ entry saves A there
 
 BOOT_BANK = &0400                       ; the sideways RAM bank !BOOT found (it writes &400 itself)
 LOAD_FLOOR = &1200                      ; the lowest PORTAL may load
-PORTAL_ORG = (MAX({LOAD_FLOOR, T_JUNK_TOP-(entry-swramcode_image)})+&FF) AND &FF00  ; so its loader starts at T's top junk row, or higher; on a page
+\\ so its loader starts at T's top junk row, or higher, on a page
+PORTAL_ORG = (MAX({LOAD_FLOOR, T_JUNK_TOP-(entry-swramcode_image)})+&FF) AND &FF00
 PORTAL_END = &8000                      ; and it must end below here
 FRAME_ORG = &0400
 PERSIST_ORG = &0B00
@@ -40,23 +40,18 @@ SCREEN_B = &7000
 SWRAM_ORG = &8000
 SWRAM_END = &C000
 
-\\ The engine's workspace, in pools by lifetime against the frame: the camera
-\\ tick, then the capture (the walk, plotting as it goes), the fill, the
-\\ sprites and the unplot. Pools at one address are never alive together.
-\\ Sizes are at the C's caps.
+\\ The engine's workspace, in pools by lifetime against the frame: the camera tick, the capture,
+\\ the fill, the sprites, the unplot. Pools at one address are never alive together. Sizes at caps:
 \\
-\\   Persist   for good: the vertex cache, cell_visit, the camera (441 of 512
-\\             bytes)
-\\   Frame     the capture to the unplot: the records, lastp1, the sprites'
-\\             instances, order and clip rows (1,717 of 1,792)
-\\   Capture   the capture alone: top, bot, the visits, the kept lines, the
-\\             walk's slots (1,026 of 1,280). Nothing in it lasts to the next
-\\             frame: as it ends, the visits clear their cells' cell_visit
-\\   Between   over Capture, everything outside the capture: the tick, the
-\\             fill, the sprites, the unplot
-\\   JunkTop   T's junk rows: the plotters' overruns land there, and nothing
-\\   JunkBot   reads them. As Between, bar the unplot, which writes them too
-\\             (256 bytes each)
+\\   Persist   for good: the vertex cache, cell_visit, the camera (441 of 512 bytes)
+\\   Frame     the capture to the unplot: the records, lastp1, the sprites' instances, order and
+\\             clip rows (1,717 of 1,792)
+\\   Capture   the capture alone: top, bot, the visits, the kept lines, the walk's slots (1,026 of
+\\             1,280). As it ends, the visits clear their cells' cell_visit
+\\   Between   over Capture, everything outside the capture: the tick, the fill, the sprites, the
+\\             unplot
+\\   JunkTop   T's junk rows: the plotters' overruns land there, and nothing reads them. As
+\\   JunkBot   Between, bar the unplot, which writes them too (256 bytes each)
 
 SECTION Persist, org = PERSIST_ORG, guard = WORKSPACE_END, virtual = TRUE
 ENDSECTION

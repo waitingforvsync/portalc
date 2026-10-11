@@ -1,7 +1,13 @@
 \\ macros.6502 - macros for any file.
 
-\\ Start a table of size bytes on the next page if it would cross into it:
-\\ an indexed read across a page costs a cycle.
+\\ Start a table on the next page if it would cross into it: an indexed read across a page costs a
+\\ cycle.
+\\
+\\ Inputs:
+\\     size: the table's bytes
+\\
+\\ Outputs:
+\\     P%: on to the next page, if need be
 
 MACRO FITPAGE size
     IF (P% AND &FF)+size > &100

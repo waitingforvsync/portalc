@@ -1,6 +1,13 @@
-\\ fill.6502 - the fill: T into the buffer not on show (base).
+\\ fill.6502 - the fill: T into the buffer not on show.
 
 \\ Fill the screen from T, a byte column at a time. A stub for now.
+\\
+\\ Inputs:
+\\     base: the buffer's page
+\\     T: the frame's lines
+\\
+\\ Outputs:
+\\     the buffer: filled
 
 .fill
 {

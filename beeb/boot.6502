@@ -1,17 +1,27 @@
 \\ boot.6502 - !BOOT, *RUN by SHIFT-BREAK (the disc's *OPT 4,2): machine
 \\ code at &400, as spritescale's.
 
-SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
+SECTION Boot, filename = "!BOOT", org = &FFFF1900, exec = &FFFF0000+boot_entry
 
 \\ Silence the beep, find a bank of sideways RAM (an error if there's
 \\ none), print the title, run PORTAL.
 
-.boot
-{
-    ZA_ENTRY                            ; *RUN comes in here
+BASIC
+0CALLPAGE+{
+    EQUS AS_STRING(basic_entry-&1900)
+}
+ENDBASIC
+
+    ZA_ENTRY
+
+.basic_entry
+    LDA &18
+    STA messageloop+2
+    STA cmdhi+1
 
     \\ silence the beep
 
+.boot_entry                             ; *RUN comes in here
     CLI
     LDA #15:LDX #0:JSR &FFF4            ; *FX15,0: flush the buffers
 
@@ -37,29 +47,31 @@ SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400
     ZA_UNREACHABLE                      ; the BRK doesn't come back
 
 .found
-    STX &400                            ; the bank, for PORTAL (over our spent first byte)
+    STX &400                            ; the bank, for PORTAL
     LDA &F4:STA &FE30
     CLI
 
     \\ print the title
 
     LDX #0
-.@  LDA message,X
+.messageloop
+    LDA message,X
     JSR &FFE3                           ; OSASCI
     INX
-    CMP #0
-    BNE @-
+    CPX #message_end-message
+    BNE messageloop
 
     \\ run PORTAL
 
     LDX #LO(cmd)
+.cmdhi
     LDY #HI(cmd)
     JMP &FFF7                           ; OSCLI
 
 .cmd
     EQUS "/"
 .message
-    EQUS "PORTAL", 13, 13, 0
-}
+    EQUS "PORTAL", 13, 13
+.message_end
 
 ENDSECTION

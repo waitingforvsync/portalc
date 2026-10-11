@@ -16,7 +16,11 @@
 #include "arith.h"
 #include "map.h"
 
-#define PT_VC_MAX (PT_MAX_VERTS + 1)    // entries, entry 0 the null one
+// The most entries the cache holds. No position sees every vertex, and maps
+// are designed so that none needs more than this: the panic in
+// pt_vcache_vert is where a map that does is caught.
+#define PT_MAX_VCACHE 63    // with the null entry, 64: four tables a page on the Beeb
+#define PT_VC_MAX (PT_MAX_VCACHE + 1)    // entries, entry 0 the null one
 
 typedef struct pt_vcache {
     uint16_t x, y;                      // the position, in whole units

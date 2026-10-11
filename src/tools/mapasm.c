@@ -1,9 +1,9 @@
-// mapasm.c - the demo scene as Baron source, for beeb/src/map.6502: every
+// mapasm.c - the demo scene as Baron source, for beeb/src/mapdata.6502: every
 // field a list (map_...), then a table of its own (16-bit fields as low bytes and
 // high bytes), each kept within a page. Only what the engine reads goes:
 // a sprite's size and an art's palette are the map builder's.
 //
-//   portalc_mapasm > map.6502
+//   portalc_mapasm > mapdata.6502
 
 #include <stdint.h>
 #include <stdio.h>
@@ -46,17 +46,18 @@ int main(void)
     pt_arith_init();
     pt_scene_init(&m);
 
-    printf("\\\\ map.6502 - the demo scene (map.c's pt_scene_init) as the Beeb holds it:\n"
-           "\\\\ every field a table of its own, kept within a page. Made by\n"
-           "\\\\ portalc_mapasm (make map): don't edit it.\n\n");
+    printf("\\\\ mapdata.6502 - the demo scene (map.c's pt_scene_init), a table a field, "
+           "each within a page.\n"
+           "\\\\ Made by portalc_mapasm (make map): don't edit it. "
+           "The map's routines are in map.6502.\n\n");
 
     printf("\\\\ Where the camera starts (camera.h), and the cell that holds it.\n\n");
     printf("CAM_START_X = %d\nCAM_START_Y = %d\nCAM_START_ANGLE = %d\nCAM_START_CELL = %d\n\n",
            PT_CAM_START_X, PT_CAM_START_Y, PT_CAM_START_ANGLE,
            pt_map_find_cell(&m, PT_CAM_START_X, PT_CAM_START_Y));
 
-    printf("\\\\ The fields, an element an entry. Cell 0 (the outside) and sprite 0\n"
-           "\\\\ (none) are there, unused.\n\n");
+    printf("\\\\ The fields, an element an entry. Cell 0 (the outside) and sprite 0 (none) are "
+           "there, unused.\n\n");
 #define FIELD(nm, n, expr)               \
     do {                                 \
         for (unsigned i = 0; i < (n); i++) \
@@ -95,8 +96,8 @@ int main(void)
            "MAP_EDGES = LEN(map_edge_angle)\nMAP_SIDES = LEN(map_side_v)\n"
            "MAP_SPRITES = LEN(map_sprite_x)\nMAP_ARTS = LEN(map_art_e) DIV 8\n\n");
 
-    printf("\\\\ The tables. An art's patterns are by art * 8 + colour code, 0\n"
-           "\\\\ transparent; its data is by art_lo and art_hi.\n\n");
+    printf("\\\\ The tables. An art's patterns are by art * 8 + colour code, 0 transparent;\n"
+           "\\\\ its data is by art_lo and art_hi.\n\n");
     table("vert_xlo", "MAP_VERTS", "LO(map_vert_x)");
     table("vert_xhi", "MAP_VERTS", "HI(map_vert_x)");
     table("vert_ylo", "MAP_VERTS", "LO(map_vert_y)");

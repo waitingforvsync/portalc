@@ -1,0 +1,104 @@
+\\ test/arith.6502 - make test's check of the arithmetic macros, in its -D TEST=TRUE build.
+\\ The answers go at the top of the sideways RAM bank, for host/test_arith.py to compare.
+
+TEST_RESULTS = &A000
+
+SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
+.t_log8f    SKIP &100                   ; LOG2_8's fraction, by b
+.t_log8w    SKIP &100                   ; and whole part
+.t_log16s1  SKIP &200                   ; LOG2_16's Fletcher sums: bound b's by x's high byte,
+.t_log16s2  SKIP &200                   ; from 2^(b - 8) - 2
+.t_exp      SKIP &800                   ; EXP2_8's byte, by l
+.t_expc     SKIP &800                   ; and its carry, 0 or 1
+.t_done     SKIP 1                      ; &A5 once they're all written
+ENDSECTION
+
+\\ LOG2_16 at bound bits, over every x under it. Too many answers to keep, so each high byte's
+\\ go into a pair of sums.
+\\
+\\ Inputs:
+\\     bits: the bound, 9 to 16
+\\
+\\ Outputs:
+\\     t_log16s1, t_log16s2: the sums, from 2^(bits - 8) - 2
+
+MACRO TEST_LOG2_16 bits
+    ZA_AUTO1 hi                         ; local: x's high byte
+    ZA_AUTO1 lo                         ; local: and low
+    ZA_AUTO1 s1                         ; local: the sum of the answers' bytes
+    ZA_AUTO1 s2                         ; local: and the sum of the sums
+
+    LDA #0:STA hi
+    LDA #1:STA lo                       ; from 1, under 256
+.row
+    LDA #0:STA s1:STA s2
+.col
+    LDA lo:LDX hi
+    LOG2_16 bits
+    CLC:ADC s1:STA s1
+    CLC:ADC s2:STA s2
+    TXA:CLC:ADC s1:STA s1
+    CLC:ADC s2:STA s2
+    INC lo
+    BNE col
+    LDX hi
+    LDA s1:STA t_log16s1+(1 << (bits - 8))-2,X
+    LDA s2:STA t_log16s2+(1 << (bits - 8))-2,X
+    INX:STX hi
+    CPX #LO(1 << (bits - 8))
+    BNE row
+ENDMACRO
+
+\\ Run each macro over every input it takes, and store the answers.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     TestResults: the answers, t_done last
+
+.test
+{
+    LDA #0:STA t_done
+
+    \\ LOG2_8
+
+    LDX #1
+.log8
+    LOG2_8
+    STA t_log8f,X
+    TYA:STA t_log8w,X
+    INX
+    BNE log8
+
+    \\ LOG2_16, at every bound
+
+    FOR b = 9..16
+        TEST_LOG2_16 b
+    NEXT
+
+    \\ EXP2_8, a high byte at a time, in Y, which it keeps: the stores step on a page each
+
+    LDY #0
+    LDA #HI(t_exp):STA store+2
+    LDA #HI(t_expc):STA storec+2
+.erow
+    LDX #0
+.ecol
+    EXP2_8
+.store
+    STA t_exp,X
+    LDA #0:ROL A
+.storec
+    STA t_expc,X
+    INX
+    BNE ecol
+    INC store+2:INC storec+2
+    INY:CPY #8
+    BNE erow
+
+    LDA #&A5:STA t_done
+    RTS
+}
+
+ASSERT P% <= TEST_RESULTS, "test: the code runs into its answers"

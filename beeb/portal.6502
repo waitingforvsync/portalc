@@ -1,23 +1,23 @@
-\\ portal.6502 - PORTAL on the disc: the loader, carrying the code that runs
-\\ from main RAM and the code that runs from sideways RAM, each assembled
-\\ where it runs, for the loader to copy there.
+\\ portal.6502 - PORTAL on the disc: the code that runs from sideways RAM
+\\ and the code that runs from main RAM, each assembled where it runs, then
+\\ the loader, which copies them there. The loader starts at T_ORG, or
+\\ higher where the payloads need the room.
 
 INCLUDE "src/memory.6502"
 INCLUDE "src/constants.6502"
 
-SECTION Portal, org = LOADER_ORG, load = &FFFF0000+LOADER_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = &7C00
-    INCLUDE "src/entry.6502"
-    INCLUDE "src/tables.6502"
+SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
+.swramcode_image
+    SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
+        INCLUDE "src/start.6502"
+        INCLUDE "src/clear.6502"
+    ENDSECTION
 
 .maincode_image
     SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
         INCLUDE "src/irq.6502"
     ENDSECTION
 
-.swramcode_image
-    SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
-        INCLUDE "src/start.6502"
-    ENDSECTION
-
-.image_end
+    INCLUDE "src/entry.6502"
+    INCLUDE "src/tables.6502"
 ENDSECTION

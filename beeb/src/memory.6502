@@ -7,18 +7,22 @@
 \\   &0200  the OS's vectors and workspace: left alone (IRQ1V)
 \\   &0400  Workspace: free throughout, once the loader has read !BOOT's bank
 \\   &0D00  the NMI vector: an RTI, put there by the loader
-\\   &0E00  Scratch: free once the loader's done (PORTAL loads at &1200)
+\\   &0E00  Scratch: free once the loader has copied the payloads out
 \\   &3000  main RAM's code
 \\   &3C00  the tables, made by the loader
-\\   &4F00  T, the line buffer: 16 character rows, then a junk row
+\\   &4F00  T, the line buffer: 16 character rows, then a junk row. The
+\\          loader runs here first (or higher), PORTAL loading under it
 \\   &6000  screen A
 \\   &7000  screen B
 \\   &8000  sideways RAM's code, in the bank paged in for good
 
-ZA_POOL &00..&FB                        ; &FC: the MOS's IRQ entry saves A there
+ZA_POOL &00..&FB, &FD..&FF              ; &FC: the MOS's IRQ entry saves A there
 
 BOOT_BANK = &0400                       ; the sideways RAM bank !BOOT found (it writes &400 itself)
-LOADER_ORG = &1200                      ; PORTAL, as loaded
+LOAD_FLOOR = &1200                      ; the lowest PORTAL may load
+PORTAL_ORG = MAX({LOAD_FLOOR, T_ORG-(entry-swramcode_image)})  ; so its loader starts at T, or higher
+PORTAL_END = &8000                      ; and it must end below here
+SCRATCH_ORG = &0E00
 MAINCODE_ORG = &3000
 MAINCODE_END = &3C00
 TABLES_ORG = &3C00
@@ -32,7 +36,7 @@ SWRAM_END = &C000
 SECTION Workspace, org = &0400, guard = &0D00, virtual = TRUE
 ENDSECTION
 
-SECTION Scratch, org = &0E00, guard = MAINCODE_ORG, virtual = TRUE
+SECTION Scratch, org = SCRATCH_ORG, guard = MAINCODE_ORG, virtual = TRUE
 ENDSECTION
 
 SECTION Tables, org = TABLES_ORG, guard = T_ORG, virtual = TRUE

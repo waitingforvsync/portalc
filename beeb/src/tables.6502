@@ -29,7 +29,7 @@ ENDSECTION
 
 lsec = lsec16lo                         ; its first 128: under 45 degrees, bytes
 rpost = rpostmem-RPOST_START
-lsx = T_ORG                             ; the loader's, for lsec16, in T before it's cleared
+lsx = SCRATCH_ORG                       ; the loader's, for lsec16: in Scratch, the payloads out
 
 \\ The ideal values, as arith.c has them.
 
@@ -143,7 +143,7 @@ MACRO UNPACK table, v, bits
     ASSERT blo < bhi OR MAX(v) <= 255, "UNPACK: a wrap needs a compare to clear its carry"
 
     LDA #v[0]:LDY #0:LDX #nb-1
-    CLC:BCC start                       ; (always)
+    CLC:BCC store                       ; (always)
     ZA_UNREACHABLE
 .loop
     ADC #blo                            ; the delta's bit, over the least base
@@ -154,7 +154,7 @@ MACRO UNPACK table, v, bits
             CPY #pk_entry(k, FIND((bs >= t)*1, 1)):ADC #0
         ENDIF
     NEXT
-.start
+.store
     STA table,Y:INY
 .next
     ROR bits,X:BNE loop                 ; the next delta's bit, or the set bit

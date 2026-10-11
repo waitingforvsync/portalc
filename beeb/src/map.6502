@@ -2,6 +2,15 @@
 
 ASSERT MAP_VERTS <= MAX_VERTS, "the map: more vertices than the tables hold"
 
+\\ The bits of the longest half-unit offset from the camera to a point: 2 * span + 1, as the camera
+\\ and the sprites are inside the vertices' box. POLAR's logs are bounded by it.
+
+FUNCTION bitlen(v) = SUM(((1 << (0..16)) <= v)*1)
+
+MAP_SPAN = MAX({MAX(map_vert_x)-MIN(map_vert_x), MAX(map_vert_y)-MIN(map_vert_y)})
+MAP_OFFSET_BITS = bitlen(2*MAP_SPAN+1)
+ASSERT MAP_OFFSET_BITS <= 16, "the map: an offset across it doesn't fit 16 bits"
+
 \\ Ready the engine for the map: the vertex cache empty, every slot cleared.
 \\ The slots start as junk; from then on the cache's resets keep them clear.
 \\

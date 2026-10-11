@@ -103,3 +103,128 @@ MACRO EXP2_8
     LSR A:LSR A:LSR A:LSR A:LSR A:LSR A:LSR A
     ADC #0                              ; rounded by the last bit out
 ENDMACRO
+
+\\ The polar form of point X from the camera, as pt_vcache_vert makes it: pt_polar_of of its
+\\ offset from the middle of the camera's whole-unit square, in half units, with lr less 256.
+\\
+\\ Inputs:
+\\     xlo, xhi, ylo, yhi: the points' coordinate tables
+\\     anglo, anghi, lrlo, lrhi: the tables the answer goes in
+\\     X: the point
+\\     Y: the answer's index
+\\     camx, camy: the camera, in whole units
+\\
+\\ Outputs:
+\\     anglo,Y: the world angle's step within its quadrant
+\\     anghi,Y: the quadrant
+\\     lrlo,Y, lrhi,Y: 256 log2 of the length, in whole units
+\\     Y: preserved
+\\     X: corrupted
+
+MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, lrlo, lrhi
+    ZA_AUTO1 index                      ; local: Y, where the answer goes
+    ZA_AUTO1 quadrant                   ; local: 0 to 3
+    ZA_AUTO1 flip                       ; local: &FF to flip atan's byte: steep and odd differ
+    ZA_AUTO2 major                      ; local: the major component, in half units
+    ZA_AUTO2 minor                      ; local: and the minor
+    ZA_AUTO2 logmajor                   ; local: the major's log
+
+    STY index
+
+    \\ x's offset, as d = v - cam - 1, the C's being 2d + 1 (never 0): its magnitude is 2d + 1,
+    \\ or 2(d EOR &FFFF) + 1 for d < 0. Into major, for now
+
+    ZA_AUTO1 xsign                      ; local: x's sign, in bit 7
+
+    CLC
+    LDA xlo,X:SBC camx:TAY
+    LDA xhi,X:SBC camx+1:STA xsign
+    BPL xpos
+    EOR #&FF:STA major+1
+    TYA:EOR #&FF
+    SEC:BCS xmag                        ; (always)
+    ZA_UNREACHABLE
+.xpos
+    STA major+1
+    TYA:SEC
+.xmag
+    ROL A:STA major:ROL major+1         ; C clear: major+1 was under &80
+
+    \\ y's, into minor, and the quadrant from the signs: bit 1 y's, bit 0 x's EOR y's (odd)
+
+    LDA ylo,X:SBC camy:TAY              ; (C clear: the - 1)
+    LDA yhi,X:SBC camy+1:TAX
+    ASL A                               ; C: y's sign
+    TXA:EOR xsign
+    ROL A:ROL A:AND #3:STA quadrant
+    LSR A                               ; C: odd
+    LDA #0:SBC #0:STA flip              ; &FF if even: the flip if steep
+    TXA:BPL ypos
+    EOR #&FF:STA minor+1
+    TYA:EOR #&FF
+    SEC:BCS ymag                        ; (always)
+    ZA_UNREACHABLE
+.ypos
+    STA minor+1
+    TYA:SEC
+.ymag
+    ROL A:STA minor:ROL minor+1         ; C clear, as for x
+
+    \\ steep, uy > ux: then y's is the major
+
+    SBC major                           ; minor - major - 1
+    LDA minor+1:SBC major+1             ; C: steep
+    BCS steep
+    LDA flip:EOR #&FF:STA flip          ; not steep: the flip if odd
+    BCC logs                            ; (always)
+    ZA_UNREACHABLE
+.steep
+    LDA major:LDX minor:STA minor:STX major
+    LDA major+1:LDX minor+1:STA minor+1:STX major+1
+
+    \\ the logs: l, the minor's less the major's, + 8 * 256, is a byte exp's, as the minor's never
+    \\ the larger
+
+.logs
+    ZA_AUTO1 logminorhi                 ; local: the minor's log's whole part
+
+    LDA major:LDX major+1
+    LOG2_16 MAP_OFFSET_BITS
+    STA logmajor:STX logmajor+1
+    LDA minor:LDX minor+1
+    LOG2_16 MAP_OFFSET_BITS
+    STX logminorhi
+    SEC:SBC logmajor:TAX                ; l's low byte
+    LDA logminorhi:SBC logmajor+1       ; and its high, less 8
+    BEQ equal                           ; l = 8 * 256: the logs are the same
+    CMP #&F8:BCS ratio
+    LDX #0:BEQ answer                   ; l < 0: r = 0 (always)
+    ZA_UNREACHABLE
+
+    \\ equal: 45 degrees, atan's 128, and lhyp's
+
+.equal
+    LDY index
+    LDA #128:CLC:ADC logmajor           ; logmajor + 128 - 256
+    STA lrlo,Y
+    LDA logmajor+1:ADC #&FF:STA lrhi,Y
+    LDA #128:BNE angle                  ; (always)
+    ZA_UNREACHABLE
+
+    \\ r, 256 * minor / major, and the answer from atan and lhyp
+
+.ratio
+    AND #7:TAY
+    EXP2_8
+    BCS equal                           ; 256
+    TAX
+.answer
+    LDY index
+    LDA lhyp,X:CLC:ADC logmajor         ; logmajor + lh - 256
+    STA lrlo,Y
+    LDA logmajor+1:ADC #&FF:STA lrhi,Y
+    LDA atan,X
+.angle
+    EOR flip:STA anglo,Y
+    LDA quadrant:STA anghi,Y
+ENDMACRO

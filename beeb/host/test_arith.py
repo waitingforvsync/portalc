@@ -23,6 +23,21 @@ def fletcher(answers):
     return s1, s2
 
 
+def polar_sums(flat):
+    """POLAR's sums, a row of 256 points at a time: each one's angle, then its lr."""
+    s1s, s2s = [], []
+    for row in range(256):
+        s1 = s2 = 0
+        for i in range(row * 512, row * 512 + 512, 2):
+            a, lr = flat[i], flat[i + 1] & 0xFFFF
+            for b in (a & 0xFF, a >> 8, lr & 0xFF, lr >> 8):
+                s1 = (s1 + b) & 0xFF
+                s2 = (s2 + s1) & 0xFF
+        s1s.append(s1)
+        s2s.append(s2)
+    return bytes(s1s), bytes(s2s)
+
+
 def expected(c):
     """(name, label, where in it, the first answer's input, the answers)."""
     log8 = c['log2_8']
@@ -38,9 +53,16 @@ def expected(c):
             ('LOG2_16 %d s1' % bits, 't_log16s1', rows - 2, 0, bytes(s[0] for s in sums[:rows])),
             ('LOG2_16 %d s2' % bits, 't_log16s2', rows - 2, 0, bytes(s[1] for s in sums[:rows])),
         ]
+    near1, near2 = polar_sums(c['polar_near'])
+    far1, far2 = polar_sums(c['polar_far'])
     return checks + [
         ('EXP2_8 byte', 't_exp', 0, 0, bytes(v & 0xFF for v in c['exp2'])),
         ('EXP2_8 carry', 't_expc', 0, 0, bytes(v >> 8 for v in c['exp2'])),
+        ('POLAR bound', 't_bits', 0, 0, bytes([c['polar_bits']])),
+        ('POLAR near s1', 't_pnear1', 0, 0, near1),
+        ('POLAR near s2', 't_pnear2', 0, 0, near2),
+        ('POLAR far s1', 't_pfar1', 0, 0, far1),
+        ('POLAR far s2', 't_pfar2', 0, 0, far2),
     ]
 
 
@@ -57,7 +79,7 @@ def main():
     try:
         b2.reset()
         b2.boot(disc)
-        end = time.time() + 30
+        end = time.time() + 120
         while b2.peek(syms['t_done'], 1)[0] != DONE:
             if time.time() > end:
                 print('arith: the check never finished')

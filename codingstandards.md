@@ -13,6 +13,8 @@ in `src/`, which models it. Read this before writing any.
   `SECTION Boot, filename = "!BOOT", org = &400, load = &FFFF0400`.
 - Labels lowercase. Memory-map constants of our own are upper case
   (`SCREEN_A`, `T_ORG`).
+- Names in whole words, not abbreviations: `major`, `logmajor`, `xsign`,
+  not `maj`, `lmaj`, `sx`.
 - Every routine braced, `{ }`, and anything else where it makes sense.
 - Every whole-line comment is `\\`: the file's header, the notes between
   routines, a routine's header and its parts'. Only trailing comments use

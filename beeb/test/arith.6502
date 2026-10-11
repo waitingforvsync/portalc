@@ -2,6 +2,14 @@
 \\ The answers go at the top of the sideways RAM bank, for host/test_arith.py to compare.
 
 TEST_RESULTS = &A000
+TEST_CAM = &1000                        ; POLAR's camera, both ways
+
+\\ POLAR's points, x and y alike, as offsets from the camera: near, every one from -128 to 127,
+\\ and far, a grid out to the bound (the longest half-unit offset 2^bits - 1)
+
+FAR_STEP = 1 << (MAP_OFFSET_BITS - 8)
+near_x = TEST_CAM - 128 + (0..255)
+far_x = TEST_CAM - (1 << (MAP_OFFSET_BITS - 1)) + 1 + FAR_STEP*(0..255)
 
 SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
 .t_log8f    SKIP &100                   ; LOG2_8's fraction, by b
@@ -10,7 +18,21 @@ SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
 .t_log16s2  SKIP &200                   ; from 2^(b - 8) - 2
 .t_exp      SKIP &800                   ; EXP2_8's byte, by l
 .t_expc     SKIP &800                   ; and its carry, 0 or 1
+.t_pnear1   SKIP &100                   ; POLAR's Fletcher sums near, by y's index
+.t_pnear2   SKIP &100
+.t_pfar1    SKIP &100                   ; and far
+.t_pfar2    SKIP &100
+.t_bits     SKIP 1                      ; MAP_OFFSET_BITS, the far grid's bound
 .t_done     SKIP 1                      ; &A5 once they're all written
+ENDSECTION
+
+SECTION Frame                           ; POLAR's workspace: the loader's, before the engine's
+.t_pylo     SKIP &100                   ; a row's y, at every point
+.t_pyhi     SKIP &100
+.t_palo     SKIP &100                   ; a row's answers
+.t_pahi     SKIP &100
+.t_plrlo    SKIP &100
+.t_plrhi    SKIP &100
 ENDSECTION
 
 \\ LOG2_16 at bound bits, over every x under it. Too many answers to keep, so each high byte's
@@ -23,30 +45,96 @@ ENDSECTION
 \\     t_log16s1, t_log16s2: the sums, from 2^(bits - 8) - 2
 
 MACRO TEST_LOG2_16 bits
-    ZA_AUTO1 hi                         ; local: x's high byte
-    ZA_AUTO1 lo                         ; local: and low
-    ZA_AUTO1 s1                         ; local: the sum of the answers' bytes
-    ZA_AUTO1 s2                         ; local: and the sum of the sums
+    ZA_AUTO1 xhi                        ; local: x's high byte
+    ZA_AUTO1 xlo                        ; local: and low
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
 
-    LDA #0:STA hi
-    LDA #1:STA lo                       ; from 1, under 256
+    LDA #0:STA xhi
+    LDA #1:STA xlo                      ; from 1, under 256
 .row
-    LDA #0:STA s1:STA s2
+    LDA #0:STA sum1:STA sum2
 .col
-    LDA lo:LDX hi
+    LDA xlo:LDX xhi
     LOG2_16 bits
-    CLC:ADC s1:STA s1
-    CLC:ADC s2:STA s2
-    TXA:CLC:ADC s1:STA s1
-    CLC:ADC s2:STA s2
-    INC lo
+    CLC:ADC sum1:STA sum1
+    CLC:ADC sum2:STA sum2
+    TXA:CLC:ADC sum1:STA sum1
+    CLC:ADC sum2:STA sum2
+    INC xlo
     BNE col
-    LDX hi
-    LDA s1:STA t_log16s1+(1 << (bits - 8))-2,X
-    LDA s2:STA t_log16s2+(1 << (bits - 8))-2,X
-    INX:STX hi
+    LDX xhi
+    LDA sum1:STA t_log16s1+(1 << (bits - 8))-2,X
+    LDA sum2:STA t_log16s2+(1 << (bits - 8))-2,X
+    INX:STX xhi
     CPX #LO(1 << (bits - 8))
     BNE row
+ENDMACRO
+
+\\ POLAR over a square of 256 by 256 points, a row at a time. Too many answers to keep, so each
+\\ row's go into a pair of sums.
+\\
+\\ Inputs:
+\\     xlo, xhi: the points' x, and the rows' y
+\\     sums1, sums2: the sums' tables
+\\
+\\ Outputs:
+\\     sums1, sums2: the sums, by row
+
+MACRO TEST_POLAR xlo, xhi, sums1, sums2
+    ZA_AUTO1 row                        ; local: y's index
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA row
+.rows
+
+    \\ the rows's y, at every point
+
+    LDX row:LDA xlo,X
+    LDX #0
+.ylo
+    STA t_pylo,X
+    INX
+    BNE ylo
+    LDX row:LDA xhi,X
+    LDX #0
+.yhi
+    STA t_pyhi,X
+    INX
+    BNE yhi
+
+    \\ POLAR at every point, its answer at its index
+
+    LDX #0
+.point
+    TXA:TAY
+    POLAR xlo, xhi, t_pylo, t_pyhi, t_palo, t_pahi, t_plrlo, t_plrhi
+    INY:TYA:TAX
+    BEQ sums
+    JMP point
+
+    \\ the rows's sums, point by point
+
+.sums
+
+    LDA #0:STA sum1:STA sum2
+    LDX #0
+.sum
+    FOR t = {t_palo, t_pahi, t_plrlo, t_plrhi}
+        LDA t,X
+        CLC:ADC sum1:STA sum1
+        CLC:ADC sum2:STA sum2
+    NEXT
+    INX
+    BNE sum
+    LDX row
+    LDA sum1:STA sums1,X
+    LDA sum2:STA sums2,X
+    INC row
+    BEQ done
+    JMP rows
+.done
 ENDMACRO
 
 \\ Run each macro over every input it takes, and store the answers.
@@ -97,8 +185,25 @@ ENDMACRO
     INY:CPY #8
     BNE erow
 
+    \\ POLAR, near and far
+
+    LDA #LO(TEST_CAM):STA camx:STA camy
+    LDA #HI(TEST_CAM):STA camx+1:STA camy+1
+    TEST_POLAR t_nearxlo, t_nearxhi, t_pnear1, t_pnear2
+    TEST_POLAR t_farxlo, t_farxhi, t_pfar1, t_pfar2
+    LDA #MAP_OFFSET_BITS:STA t_bits
+
     LDA #&A5:STA t_done
     RTS
 }
+
+    FITPAGE &100
+.t_nearxlo  EQUB LO(near_x)
+    FITPAGE &100
+.t_nearxhi  EQUB HI(near_x)
+    FITPAGE &100
+.t_farxlo   EQUB LO(far_x)
+    FITPAGE &100
+.t_farxhi   EQUB HI(far_x)
 
 ASSERT P% <= TEST_RESULTS, "test: the code runs into its answers"

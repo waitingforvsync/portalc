@@ -82,7 +82,7 @@ typedef struct pt_kept {
 // bounds are the renderer's per-column rows, over its columns. The walk
 // recurses on the index alone.
 typedef struct pt_visit {
-    uint8_t cell;         // back-reference, to clear the cell's index at frame end
+    uint8_t cell;         // the cell visited
     uint8_t k;            // the current side's ring position, 0..num: where the
                           // last walk stopped
     uint8_t xr;           // the right column of the portal last walked through;

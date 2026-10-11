@@ -1,5 +1,6 @@
 \\ constants.6502 - the engine's constants, as the C has them.
 
+SCREEN_HEIGHT = 64                      ; canvas rows, two scanlines each (mode5.h)
 CAM_RADIUS = 40                         ; the camera's circle, in units (camera.h)
 POST_NEAR = 256                         ; d2 under this: on top of a post, left alone
 POST_SCALE = 1.25*2^15                  ; a post's 1/d2: its quarter's overcorrection, and q15

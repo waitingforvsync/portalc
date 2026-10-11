@@ -88,8 +88,8 @@ can be from the start, not tidied up later.
 - Pass values in registers, not zero page, wherever they fit. A count in X,
   counted down by `DEX:BNE`, needs no store to set it up and costs 2 cycles
   a time round; a `pages` variable needs the store and a 5-cycle `DEC`.
-- Code that runs once is thrown away afterwards (the loader becomes
-  Scratch), so it can be a `MACRO`, inlined where it's used, and
+- Code that runs once is thrown away afterwards (the loader's memory
+  becomes T), so it can be a `MACRO`, inlined where it's used, and
   self-modifying: `abs,Y` with the operand's high byte stepped by `INC`,
   rather than a zero-page pointer.
 
@@ -117,6 +117,9 @@ The rest:
   next instruction wants, the low byte where an add follows. In a loop it's
   3 cycles a bit better, `LSR q+1:ROR A` against `ROR q`, stored once at the
   end.
+- An index that's off by one (as it came out of the sum that made it)
+  stays as it is: fold the one into the address, `LDA table-1,X` or
+  `LDA table+1,X`, never an `INX`/`DEX` first.
 - Hot-path code like multiplies goes inline, as a `MACRO`.
 
 ### Memory
@@ -124,11 +127,16 @@ The rest:
 - Struct of arrays: every field of a record is a table of its own
   (`vs_k,Y`, `vs_xr,Y`), and a field that's an array is tables end to end.
 - Workspace comes from the virtual sections in `src/memory.6502`, claimed
-  where it's used.
-- Sort new per-frame state by lifetime: dead before the plot, born after it,
-  or crossing it. Dead-before-render state can live where nothing reads it
-  at render time; data used one after the other can share addresses
-  (separate sections over the same range).
+  where it's used, from the pool its lifetime fits: `Persist`, `Frame`,
+  `Capture`, `Between`, the junk rows, or the loader's `Scratch`.
+- Sort new state by lifetime against the frame's phases (camera tick,
+  capture, fill, sprites, unplot), and give tables that never coexist the
+  same addresses: separate virtual sections over one range, since Baron
+  has no unions.
+- T's junk rows (`JunkTop` and `JunkBot`) are workspace too. Only the
+  plotters (in the capture) and the unplotter write them, and nothing reads
+  them, so they hold state that's dead from the first plot to the end of
+  the unplot: the camera tick's temporaries, the sprite pass's own.
 
 ### Baron's gotchas
 

@@ -1,17 +1,18 @@
 \\ clear.6502 - clearing T and the screens: T must start each frame empty.
 
-ASSERT LO(T_ORG) == 0 AND T_JUNK+&100 == SCREEN_A AND SCREEN_A+&1000 == SCREEN_B AND SCREEN_B+&1000 == &8000, "T and the screens are whole pages, running on to &8000"
+ASSERT LO(T_JUNK_TOP) == 0 AND T_JUNK_BOT+&100 == SCREEN_A AND SCREEN_A+&1000 == SCREEN_B AND SCREEN_B+&1000 == &8000, "T, its junk rows and the screens are whole pages, running on to &8000"
 
-\\ Clear T, its junk row and both screens: whole pages, T_ORG to &8000, the
-\\ STA's operand stepping on, self-modified, from T's page.
+\\ Clear T, its junk rows and both screens: whole pages, T_JUNK_TOP to
+\\ &8000, the STA's operand stepping on, self-modified, from the top junk
+\\ row's page.
 
 .clear_buffers
 {
-    LDA #HI(T_ORG):STA loop+2
+    LDA #HI(T_JUNK_TOP):STA loop+2
     LDA #0:TAY
-    LDX #HI(&8000-T_ORG)                ; pages
+    LDX #HI(&8000-T_JUNK_TOP)           ; pages
 .loop
-    STA T_ORG,Y
+    STA T_JUNK_TOP,Y
     INY
     BNE loop
     INC loop+2                          ; the operand's high byte

@@ -1,7 +1,7 @@
 \\ portal.6502 - PORTAL on the disc: the code that runs from sideways RAM
 \\ and the code that runs from main RAM, each assembled where it runs, then
-\\ the loader, which copies them there. The loader starts at T_ORG, or
-\\ higher where the payloads need the room.
+\\ the loader, which copies them there. The loader starts at T's top junk
+\\ row, or higher where the payloads need the room.
 
 INCLUDE "src/memory.6502"
 INCLUDE "src/constants.6502"

@@ -52,10 +52,10 @@ static inline uint8_t pt_mode5_pixmask(uint8_t col)
 // The position of canvas row at byte column bytecol, row 0..H: a run or a
 // toggle only ever starts on the screen or in the junk row below it, and
 // steps from there (into the junk rows, which fb must have either side of
-// the screen, if it overruns). On the 6502 it's worked out, with no table:
-// a character row is 256 bytes, so the block's high byte is the buffer's
-// plus row / 4 (LSR A twice), its low byte bytecol * 8, and Y (row & 3) * 2
-// (AND #3 : ASL A).
+// the screen, if it overruns). On the 6502 a character row is 256 bytes,
+// so the block's high byte is the buffer's plus row / 4: a table's for T,
+// the one buffer (trowhi), and LSR A twice for a screen. Its low byte is
+// bytecol * 8, and Y (row & 3) * 2 (AND #3 : ASL A).
 static inline pt_mode5_cur pt_mode5_at(uint8_t bytecol, uint8_t row)
 {
     uint8_t grow = (uint8_t)(row + PT_FB_GUARD_ROWS);    // counted from the top junk row

@@ -5,8 +5,9 @@ loader made every table just as arith.c does.
     test_tables.py DISC SYMBOLS TABLES
 
 SYMBOLS is Baron's symbol dump, for where the tables are; TABLES is
-portalc_tables' JSON, the C's. The tables are read until they match, or
-for 20 seconds: the loader only writes them once.
+portalc_tables' JSON, the C's. trowhi, which the C hasn't (it works the
+page out), is checked against T_ORG. The tables are read until they match,
+or for 20 seconds: the loader only writes them once.
 """
 
 import json
@@ -33,6 +34,7 @@ CHECKS = [
     ('sq2lo', 0, 'sq2lo', 0, 512),
     ('sq2hi', 0, 'sq2hi', 0, 512),
     ('rpost', 32, 'rpost', 32, 200 - 32),
+    ('trowhi', 0, 'trowhi', 0, 65),
 ]
 
 
@@ -64,6 +66,7 @@ def main():
     syms = symbols(sympath)
     with open(cpath) as f:
         want = {k: bytes.fromhex(v) for k, v in json.load(f).items()}
+    want['trowhi'] = bytes((syms['T_ORG'] >> 8) + y // 4 for y in range(65))
     expect = [want[c][coff:coff + n] for _, _, c, coff, n in CHECKS]
 
     proc = None if b2.alive() else b2.private()

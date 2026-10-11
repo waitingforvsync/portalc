@@ -1,13 +1,15 @@
 \\ tables.6502 - the tables, made by the loader exactly as arith.c makes
 \\ them: the normalisers an octave at a time, every smooth table from a bit a
 \\ delta (packed here, at assembly time, from its ideal values), lsec16's
-\\ second half from logs, the quarter squares by recurrence, and rpost by
-\\ restoring division.
+\\ second half from logs, the quarter squares by recurrence, rpost by
+\\ restoring division, and T's rows' pages.
 
 RPOST_START = POST_NEAR DIV 8           ; rpost's first index, 32
 RPOST_END = CAM_RADIUS*CAM_RADIUS DIV 8 ; its end, 200: the camera's circle
 RPOST_DIVIDEND = POST_SCALE DIV 8-1     ; (see make_tables), 5119
 ASSERT POST_SCALE MOD 8 == 0 AND HI(RPOST_DIVIDEND) < RPOST_START, "rpost: a byte quotient over i"
+
+ASSERT T_ORG+SCREEN_HEIGHT DIV 4*&100 == T_JUNK_BOT, "T: four rows a page, then the junk row"
 
 SECTION Tables
 .nrm        SKIP &100                   ; b << lz(b): the byte normalised (0: unused)
@@ -25,7 +27,10 @@ SECTION Tables
 .sq2lo      SKIP &200                   ; (i-255)*(i-255)/4
 .sq2hi      SKIP &200
 .rpostmem   SKIP RPOST_END-RPOST_START  ; POST_SCALE / d2, by d2 / 8
+.trowhi     SKIP SCREEN_HEIGHT+1        ; row y's page in T, to the junk row's
 ENDSECTION
+
+ASSERT HI(trowhi) == HI(trowhi+SCREEN_HEIGHT), "trowhi: within a page, so trowhi,X never crosses one"
 
 lsec = lsec16lo                         ; its first 128: under 45 degrees, bytes
 rpost = rpostmem-RPOST_START
@@ -300,6 +305,17 @@ ENDMACRO
     INX
     CPX #RPOST_END
     BNE posts
+
+    \\ T's rows' pages, for the plotters (T's the one buffer): row y's is
+    \\ T's plus y DIV 4, four rows to a page, 64 the junk row's
+
+    LDX #SCREEN_HEIGHT
+.trows
+    TXA:LSR A:LSR A
+    CLC:ADC #HI(T_ORG)
+    STA trowhi,X
+    DEX
+    BPL trows
     RTS
 }
 

@@ -5,13 +5,15 @@
 \\   &0000  zero page: the pool, bar &FC
 \\   &0100  the stack
 \\   &0200  the OS's vectors and workspace: left alone (IRQ1V)
-\\   &0400  Workspace: free throughout, once the loader has read !BOOT's bank
-\\   &0D00  the NMI vector: an RTI, put there by the loader
-\\   &0E00  Scratch: free once the loader has copied the payloads out
-\\   &3000  main RAM's code
-\\   &3C00  the tables, made by the loader
-\\   &4F00  T, the line buffer: 16 character rows, then a junk row. The
-\\          loader runs here first (or higher), PORTAL loading under it
+\\   &0400  Frame, then Persist: free once the loader has read !BOOT's bank
+\\   &0D00  NMIs: claimed from the filing system, then left alone
+\\   &0E00  Capture, with Between over it; the loader's Scratch before that
+\\   &1300  main RAM's code
+\\   &3B00  the tables, made by the loader
+\\   &4E00  T's top junk row. The loader runs here first (or higher),
+\\          PORTAL loading under it, &1200 at the lowest
+\\   &4F00  T, the line buffer: 16 character rows
+\\   &5F00  T's bottom junk row
 \\   &6000  screen A
 \\   &7000  screen B
 \\   &8000  sideways RAM's code, in the bank paged in for good
@@ -20,24 +22,63 @@ ZA_POOL &00..&FB, &FD..&FF              ; &FC: the MOS's IRQ entry saves A there
 
 BOOT_BANK = &0400                       ; the sideways RAM bank !BOOT found (it writes &400 itself)
 LOAD_FLOOR = &1200                      ; the lowest PORTAL may load
-PORTAL_ORG = MAX({LOAD_FLOOR, T_ORG-(entry-swramcode_image)})  ; so its loader starts at T, or higher
+PORTAL_ORG = (MAX({LOAD_FLOOR, T_JUNK_TOP-(entry-swramcode_image)})+&FF) AND &FF00  ; so its loader starts at T's top junk row, or higher; on a page
 PORTAL_END = &8000                      ; and it must end below here
+FRAME_ORG = &0400
+PERSIST_ORG = &0B00
+WORKSPACE_END = &0D00
+CAPTURE_ORG = &0E00
 SCRATCH_ORG = &0E00
-MAINCODE_ORG = &3000
-MAINCODE_END = &3C00
-TABLES_ORG = &3C00
+MAINCODE_ORG = &1300
+MAINCODE_END = &3B00
+TABLES_ORG = &3B00
 T_ORG = &4F00                           ; T proper
-T_JUNK = &5F00                          ; overruns off its bottom
+T_JUNK_TOP = T_ORG-&100                 ; overruns off its top
+T_JUNK_BOT = T_ORG+&1000                ; and off its bottom
 SCREEN_A = &6000
 SCREEN_B = &7000
 SWRAM_ORG = &8000
 SWRAM_END = &C000
 
-SECTION Workspace, org = &0400, guard = &0D00, virtual = TRUE
+\\ The engine's workspace, in pools by lifetime against the frame: the camera
+\\ tick, then the capture (the walk, plotting as it goes), the fill, the
+\\ sprites and the unplot. Pools at one address are never alive together.
+\\ Sizes are at the C's caps.
+\\
+\\   Persist   for good: the vertex cache, the camera (409 of 512 bytes)
+\\   Frame     the capture to the unplot: the records, lastp1, the sprites'
+\\             instances, order and clip rows (1,717 of 1,792)
+\\   Capture   the capture alone: top, bot, the visits, cell_visit, the kept
+\\             lines, the walk's slots (1,058 of 1,280). Nothing in it lasts
+\\             to the next frame: cell_visit is zeroed as each capture starts
+\\   Between   over Capture, everything outside the capture: the tick, the
+\\             fill, the sprites, the unplot
+\\   JunkTop   T's junk rows: the plotters' overruns land there, and nothing
+\\   JunkBot   reads them. As Between, bar the unplot, which writes them too
+\\             (256 bytes each)
+
+SECTION Persist, org = PERSIST_ORG, guard = WORKSPACE_END, virtual = TRUE
 ENDSECTION
 
-SECTION Scratch, org = SCRATCH_ORG, guard = MAINCODE_ORG, virtual = TRUE
+SECTION Frame, org = FRAME_ORG, guard = PERSIST_ORG, virtual = TRUE
 ENDSECTION
 
-SECTION Tables, org = TABLES_ORG, guard = T_ORG, virtual = TRUE
+SECTION Capture, org = CAPTURE_ORG, guard = MAINCODE_ORG, virtual = TRUE
+ENDSECTION
+
+SECTION Between, org = CAPTURE_ORG, guard = MAINCODE_ORG, virtual = TRUE
+ENDSECTION
+
+SECTION JunkTop, org = T_JUNK_TOP, guard = T_ORG, virtual = TRUE
+ENDSECTION
+
+SECTION JunkBot, org = T_JUNK_BOT, guard = SCREEN_A, virtual = TRUE
+ENDSECTION
+
+\\ The loader's: under where PORTAL loads, so free from the start.
+
+SECTION Scratch, org = SCRATCH_ORG, guard = LOAD_FLOOR, virtual = TRUE
+ENDSECTION
+
+SECTION Tables, org = TABLES_ORG, guard = T_JUNK_TOP, virtual = TRUE
 ENDSECTION

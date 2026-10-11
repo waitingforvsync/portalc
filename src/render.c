@@ -1337,10 +1337,9 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     const pt_map *m = r->map;
     RC_ASSERT(cell >= 1 && cell < m->num_cells);
 
-    // empty the last frame's visit cache: each record clears its own cell's
-    // index
-    for (uint8_t i = 1; i < r->num_visits; i++)
-        r->cell_visit[r->visits[i].cell] = 0;
+    // an empty visit cache, zeroed whole: the 6502's is in the capture's
+    // workspace, which isn't kept from one frame to the next
+    memset(r->cell_visit, 0, sizeof r->cell_visit);
     r->num_visits = 1;
 
     r->cam_cell = cell;

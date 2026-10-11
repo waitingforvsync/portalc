@@ -3,14 +3,14 @@
 \\ good, copies the payloads to where they run, makes the tables, and starts
 \\ the engine.
 \\
-\\ PORTAL loads so the loader starts at T_ORG (or higher, if the payloads
-\\ need the room), above main RAM's code and the tables, all that it
-\\ writes; T's clear wipes it once it's done. The payloads lie under it,
+\\ PORTAL loads so the loader starts at T's top junk row (or higher, if the
+\\ payloads need the room), above main RAM's code and the tables, all that
+\\ it writes; T's clear wipes it once it's done. The payloads lie under it,
 \\ sideways RAM's lowest, and go before anything is written, sideways RAM's
 \\ first, as its image may lie under main RAM's code or the tables. Main
 \\ RAM's code loads above where it runs, so a forward copy is safe.
 
-ASSERT entry >= T_ORG, "the loader starts at T or higher"
+ASSERT entry >= T_JUNK_TOP, "the loader starts at T's top junk row or higher"
 ASSERT maincode_image >= MAINCODE_ORG, "main RAM's code must load above where it runs"
 
 \\ Copy whole pages, forwards, from src to dst: X counts the pages, and the

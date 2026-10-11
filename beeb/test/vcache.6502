@@ -1,0 +1,96 @@
+\\ test/vcache.6502 - make test's check of the vertex cache: from each vertex in turn, every
+\\ vertex's entry and polar form, asked for twice, for host/test_build.py to compare with the C's.
+
+ORDER_STEP = 23                         ; the vertices are asked for in the order 7 + 23k MOD n
+ASSERT MAP_VERTS MOD ORDER_STEP != 0, "test: the order must reach every vertex"
+order = (7 + ORDER_STEP*(0..MAP_VERTS-1)) MOD MAP_VERTS
+
+SECTION TestResults
+.t_vcache1  SKIP MAX_VERTS              ; the vertex cache's Fletcher sums, by the camera's vertex
+.t_vcache2  SKIP MAX_VERTS
+ENDSECTION
+
+SECTION Frame                           ; the loader's, before the engine's
+.t_entry    SKIP MAX_VERTS              ; each vertex's entry when first asked for
+ENDSECTION
+
+\\ Add A to a pair of Fletcher sums, mod 256.
+\\
+\\ Inputs:
+\\     A: the byte
+\\     sum1, sum2: the sums
+\\
+\\ Outputs:
+\\     sum1, sum2: with it added
+
+MACRO FLETCHER sum1, sum2
+    CLC:ADC sum1:STA sum1
+    CLC:ADC sum2:STA sum2
+ENDMACRO
+
+\\ From each vertex in turn: empty the cache, ask for every vertex, all misses, then again, all
+\\ hits. Too many answers to keep, so each vertex's go into a pair of sums.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_vcache1, t_vcache2: the sums, by the camera's vertex
+
+.test_vcache
+{
+    ZA_AUTO1 camvertex                  ; local: the vertex the camera's on
+    ZA_AUTO1 place                      ; local: the place in the order
+
+    JSR map_init
+    LDA #0:STA camvertex
+.position
+    LDX camvertex
+    LDA vert_xlo,X:STA camx
+    LDA vert_xhi,X:STA camx+1
+    LDA vert_ylo,X:STA camy
+    LDA vert_yhi,X:STA camy+1
+    JSR vcache_reset
+
+    \\ every vertex, each made
+
+    LDA #0:STA place
+.first
+    LDY place:LDX t_order,Y
+    VCACHE_VERT
+    TYA:STA t_entry,X
+    INC place
+    LDA place:CMP #MAP_VERTS
+    BNE first
+
+    \\ again, each found: the first entry, this one, and the polar form go into the sums
+
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA place:STA sum1:STA sum2
+.again
+    LDY place:LDX t_order,Y
+    VCACHE_VERT
+    LDA t_entry,X:FLETCHER sum1, sum2
+    TYA:FLETCHER sum1, sum2
+    LDA vc_anglo,Y:FLETCHER sum1, sum2
+    LDA vc_anghi,Y:FLETCHER sum1, sum2
+    LDA vc_logdistlo,Y:FLETCHER sum1, sum2
+    LDA vc_logdisthi,Y:FLETCHER sum1, sum2
+    INC place
+    LDA place:CMP #MAP_VERTS
+    BNE again
+    LDX camvertex
+    LDA sum1:STA t_vcache1,X
+    LDA sum2:STA t_vcache2,X
+    INC camvertex
+    LDA camvertex:CMP #MAP_VERTS
+    BEQ done
+    JMP position
+.done
+    RTS
+}
+
+    FITPAGE MAP_VERTS
+.t_order    EQUB order

@@ -178,11 +178,12 @@ The rest:
 
 - What the C has, the 6502 matches byte for byte, and `make test` checks
   it in b2: the loader's tables against `portalc_tables`, the macros
-  against `portalc_arithref`.
+  against `portalc_arithref`, the vertex cache against `portalc_vcacheref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit, in make test's own build
-  (`-D TEST=TRUE`, `test/`), which leaves them at the top of the sideways
-  RAM bank. Break it once on purpose, to see the check fail.
+  (`-D TEST=TRUE`), which leaves them at the top of the sideways RAM bank.
+  Each check is a file in `test/`, run by `test/test.6502` and compared by
+  `host/test_build.py`. Break it once on purpose, to see the check fail.
 
 ### Baron's gotchas
 
@@ -192,6 +193,7 @@ The rest:
 - A label inside a scope hides a global of the same name: `.rpost` as a loop
   label turned `STA rpost,X` into a store over the loop.
 - A `ZA_AUTO` and a label can't share a name in one scope.
+- An `INCLUDE` is relative to the file it's in, not to the command line's.
 
 ## The C (`src/`)
 

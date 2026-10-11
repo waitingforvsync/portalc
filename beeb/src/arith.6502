@@ -105,11 +105,11 @@ MACRO EXP2_8
 ENDMACRO
 
 \\ The polar form of point X from the camera, as pt_vcache_vert makes it: pt_polar_of of its
-\\ offset from the middle of the camera's whole-unit square, in half units, with lr less 256.
+\\ offset from the middle of the camera's whole-unit square, in half units, its log less 256.
 \\
 \\ Inputs:
 \\     xlo, xhi, ylo, yhi: the points' coordinate tables
-\\     anglo, anghi, lrlo, lrhi: the tables the answer goes in
+\\     anglo, anghi, logdistlo, logdisthi: the tables the answer goes in
 \\     X: the point
 \\     Y: the answer's index
 \\     camx, camy: the camera, in whole units
@@ -117,11 +117,11 @@ ENDMACRO
 \\ Outputs:
 \\     anglo,Y: the world angle's step within its quadrant
 \\     anghi,Y: the quadrant
-\\     lrlo,Y, lrhi,Y: 256 log2 of the length, in whole units
+\\     logdistlo,Y, logdisthi,Y: 256 log2 of the distance, in whole units (pt_polar's lr)
 \\     Y: preserved
 \\     X: corrupted
 
-MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, lrlo, lrhi
+MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, logdistlo, logdisthi
     ZA_AUTO1 index                      ; local: Y, where the answer goes
     ZA_AUTO1 quadrant                   ; local: 0 to 3
     ZA_AUTO1 flip                       ; local: &FF to flip atan's byte: steep and odd differ
@@ -206,8 +206,8 @@ MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, lrlo, lrhi
 .equal
     LDY index
     LDA #128:CLC:ADC logmajor           ; logmajor + 128 - 256
-    STA lrlo,Y
-    LDA logmajor+1:ADC #&FF:STA lrhi,Y
+    STA logdistlo,Y
+    LDA logmajor+1:ADC #&FF:STA logdisthi,Y
     LDA #128:BNE angle                  ; (always)
     ZA_UNREACHABLE
 
@@ -221,8 +221,8 @@ MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, lrlo, lrhi
 .answer
     LDY index
     LDA lhyp,X:CLC:ADC logmajor         ; logmajor + lh - 256
-    STA lrlo,Y
-    LDA logmajor+1:ADC #&FF:STA lrhi,Y
+    STA logdistlo,Y
+    LDA logmajor+1:ADC #&FF:STA logdisthi,Y
     LDA atan,X
 .angle
     EOR flip:STA anglo,Y

@@ -10,17 +10,17 @@ ZA_AUTO1 vc_num                         ; the last entry made: 0 when empty
 
 SECTION Persist
     FITPAGE MAX_VERTS
-.vc_slot    SKIP MAX_VERTS              ; each vertex's entry, 0 for none
+.vc_slot      SKIP MAX_VERTS            ; each vertex's entry, 0 for none
     FITPAGE MAX_VCACHE+1
-.vc_vert    SKIP MAX_VCACHE+1           ; each entry's vertex
+.vc_vert      SKIP MAX_VCACHE+1         ; each entry's vertex
     FITPAGE MAX_VCACHE+1
-.vc_anglo   SKIP MAX_VCACHE+1           ; its world angle: the step within the quadrant
+.vc_anglo     SKIP MAX_VCACHE+1         ; its world angle: the step within the quadrant
     FITPAGE MAX_VCACHE+1
-.vc_anghi   SKIP MAX_VCACHE+1           ; and the quadrant, 0 to 3
+.vc_anghi     SKIP MAX_VCACHE+1         ; and the quadrant, 0 to 3
     FITPAGE MAX_VCACHE+1
-.vc_lrlo    SKIP MAX_VCACHE+1           ; 256 log2 of its length in whole units
+.vc_logdistlo SKIP MAX_VCACHE+1         ; 256 log2 of its distance, in whole units (pt_polar's lr)
     FITPAGE MAX_VCACHE+1
-.vc_lrhi    SKIP MAX_VCACHE+1
+.vc_logdisthi SKIP MAX_VCACHE+1
 ENDSECTION
 
 \\ Empty the cache, clearing only the slots its entries hold.
@@ -41,5 +41,43 @@ ENDSECTION
     BNE loop
     STX vc_num
 .done
+    RTS
+}
+
+\\ Vertex X's entry, made if it's not there yet.
+\\
+\\ Inputs:
+\\     X: the vertex
+\\     camx, camy: the camera
+\\
+\\ Outputs:
+\\     Y: its entry
+\\     X: preserved
+\\     A: corrupted
+
+MACRO VCACHE_VERT
+    LDY vc_slot,X:BNE hit               ; made already
+    JSR vcache_make
+.hit
+ENDMACRO
+
+\\ Make vertex X's entry: the next one, linked both ways, with its polar form from the camera.
+\\
+\\ Inputs:
+\\     X: the vertex
+\\     camx, camy: the camera
+\\
+\\ Outputs:
+\\     Y: its entry
+\\     X: preserved
+\\     A: corrupted
+
+.vcache_make
+{
+    INC vc_num:LDY vc_num
+    TXA:STA vc_vert,Y
+    TYA:STA vc_slot,X
+    POLAR vert_xlo, vert_xhi, vert_ylo, vert_yhi, vc_anglo, vc_anghi, vc_logdistlo, vc_logdisthi
+    LDX vc_vert,Y                       ; the vertex, which POLAR loses
     RTS
 }

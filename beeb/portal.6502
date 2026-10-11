@@ -19,7 +19,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         INCLUDE "src/fill.6502"
         INCLUDE "src/sprites.6502"
         IF DEFINED(TEST)
-            INCLUDE "test/arith.6502"   ; make test's build: the macros' check
+            INCLUDE "test/test.6502"    ; make test's build: the checks
         ENDIF
     ENDSECTION
 

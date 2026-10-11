@@ -1,7 +1,6 @@
-\\ test/arith.6502 - make test's check of the arithmetic macros, in its -D TEST=TRUE build.
-\\ The answers go at the top of the sideways RAM bank, for host/test_arith.py to compare.
+\\ test/arith.6502 - make test's check of the arithmetic macros: LOG2_8, LOG2_16, EXP2_8 and
+\\ POLAR, over every input or sums of them, for host/test_build.py to compare with the C's.
 
-TEST_RESULTS = &A000
 TEST_CAM = &1000                        ; POLAR's camera, both ways
 
 \\ POLAR's points, x and y alike, as offsets from the camera: near, every one from -128 to 127,
@@ -11,7 +10,7 @@ FAR_STEP = 1 << (MAP_OFFSET_BITS - 8)
 near_x = TEST_CAM - 128 + (0..255)
 far_x = TEST_CAM - (1 << (MAP_OFFSET_BITS - 1)) + 1 + FAR_STEP*(0..255)
 
-SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
+SECTION TestResults
 .t_log8f    SKIP &100                   ; LOG2_8's fraction, by b
 .t_log8w    SKIP &100                   ; and whole part
 .t_log16s1  SKIP &200                   ; LOG2_16's Fletcher sums: bound b's by x's high byte,
@@ -23,16 +22,15 @@ SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
 .t_pfar1    SKIP &100                   ; and far
 .t_pfar2    SKIP &100
 .t_bits     SKIP 1                      ; MAP_OFFSET_BITS, the far grid's bound
-.t_done     SKIP 1                      ; &A5 once they're all written
 ENDSECTION
 
 SECTION Frame                           ; POLAR's workspace: the loader's, before the engine's
-.t_pylo     SKIP &100                   ; a row's y, at every point
-.t_pyhi     SKIP &100
-.t_palo     SKIP &100                   ; a row's answers
-.t_pahi     SKIP &100
-.t_plrlo    SKIP &100
-.t_plrhi    SKIP &100
+.t_pylo       SKIP &100                 ; a row's y, at every point
+.t_pyhi       SKIP &100
+.t_palo       SKIP &100                 ; a row's answers
+.t_pahi       SKIP &100
+.t_plogdistlo SKIP &100
+.t_plogdisthi SKIP &100
 ENDSECTION
 
 \\ LOG2_16 at bound bits, over every x under it. Too many answers to keep, so each high byte's
@@ -109,7 +107,7 @@ MACRO TEST_POLAR xlo, xhi, sums1, sums2
     LDX #0
 .point
     TXA:TAY
-    POLAR xlo, xhi, t_pylo, t_pyhi, t_palo, t_pahi, t_plrlo, t_plrhi
+    POLAR xlo, xhi, t_pylo, t_pyhi, t_palo, t_pahi, t_plogdistlo, t_plogdisthi
     INY:TYA:TAX
     BEQ sums
     JMP point
@@ -121,7 +119,7 @@ MACRO TEST_POLAR xlo, xhi, sums1, sums2
     LDA #0:STA sum1:STA sum2
     LDX #0
 .sum
-    FOR t = {t_palo, t_pahi, t_plrlo, t_plrhi}
+    FOR t = {t_palo, t_pahi, t_plogdistlo, t_plogdisthi}
         LDA t,X
         CLC:ADC sum1:STA sum1
         CLC:ADC sum2:STA sum2
@@ -143,12 +141,10 @@ ENDMACRO
 \\     none
 \\
 \\ Outputs:
-\\     TestResults: the answers, t_done last
+\\     t_log8f to t_bits: the answers
 
-.test
+.test_arith
 {
-    LDA #0:STA t_done
-
     \\ LOG2_8
 
     LDX #1
@@ -192,8 +188,6 @@ ENDMACRO
     TEST_POLAR t_nearxlo, t_nearxhi, t_pnear1, t_pnear2
     TEST_POLAR t_farxlo, t_farxhi, t_pfar1, t_pfar2
     LDA #MAP_OFFSET_BITS:STA t_bits
-
-    LDA #&A5:STA t_done
     RTS
 }
 
@@ -205,5 +199,3 @@ ENDMACRO
 .t_farxlo   EQUB LO(far_x)
     FITPAGE &100
 .t_farxhi   EQUB HI(far_x)
-
-ASSERT P% <= TEST_RESULTS, "test: the code runs into its answers"

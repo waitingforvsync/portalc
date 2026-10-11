@@ -1,0 +1,11 @@
+\\ capture.6502 - the capture: the walk through the cells, plotting their
+\\ lines into T as it goes. It only touches T, so it needn't wait for the
+\\ buffer.
+
+\\ Ready the visit cache, the records, lastp1 and the sprites' pool, then
+\\ walk from the camera's cell. A stub for now.
+
+.capture
+{
+    RTS
+}

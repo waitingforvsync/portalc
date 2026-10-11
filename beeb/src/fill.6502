@@ -1,0 +1,8 @@
+\\ fill.6502 - the fill: T into the buffer not on show (base).
+
+\\ Fill the screen from T, a byte column at a time. A stub for now.
+
+.fill
+{
+    RTS
+}

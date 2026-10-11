@@ -96,8 +96,11 @@ ENDMACRO
 
     JSR make_tables
 
-    \\ go
+    \\ the interrupt's state, and the vsync's interrupt on: go
 
+    LDA #HI(SCREEN_B):STA base          ; to draw into: R12 and R13 show SCREEN_A
+    LDA #0:STA request_swap:STA framectr:STA keys
+    LDA #&82:STA &FE4E                  ; system VIA: CA1 (vsync) on
     CLI
     JMP start
 }

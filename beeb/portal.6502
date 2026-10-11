@@ -11,6 +11,11 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
     SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
         INCLUDE "src/start.6502"
         INCLUDE "src/clear.6502"
+        INCLUDE "src/camera.6502"
+        INCLUDE "src/unplot.6502"
+        INCLUDE "src/capture.6502"
+        INCLUDE "src/fill.6502"
+        INCLUDE "src/sprites.6502"
     ENDSECTION
 
 .maincode_image

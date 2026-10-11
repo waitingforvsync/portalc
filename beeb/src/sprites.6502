@@ -1,0 +1,9 @@
+\\ sprites.6502 - the sprites, over the fill.
+
+\\ Draw the frame's sprites, far to near, into the buffer not on show,
+\\ each clipped to the columns its cells showed. A stub for now.
+
+.sprites
+{
+    RTS
+}

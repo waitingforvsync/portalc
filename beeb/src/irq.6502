@@ -1,11 +1,60 @@
 \\ irq.6502 - the interrupt handler, in main RAM so it's there whatever's
-\\ paged in at &8000. Every source is off, so it only catches strays.
+\\ paged in at &8000. Vsync is the only source: it shows a finished frame
+\\ when asked, counts vsyncs, and gathers the keys held. The camera takes
+\\ the count and the keys, and clears them.
 
-\\ Put A back as the MOS's IRQ entry found it, and return.
+\\ What it shares with the main loop: live throughout.
+
+ZA_AUTO1 base                           ; the page of the buffer to draw into: HI(SCREEN_A) or HI(SCREEN_B)
+ZA_AUTO1 request_swap                   ; 1: show base at the next vsync, which takes the other and clears it
+ZA_AUTO1 framectr                       ; vsyncs since the camera cleared it: its ticks
+ZA_AUTO1 keys                           ; the keys held at any of them, as the IN_ bits
+
+\\ The vsync: swap if asked, count it, gather the keys.
 
 .irq
 {
     ZA_INTERRUPT
+    ZA_AUTO1 xsave                      ; local: the interrupted X
+    ZA_AUTO1 ysave                      ; local: and Y
+
+    LDA &FE41                           ; system VIA: port A, read to clear CA1's flag (vsync)
+
+    \\ show base, if asked, and draw into the other
+
+    LDA request_swap:BEQ count
+    LDA #12:STA &FE00                   ; CRTC R12: the start address's high byte
+    LDA base:LSR A:LSR A:LSR A          ; HI(base DIV 8), base being a page (R13, the low byte, stays 0)
+    STA &FE01
+    LDA base:EOR #HI(SCREEN_A EOR SCREEN_B):STA base
+    LSR request_swap                    ; 1, to 0
+.count
+    INC framectr
+
+    \\ the keys, on top of those gathered already: each one's held bit rolls
+    \\ into A, the last key's into bit 0
+
+    STX xsave:STY ysave
+    LDA #0
+    LDX #LEN(keylist)-1
+.key
+    LDY keycodes,X:STY &FE4F            ; system VIA port A: the key
+    ROL &FE4F                           ; bit 7, held, into C (the write back's harmless)
+    ROL A
+    DEX
+    BPL key
+    ORA keys:STA keys
+    LDX xsave:LDY ysave
+
     LDA &FC                             ; the MOS's IRQ entry saved A here
     RTI
 }
+
+\\ The keys' internal numbers (INKEY's, negated, less 1), by input bit.
+
+keylist = {&21, &51, &41, &32, &66, &67} ; W S A D , .
+ASSERT IN_FWD == 1 AND IN_BACK == 2 AND IN_LEFT == 4 AND IN_RIGHT == 8 AND IN_TURNL == 16 AND IN_TURNR == 32, "keylist: a key per input bit, in order"
+
+.keycodes
+    EQUB keylist
+ASSERT HI(keycodes) == HI(keycodes+LEN(keylist)-1), "keycodes: within a page"

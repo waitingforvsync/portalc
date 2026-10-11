@@ -1,0 +1,9 @@
+\\ camera.6502 - the camera: moved by the keys, a tick a vsync.
+
+\\ Run a tick for each vsync the interrupt's counted (framectr), with the
+\\ keys it's gathered (keys), then clear both. A stub for now.
+
+.update_camera
+{
+    RTS
+}

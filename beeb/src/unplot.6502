@@ -1,0 +1,9 @@
+\\ unplot.6502 - clearing the last frame's lines out of T.
+
+\\ Clear every run the last frame recorded, so T's all zero again. A stub
+\\ for now.
+
+.unplot
+{
+    RTS
+}

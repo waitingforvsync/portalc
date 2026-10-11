@@ -1,10 +1,28 @@
-\\ start.6502 - the engine, from sideways RAM. So far, it clears T and the
-\\ screens, and waits.
+\\ start.6502 - the engine, from sideways RAM: the main loop.
 
-\\ The engine, once the loader's done.
+\\ Clear T and the screens, then draw frame after frame into the buffer not
+\\ on show, each shown at the vsync after it's done.
 
 .start
 {
     JSR clear_buffers
-    JMP *
+
+.frame
+    JSR update_camera
+    JSR unplot
+    JSR capture
+
+    \\ the last frame on show, so this one can draw over the buffer it left
+
+.wait
+    LDA request_swap:BNE wait
+
+    JSR fill
+    JSR sprites
+
+    \\ show it at the next vsync
+
+    LDA #1:STA request_swap
+    BNE frame                           ; (always)
+    ZA_UNREACHABLE
 }

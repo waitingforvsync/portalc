@@ -57,6 +57,9 @@ in `src/`, which models it. Read this before writing any.
 - `ZA_ENTRY` only on roots, routines nothing calls (a `*RUN` entry point).
   A routine reached by a `JSR` or `JMP` gets no marker.
 - `ZA_INTERRUPT` on every interrupt or `BRK` handler.
+- State the interrupt shares with the main loop is a `ZA_AUTO` at file
+  scope, outside any routine, so it's live throughout: in `src/irq.6502`,
+  which owns it.
 - `ZA_UNREACHABLE` straight after every branch that's always taken (`CLC:BCC
   start`, any branch on a known flag), after a `JSR` that never returns, and
   after a `BRK`'s message. It prunes the path that never happens, so Baron

@@ -26,7 +26,7 @@ void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat)
 //       RTS
 // A column, from tables by the row (the exit's address, the tail's; 65,
 // past the junk row, the same as 64):
-//       LDY lastp1,X
+//       LDY toggle_end,X
 //       LDA exitlo,Y : STA patch+1 : STA unpatch+1
 //       LDA exithi,Y : STA patch+2 : STA unpatch+2
 //       LDA taillo,Y : STA tail+1 : LDA tailhi,Y : STA tail+2
@@ -43,11 +43,11 @@ void pt_mode5_plot(uint8_t *fb, uint8_t col, uint8_t row, pt_pattern pat)
 // about 4k a frame, for 4 cycles on each byte under the columns' last
 // toggles, half the screen and more. Each S buffer has its own blocks.
 void pt_mode5_fill(uint8_t *s, const uint8_t *t, pt_pattern start,
-                   const uint8_t lastp1[PT_SCREEN_WIDTH / 4])
+                   const uint8_t toggle_end[PT_SCREEN_WIDTH / 4])
 {
     for (uint8_t bc = 0; bc < PT_SCREEN_WIDTH / 4; bc++) {
-        RC_ASSERT(lastp1[bc] <= PT_SCREEN_HEIGHT + 1);
-        uint8_t end = lastp1[bc] > PT_SCREEN_HEIGHT ? (uint8_t)PT_SCREEN_HEIGHT : lastp1[bc];
+        RC_ASSERT(toggle_end[bc] <= PT_SCREEN_HEIGHT + 1);
+        uint8_t end = toggle_end[bc] > PT_SCREEN_HEIGHT ? (uint8_t)PT_SCREEN_HEIGHT : toggle_end[bc];
         for (uint8_t par = 0; par < PT_SCANLINES_PER_ROW; par++) {
             uint8_t acc = par ? start.o : start.e;
             uint8_t row = 0;

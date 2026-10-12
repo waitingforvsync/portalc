@@ -126,11 +126,11 @@ RC_TEST(mode5, fill_start_and_exit)
     pt_mode5_plot(t, 5, 20, red);
     pt_mode5_plot(t, 40, 3, red);      // byte column 10: row 3
 
-    uint8_t lastp1[PT_SCREEN_WIDTH / 4];
-    memset(lastp1, 1, sizeof lastp1);
-    lastp1[1] = 21;
-    lastp1[10] = 4;
-    pt_mode5_fill(a, t, sky, lastp1);
+    uint8_t toggle_end[PT_SCREEN_WIDTH / 4];
+    memset(toggle_end, 1, sizeof toggle_end);
+    toggle_end[1] = 21;
+    toggle_end[10] = 4;
+    pt_mode5_fill(a, t, sky, toggle_end);
     pt_mode5_fill(b, t, sky, all_rows);
     RC_CHECK(memcmp(a, b, sizeof a), ==, 0);
 

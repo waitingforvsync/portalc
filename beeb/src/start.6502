@@ -16,7 +16,6 @@
 
 .frame
     JSR update_camera
-    JSR unplot
     JSR capture
 
     \\ the last frame on show, so this one can draw over the buffer it left
@@ -27,9 +26,9 @@
     JSR fill
     JSR sprites
 
-    \\ show it at the next vsync
+    \\ show it at the next vsync, and clear T while that's pending: the unplot only touches T
 
     LDA #1:STA request_swap
-    BNE frame                           ; (always)
-    ZA_UNREACHABLE
+    JSR unplot
+    JMP frame
 }

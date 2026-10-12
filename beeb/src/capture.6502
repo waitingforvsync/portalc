@@ -1,41 +1,96 @@
 \\ capture.6502 - the capture: the walk through the cells, plotting their lines into T.
 \\ It only touches T, so it needn't wait for the buffer.
 
-\\ The frame's view: shared by the capture's routines.
+\\ The frame's view and counts, and the walk in progress: shared by the capture's routines.
 
 ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen angles' zero
+ZA_AUTO1 eye_z                          ; the eye's height, in the map's 8-unit z steps
+ZA_AUTO1 num_visits                     ; visits made, the null one included
+ZA_AUTO1 num_kept                       ; kept lines' entries taken, the null one included
+ZA_AUTO1 num_recs                       ; runs recorded for the unplotter
+ZA_AUTO1 walk_vi                        ; the walk's visit
+ZA_AUTO1 walk_x                         ; where its next edge's span starts
+ZA_AUTO1 walk_tmax                      ; the bounds' extents over its portal: the lowest top row
+ZA_AUTO1 walk_bmin                      ; and the highest bottom row
+ZA_AUTO2 walk_wrap                      ; its window: screen angles at or past this are a turn less
+ZA_AUTO2 walk_u0                        ; its side's start's screen angle
+ZA_AUTO2 walk_u1                        ; and its end's
+ZA_AUTO1 walk_c0                        ; the start's column
+ZA_AUTO1 walk_c1                        ; and the end's
 
-\\ Ready the visit cache, the records, lastp1 and the sprites' pool, then walk from the camera's
-\\ cell. Only the view and the root walk's side, for now.
+\\ Each cell's visit, 0 for none: all 0 between captures, as each visit clears its own.
+
+SECTION Persist
+    FITPAGE MAX_CELLS
+.cell_visit SKIP MAX_CELLS
+ENDSECTION
+
+\\ The visits, numbered from 1 (entry 0's bytes are unused): what a cell's later visit needs.
+
+SECTION Capture
+    FITPAGE MAX_VISITS+1
+.visit_cell SKIP MAX_VISITS+1           ; the cell
+    FITPAGE MAX_VISITS+1
+.visit_side SKIP MAX_VISITS+1           ; the side its last walk stopped on
+    FITPAGE MAX_VISITS+1
+.visit_xr   SKIP MAX_VISITS+1           ; the right column of the portal last walked: 0 until then
+    FITPAGE MAX_VISITS+1
+.visit_kept SKIP MAX_VISITS+1           ; its side's kept lines' entry, 0 for none
+    FITPAGE MAX_VISITS+1
+.visit_hclo SKIP MAX_VISITS+1           ; the ceiling as its lines see it: the log's low byte
+    FITPAGE MAX_VISITS+1
+.visit_hchi SKIP MAX_VISITS+1           ; and high, bit 7 set if it's below the eye
+    FITPAGE MAX_VISITS+1
+.visit_hflo SKIP MAX_VISITS+1           ; the floor's
+    FITPAGE MAX_VISITS+1
+.visit_hfhi SKIP MAX_VISITS+1
+ENDSECTION
+
+\\ Each byte column's last toggled row + 1: where the fill can stop.
+
+SECTION Frame
+    FITPAGE SCREEN_WIDTH/4
+.toggle_end SKIP SCREEN_WIDTH/4
+ENDSECTION
+
+\\ Capture the frame: ready its counts and the visit cache, then walk from the camera's cell. Only
+\\ the root walk's beginning, for now.
 \\
 \\ Inputs:
 \\     camx, camy, camangle, camcell: the camera
 \\
 \\ Outputs:
 \\     T: the frame's lines
-\\     the records: what the unplot clears
+\\     num_recs and the records: what the unplot clears
+\\     toggle_end: where the fill can stop
 
 .capture
 {
+    \\ the view, the eye's height and the counts: no visits, records or kept lines yet, and each
+    \\ byte column toggled at row 0 at most, as lines off the top toggle it unrecorded
+
     VIEW_LEFT
-    JSR root_side
-    RTS
-}
+    LDX camcell
+    LDA cell_floorz,X:SEC:SBC #CAM_HEIGHT:STA eye_z
+    LDA #1:STA num_visits:STA num_kept
+    LDX #SCREEN_WIDTH/4-1
+.ends
+    STA toggle_end,X
+    DEX
+    BPL ends
+    LDA #0:STA num_recs
 
-\\ The side of the camera's cell that straddles the view's left edge, where the walk begins, and
-\\ its window's split, as pt_render_root_side.
-\\
-\\ Inputs:
-\\     camcell: the camera's cell
-\\     viewleft: the view's left edge
-\\     camx, camy: the camera, for the vertex cache
-\\
-\\ Outputs:
-\\     Y: the side
-\\     A, X: the walk's wrap, low and high: the side's start's screen angle + 1 (1 to 1024)
+    \\ the root visit, the camera's cell's, the whole screen wide
 
-.root_side
-{
+    LDX camcell
+    JSR visit_of
+    STX walk_vi
+    LDA #SCREEN_WIDTH:STA visit_xr,X
+
+    \\ the root side, where the walk begins: the side the view's left edge lies on, the first whose
+    \\ end's screen angle is below its start's, measured from viewleft + 1 (pt_render_root_side),
+    \\ and the last if it's none before it. The next side's start is a side's end
+
     ZA_AUTO1 ringend                    ; local: the next cell's first side
     ZA_AUTO2 startangle                 ; local: the side's start's screen angle, from viewleft + 1
     ZA_AUTO2 endangle                   ; local: and its end's
@@ -49,10 +104,6 @@ ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen 
     LDA vc_anglo,X:SBC viewleft:STA startangle
     LDA vc_anghi,X:SBC viewleft+1:AND #3
     STA startangle+1
-
-    \\ the next side's start is this one's end: the edge is on the first side whose end's screen
-    \\ angle is below its start's, and on the last if it's on none before it
-
 .side
     INY
     CPY ringend:BEQ found               ; the last side: it's the one
@@ -62,7 +113,7 @@ ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen 
     LDA vc_anglo,X:SBC viewleft:STA endangle
     LDA vc_anghi,X:SBC viewleft+1:AND #3
     STA endangle+1
-    CMP startangle+1:BCC found              ; the high byte below the start's
+    CMP startangle+1:BCC found          ; the high byte below the start's
     BNE on
     LDA endangle:CMP startangle:BCC found
 .on
@@ -70,15 +121,102 @@ ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen 
     LDA endangle+1:STA startangle+1
     BCS side                            ; (always: C set by the compares)
     ZA_UNREACHABLE
-
-    \\ the side before, and the split: its start's screen angle + 1
-
 .found
-    DEY
-    LDX startangle+1
-    LDA startangle:CLC:ADC #1
-    BCC done
-    INX
+    DEY                                 ; the side
+    LDX walk_vi
+    TYA:STA visit_side,X
+
+    \\ the root walk: from column 0, between the screen's edges, its window split at the side's
+    \\ start, one on from its screen angle from viewleft + 1
+
+    LDA #0:STA walk_x:STA walk_tmax
+    LDA #SCREEN_HEIGHT:STA walk_bmin
+    CLC
+    LDA startangle:ADC #1:STA walk_wrap
+    LDA startangle+1:ADC #0:STA walk_wrap+1
+
+    \\ the side's start (side_start): its screen angle in the window, and its column
+
+    LDX side_v,Y
+    VERT_TO_SCREEN_ANGLE walk_u0
+    SCREEN_ANGLE_TO_COLUMN walk_u0
+    STA walk_c0
+
+    \\ and its end, the next side's start (side_end): its start's screen angle plus its turn round
+    \\ from it, if that's at most a half turn, as it is for a side facing the eye
+
+    ZA_AUTO2 turn                       ; local: the end's turn from the start, 10 bits
+
+    INY
+    CPY ringend:BNE next
+    LDX camcell:LDY cell_first,X        ; the last side's: round to the first's
+.next
+    LDX side_v,Y
+    VERT_TO_SCREEN_ANGLE walk_u1
+    SEC
+    LDA walk_u1:SBC walk_u0:STA turn
+    LDA walk_u1+1:SBC walk_u0+1:AND #3:STA turn+1
+    CMP #2:BCC near                     ; under a half turn
+    BNE far
+    LDA turn:BNE far                    ; over it
+.near
+    CLC
+    LDA walk_u0:ADC turn:STA walk_u1
+    LDA walk_u0+1:ADC turn+1:STA walk_u1+1
+.far
+    SCREEN_ANGLE_TO_COLUMN walk_u1
+    STA walk_c1
+
+    \\ the visit cache emptied, while the visits are still here: each clears its own cell's
+
+    LDX num_visits
+    DEX                                 ; the last visit made
+    BEQ done
+    LDA #0
+.forget
+    LDY visit_cell,X:STA cell_visit,Y
+    DEX
+    BNE forget
 .done
+    RTS
+}
+
+\\ Cell X's visit, made if this capture has none for it yet (visit_of): the next, with the cell's
+\\ heights as its lines see them.
+\\
+\\ Inputs:
+\\     X: the cell
+\\     eye_z: the eye's height
+\\
+\\ Outputs:
+\\     X: its visit
+
+.visit_of
+{
+    ZA_AUTO1 cell                       ; local: the cell
+    ZA_AUTO1 visit                      ; local: its new visit
+
+    LDA cell_visit,X:BEQ make           ; not met yet
+    TAX
+    RTS
+.make
+    STX cell
+    LDY num_visits:STY visit
+    INC num_visits
+    TYA:STA cell_visit,X
+    TXA:STA visit_cell,Y
+    LDA #0:STA visit_side,Y:STA visit_xr,Y:STA visit_kept,Y
+    LDA cell_ceilz,X
+    HEIGHT_OF
+    LDY visit
+    STA visit_hchi,Y
+    TXA:STA visit_hclo,Y
+    LDX cell
+    LDA cell_floorz,X
+    HEIGHT_OF
+    LDY visit
+    STA visit_hfhi,Y
+    TXA:STA visit_hflo,Y
+    LDX visit
     RTS
 }

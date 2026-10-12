@@ -13,13 +13,24 @@ USAGE = 'usage: test_build.py DISC SYMBOLS ARITH VCACHE CAPTURE (the test build,
 DONE = 0xA5
 
 
+def fletcher_add(s1, s2, b):
+    """One byte into a pair of Fletcher sums, mod 255 as the 6502 makes them: a carry out goes
+    back in (so 255 stays 255)."""
+    s1 += b
+    if s1 > 255:
+        s1 -= 255
+    s2 += s1
+    if s2 > 255:
+        s2 -= 255
+    return s1, s2
+
+
 def fletcher(answers):
-    """LOG2_16's sums: each answer's fraction, then its whole part."""
+    """LOG2_16's sums: each answer's fraction, then its whole part, mod 255."""
     s1 = s2 = 0
     for v in answers:
         for b in (v & 0xFF, v >> 8):
-            s1 = (s1 + b) & 0xFF
-            s2 = (s2 + s1) & 0xFF
+            s1, s2 = fletcher_add(s1, s2, b)
     return s1, s2
 
 
@@ -31,8 +42,7 @@ def polar_sums(flat):
         for i in range(row * 512, row * 512 + 512, 2):
             a, logdist = flat[i], flat[i + 1] & 0xFFFF
             for b in (a & 0xFF, a >> 8, logdist & 0xFF, logdist >> 8):
-                s1 = (s1 + b) & 0xFF
-                s2 = (s2 + s1) & 0xFF
+                s1, s2 = fletcher_add(s1, s2, b)
         s1s.append(s1)
         s2s.append(s2)
     return bytes(s1s), bytes(s2s)
@@ -42,8 +52,7 @@ def fletcher_bytes(values):
     """A pair of sums over bytes, as test/vcache.6502's FLETCHER makes them."""
     s1 = s2 = 0
     for b in values:
-        s1 = (s1 + b) & 0xFF
-        s2 = (s2 + s1) & 0xFF
+        s1, s2 = fletcher_add(s1, s2, b)
     return s1, s2
 
 
@@ -67,22 +76,44 @@ def vcache_expected(c, n):
 
 
 def capture_expected(c):
-    """The root walk's sums, by the camera's cell: at each angle, the side, then the split's low
-    byte and high."""
-    flat, cells = c['root'], c['cells']
+    """The capture's sums, by the camera's cell: at each angle, the root walk (its 16-bit fields low
+    byte first), its visit (a height as the log's low byte, then its high with the side in bit 7),
+    the eye's height, the counts and each byte column's toggle_end. Then HEIGHT_OF's, by the eye's
+    height: each height's low byte, then its high."""
+    flat, cells = c['frame'], c['cells']
+    per = 53
     s1s, s2s = [], []
     for cell in range(1, cells):
         bs = []
-        base = (cell - 1) * 512
-        for i in range(base, base + 512, 2):
-            side, wrap = flat[i], flat[i + 1]
-            bs += [side, wrap & 0xFF, wrap >> 8]
+        for a in range(256):
+            f = flat[((cell - 1) * 256 + a) * per:((cell - 1) * 256 + a + 1) * per]
+            vi, x, tmax, bmin, wrap, u0, u1, c0, c1 = f[0:9]
+            vcell, vside, vxr, vkept, hcb, hcl, hfb, hfl = f[9:17]
+            u0 &= 0xFFFF
+            u1 &= 0xFFFF
+            bs += [vi, x, tmax, bmin, wrap & 0xFF, wrap >> 8, u0 & 0xFF, u0 >> 8, u1 & 0xFF, u1 >> 8,
+                   c0, c1]
+            bs += [vcell, vside, vxr, vkept, hcl & 0xFF, (hcl >> 8) | (hcb << 7), hfl & 0xFF,
+                   (hfl >> 8) | (hfb << 7)]
+            bs += f[17:21] + f[21:53]
         s1, s2 = fletcher_bytes(bs)
         s1s.append(s1)
         s2s.append(s2)
+    h1s, h2s = [], []
+    h = c['height']
+    for eye in range(256):
+        bs = []
+        for z in range(256):
+            below, l = h[(eye * 256 + z) * 2:(eye * 256 + z) * 2 + 2]
+            bs += [l & 0xFF, (l >> 8) | (below << 7)]
+        s1, s2 = fletcher_bytes(bs)
+        h1s.append(s1)
+        h2s.append(s2)
     return [
-        ('root_side s1', 't_root1', 1, 1, bytes(s1s)),
-        ('root_side s2', 't_root2', 1, 1, bytes(s2s)),
+        ('capture s1', 't_capture1', 1, 1, bytes(s1s)),
+        ('capture s2', 't_capture2', 1, 1, bytes(s2s)),
+        ('HEIGHT_OF s1', 't_height1', 0, 0, bytes(h1s)),
+        ('HEIGHT_OF s2', 't_height2', 0, 0, bytes(h2s)),
     ]
 
 

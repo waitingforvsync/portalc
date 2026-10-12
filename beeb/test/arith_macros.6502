@@ -23,10 +23,8 @@ MACRO TEST_LOG2_16 bits
 .col
     LDA xlo:LDX xhi
     LOG2_16 bits
-    CLC:ADC sum1:STA sum1
-    CLC:ADC sum2:STA sum2
-    TXA:CLC:ADC sum1:STA sum1
-    CLC:ADC sum2:STA sum2
+    FLETCHER sum1, sum2
+    TXA:FLETCHER sum1, sum2
     INC xlo
     BNE col
     LDX xhi
@@ -89,8 +87,7 @@ MACRO TEST_POLAR xlo, xhi, sums1, sums2
 .sum
     FOR t = {t_palo, t_pahi, t_plogdistlo, t_plogdisthi}
         LDA t,X
-        CLC:ADC sum1:STA sum1
-        CLC:ADC sum2:STA sum2
+        FLETCHER sum1, sum2
     NEXT
     INX
     BNE sum

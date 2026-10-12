@@ -13,3 +13,91 @@ MACRO VIEW_LEFT
     LDA camangle:SEC:SBC #128:STA viewleft
     LDA camangle+1:SBC #0:AND #3:STA viewleft+1
 ENDMACRO
+
+\\ A height as its lines see it (height_of): the log of |z - eye_z| in 8-unit steps, + 17 * 256,
+\\ or 0 at the eye's height, with the side it's on in bit 7 of the high byte.
+\\
+\\ Inputs:
+\\     A: the height, z
+\\     eye_z: the eye's
+\\
+\\ Outputs:
+\\     X: the log's low byte
+\\     A: its high byte, bit 7 set if z is below the eye, or at it
+\\     Y: corrupted
+
+MACRO HEIGHT_OF
+    ZA_AUTO1 side                       ; local: &80 if z is below the eye, else 0
+
+    SEC:SBC eye_z                       ; z - eye_z: C set if z is below the eye, or at it
+    BCS below
+    EOR #&FF:ADC #1                     ; above: negated (C clear)
+    LDX #0
+    BEQ log                             ; (always)
+    ZA_UNREACHABLE
+.below
+    BEQ level                           ; at the eye's height: 0
+    LDX #&80
+.log
+    STX side
+    TAX
+    LOG2_8                              ; A: the fraction, Y: the whole part
+    TAX
+    TYA:CLC:ADC #17:ORA side            ; + 17 * 256 (log2 of 64 * 8 * 256), and the side
+    BNE done                            ; (always)
+    ZA_UNREACHABLE
+.level
+    TAX                                 ; (0)
+    LDA #&80
+.done
+ENDMACRO
+
+\\ Vertex X's signed screen angle in the walk's window (vert_to_screen_angle): from viewleft, and
+\\ a turn less, so negative, at or past walk_wrap.
+\\
+\\ Inputs:
+\\     X: the vertex
+\\     angle: where its screen angle goes, two bytes
+\\     viewleft, walk_wrap: the view's left edge, and the window's split
+\\
+\\ Outputs:
+\\     angle: the screen angle, signed: walk_wrap - 1024 up to walk_wrap, negative left of the view
+\\     A, X: corrupted
+\\     Y: preserved
+
+MACRO VERT_TO_SCREEN_ANGLE angle
+    VCACHE_VERT_TO_X
+    SEC
+    LDA vc_anglo,X:SBC viewleft:STA angle
+    LDA vc_anghi,X:SBC viewleft+1:AND #3:STA angle+1
+    LDA angle:CMP walk_wrap
+    LDA angle+1:SBC walk_wrap+1
+    BCC done                            ; under the split
+    LDA angle+1:SBC #4:STA angle+1      ; at or past it: a turn less (C set)
+.done
+ENDMACRO
+
+\\ A screen angle's column (screen_angle_to_column): in view, a2c's; left of the view, 0; right of
+\\ it, 128.
+\\
+\\ Inputs:
+\\     angle: the screen angle, signed, two bytes
+\\
+\\ Outputs:
+\\     A: the column
+\\     X: corrupted
+\\     Y: preserved
+
+MACRO SCREEN_ANGLE_TO_COLUMN angle
+    LDA angle+1:BMI left                ; negative: left of the view
+    BNE right                           ; 256 on: right of it
+    LDX angle:LDA a2c,X
+    JMP done
+.right
+    LDA #SCREEN_WIDTH
+    BNE done                            ; (always)
+    ZA_UNREACHABLE
+.left
+    LDA #0
+.done
+ENDMACRO

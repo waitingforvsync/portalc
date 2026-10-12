@@ -44,7 +44,7 @@ SWRAM_END = &C000
 \\ the fill, the sprites, the unplot. Pools at one address are never alive together. Sizes at caps:
 \\
 \\   Persist   for good: the vertex cache, cell_visit, the camera (441 of 512 bytes)
-\\   Frame     the capture to the unplot: the records, lastp1, the sprites' instances, order and
+\\   Frame     the capture to the unplot: the records, toggle_end, the sprites' instances, order and
 \\             clip rows (1,717 of 1,792)
 \\   Capture   the capture alone: top, bot, the visits, the kept lines, the walk's slots (1,026 of
 \\             1,280). As it ends, the visits clear their cells' cell_visit

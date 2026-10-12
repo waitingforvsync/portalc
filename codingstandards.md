@@ -189,6 +189,9 @@ The rest:
   (`-D TEST=TRUE`), which leaves them at the top of the sideways RAM bank.
   Each check is a file in `test/`, run by `test/test.6502` and compared by
   `host/test_build.py`. Break it once on purpose, to see the check fail.
+- Sums are Fletcher's, mod 255 (`FLETCHER`, a carry out added back in).
+  Mod 256, a byte that's the same in every frame of a row of 256 adds
+  nothing, so an error in it can't show.
 
 ### Baron's gotchas
 

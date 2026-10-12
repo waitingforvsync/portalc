@@ -1304,7 +1304,7 @@ one. With g, 2g, 3g and 4g made once a run, a byte is a 16-bit add, then,
 the row in A:
 
 ```
-    CMP lastp1,X : BCC no : ADC #0 : STA lastp1,X    ; C set: the row + 1
+    CMP toggle_end,X : BCC no : ADC #0 : STA toggle_end,X    ; C set: the row + 1
 ```
 
 About 30 cycles a byte column, 1.8k a frame. A byte whose lowest row is
@@ -1312,7 +1312,7 @@ the junk row gets 65, which the fill takes as 64: one more entry in its
 tables, and no check here. That's as good as the exact
 last rows read off T (48.8%); taking each run's lowest row for all its
 byte columns would be half the work but leave 3 points of the screen to
-EOR. Row 0 always EORs (`lastp1` starts at 1), as lines running off the
+EOR. Row 0 always EORs (`toggle_end` starts at 1), as lines running off the
 top toggle it unrecorded. The debug build checks the fill finds nothing
 toggled under a column's last row.
 
@@ -1341,7 +1341,7 @@ A column, from tables by the row (the exit's address, the tail's entry;
 65 the same as 64):
 
 ```
-    LDY lastp1,X
+    LDY toggle_end,X
     LDA exitlo,Y : STA patch+1 : STA unpatch+1
     LDA exithi,Y : STA patch+2 : STA unpatch+2
     LDA taillo,Y : STA tail+1 : LDA tailhi,Y : STA tail+2
@@ -1688,7 +1688,7 @@ hand, and the model charges `plot_run` 50 and `record` 70 on top: about
 `polar` would take the run in zero page (no pool), the cursor from the
 row's two tables (about 20), and the head, whole and tail counts from a
 table on the columns (about 15): 120 to 150 a run. And the records walk
-the very bytes the plotter does, so the plotter can keep `lastp1` as it
+the very bytes the plotter does, so the plotter can keep `toggle_end` as it
 goes, the row in hand, rather than a second walk at 42 a byte. Between
 them, 3.5k to 4.5k a frame.
 
@@ -1703,7 +1703,7 @@ with the glue as sketched. Decided so far:
 
 | | Change | Saving | Decision |
 |---|---|---|---|
-| 1 | A plotter shaped for `polar`: the run taken where the clip holds it, the cursor and the head, whole and tail counts by table, `lastp1` kept as it plots | ~4k | yes, with lazy plotting |
+| 1 | A plotter shaped for `polar`: the run taken where the clip holds it, the cursor and the head, whole and tail counts by table, `toggle_end` kept as it plots | ~4k | yes, with lazy plotting |
 | 2 | Flatten children seen through narrow portals | 1k to 2.4k | no: a narrow portal between wider ones onto the same cell would leave a stripe |
 | 3 | A cheaper polar form | ~1.8k | later, with the arithmetic as macros |
 | 4 | Row-0 toggles into the fill's start values, a byte column each | ~1.3k | to do |

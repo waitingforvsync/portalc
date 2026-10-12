@@ -1,5 +1,5 @@
-\\ test/capture.6502 - make test's check of the capture: the root walk's side and split, from each
-\\ cell's centroid at every angle, for host/test_build.py to compare with the C's.
+\\ test/capture.6502 - make test's check of the capture: its setup and root walk from each cell's
+\\ centroid at every angle, and HEIGHT_OF, for host/test_build.py to compare with the C's.
 
 \\ Each cell's centroid, as the C's tools take it: the mean of its ring's vertices, truncated.
 
@@ -11,18 +11,21 @@ FUNCTION ring_mean(xs, c)
 = SUM(xs[map_side_v[f..<e]]) DIV (e-f)
 
 SECTION TestResults
-.t_root1    SKIP MAX_CELLS              ; root_side's Fletcher sums, by the camera's cell
-.t_root2    SKIP MAX_CELLS
+.t_capture1 SKIP MAX_CELLS              ; the capture's Fletcher sums, by the camera's cell
+.t_capture2 SKIP MAX_CELLS
+.t_height1  SKIP &100                   ; HEIGHT_OF's, by the eye's height
+.t_height2  SKIP &100
 ENDSECTION
 
-\\ From each cell's centroid, at every angle: the root walk's side and split. Too many answers to
-\\ keep, so each cell's go into a pair of sums.
+\\ From each cell's centroid, at every angle: the capture's setup and root walk. Too many answers
+\\ to keep, so each cell's go into a pair of sums; then every height from every eye height.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
-\\     t_root1, t_root2: the sums, by the camera's cell
+\\     t_capture1, t_capture2: the capture's sums, by the camera's cell
+\\     t_height1, t_height2: HEIGHT_OF's, by the eye's height
 
 .test_capture
 {
@@ -39,23 +42,67 @@ ENDSECTION
     JSR vcache_reset
     LDA #0:STA camangle:STA camangle+1:STA sum1:STA sum2
 .angle
-    VIEW_LEFT
-    JSR root_side
-    PHA
-    TYA:FLETCHER sum1, sum2             ; the side
-    PLA:FLETCHER sum1, sum2             ; the split, low
-    TXA:FLETCHER sum1, sum2             ; and high
+    JSR capture
+
+    \\ the walk, its visit, the eye's height, the counts, and where each byte column's fill stops
+
+    FOR v = {walk_vi, walk_x, walk_tmax, walk_bmin, walk_wrap, walk_wrap+1, walk_u0, walk_u0+1}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    FOR v = {walk_u1, walk_u1+1, walk_c0, walk_c1}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    LDX walk_vi
+    FOR t = {visit_cell, visit_side, visit_xr, visit_kept, visit_hclo, visit_hchi, visit_hflo}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    LDA visit_hfhi,X:FLETCHER sum1, sum2
+    FOR v = {eye_z, num_visits, num_kept, num_recs}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    LDX #0
+.ends
+    LDA toggle_end,X:FLETCHER sum1, sum2
+    INX
+    CPX #SCREEN_WIDTH/4
+    BNE ends
+
     CLC:LDA camangle:ADC #4             ; the next of the C's 256ths
     STA camangle
     LDA camangle+1:ADC #0:AND #3:STA camangle+1
     ORA camangle
-    BNE angle                           ; round to 0: all 256
+    BEQ angles                          ; round to 0: all 256
+    JMP angle
+.angles
     LDX camcell
-    LDA sum1:STA t_root1,X
-    LDA sum2:STA t_root2,X
+    LDA sum1:STA t_capture1,X
+    LDA sum2:STA t_capture2,X
     INC camcell
     LDA camcell:CMP #MAP_CELLS
-    BNE cell
+    BEQ heights
+    JMP cell
+
+    \\ every height from every eye height: the log's low byte, then its high and the side
+
+    ZA_AUTO1 z                          ; local: the height
+
+.heights
+    LDA #0:STA eye_z
+.eye
+    LDA #0:STA z:STA sum1:STA sum2
+.height
+    LDA z
+    HEIGHT_OF
+    PHA
+    TXA:FLETCHER sum1, sum2
+    PLA:FLETCHER sum1, sum2
+    INC z
+    BNE height
+    LDX eye_z
+    LDA sum1:STA t_height1,X
+    LDA sum2:STA t_height2,X
+    INC eye_z
+    BNE eye
     RTS
 }
 

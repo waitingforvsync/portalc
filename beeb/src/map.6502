@@ -11,14 +11,14 @@ MAP_SPAN = MAX({MAX(map_vert_x)-MIN(map_vert_x), MAX(map_vert_y)-MIN(map_vert_y)
 MAP_OFFSET_BITS = bitlen(2*MAP_SPAN+1)
 ASSERT MAP_OFFSET_BITS <= 16, "the map: an offset across it doesn't fit 16 bits"
 
-\\ Ready the engine for the map: the vertex cache empty, every slot cleared.
-\\ The slots start as junk; from then on the cache's resets keep them clear.
+\\ Ready the engine for the map: the vertex cache empty, and every vertex's and cell's index clear.
+\\ They start as junk; from then on the cache's resets and the captures keep them clear.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
-\\     vc_slot: all 0
+\\     vc_slot, cell_visit: all 0
 \\     vc_num: 0
 
 .map_init
@@ -30,6 +30,13 @@ ASSERT MAP_OFFSET_BITS <= 16, "the map: an offset across it doesn't fit 16 bits"
     INX
     CPX #LO(MAX_VERTS)                  ; all of them, 256 included
     BNE slots
+
+    TAX
+.visits
+    STA cell_visit,X
+    INX
+    CPX #LO(MAX_CELLS)                  ; all of them, 256 included
+    BNE visits
     STA vc_num
     RTS
 }

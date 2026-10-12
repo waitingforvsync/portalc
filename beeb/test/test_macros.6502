@@ -1,6 +1,7 @@
 \\ test/test_macros.6502 - macros for any of make test's checks.
 
-\\ Add A to a pair of Fletcher sums, mod 256.
+\\ Add A to a pair of Fletcher sums, mod 255: each carry out goes back in, so a byte repeated 256
+\\ times still counts (mod 256 it would vanish).
 \\
 \\ Inputs:
 \\     A: the byte
@@ -10,6 +11,6 @@
 \\     sum1, sum2: with it added
 
 MACRO FLETCHER sum1, sum2
-    CLC:ADC sum1:STA sum1
-    CLC:ADC sum2:STA sum2
+    CLC:ADC sum1:ADC #0:STA sum1
+    CLC:ADC sum2:ADC #0:STA sum2
 ENDMACRO

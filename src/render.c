@@ -103,12 +103,17 @@ static uint16_t step1(uint16_t y, uint16_t g)
 
 // A height as its lines see it: the side (the subtract's borrow), and the
 // log of |z - eye_z| in 8-unit steps, made once a cell a frame.
-static pt_height height_of(const pt_render *r, uint8_t z)
+pt_height pt_render_height(uint8_t z, uint8_t eye_z)
 {
-    pt_height h = {.below = z >= r->eye_z};
-    uint8_t m = h.below ? pt_u8((int32_t)z - r->eye_z) : pt_u8((int32_t)r->eye_z - z);
+    pt_height h = {.below = z >= eye_z};
+    uint8_t m = h.below ? pt_u8((int32_t)z - eye_z) : pt_u8((int32_t)eye_z - z);
     h.l = m != 0 ? pt_i16((int32_t)pt_log2_8(m) + 17 * 256) : 0;
     return h;
+}
+
+static pt_height height_of(const pt_render *r, uint8_t z)
+{
+    return pt_render_height(z, r->eye_z);
 }
 
 // An edge's ends as its lines see them: the logs of their depths (256 log2,
@@ -277,7 +282,7 @@ static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, 
 // the run has n columns in it, and the next byte's first column is n steps
 // on. The 6502 holds g, 2g, 3g and 4g (a shift and an add each), so a byte
 // is a 16-bit add, and then, the row in A,
-//   CMP lastp1,X : BCC no : ADC #0 : STA lastp1,X    ; C set: the row + 1
+//   CMP toggle_end,X : BCC no : ADC #0 : STA toggle_end,X    ; C set: the row + 1
 // about 30 cycles a byte column. The junk row gives 65, which the fill
 // takes as 64.
 static void record(pt_render *r, uint8_t x0, uint8_t x1, uint16_t y, uint16_t g)
@@ -293,8 +298,8 @@ static void record(pt_render *r, uint8_t x0, uint8_t x1, uint16_t y, uint16_t g)
         uint16_t dl = pt_u16((int32_t)(n - 1u) * gm);    // to the byte's last column
         uint8_t row = row_of(up ? y : pt_u16((int32_t)y + dl));
         uint8_t bc = (uint8_t)(c >> 2);
-        if (row >= r->lastp1[bc])
-            r->lastp1[bc] = pt_u8((int32_t)row + 1);
+        if (row >= r->toggle_end[bc])
+            r->toggle_end[bc] = pt_u8((int32_t)row + 1);
         c = (uint8_t)(c + n);
         if (c == x1)
             break;
@@ -715,28 +720,8 @@ static void close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, 
 // vertex the same column: a later visit, through another portal, sees the
 // sides just as the first one did.
 
-// A visit's walk: all it needs while it's in progress, and nothing a later
-// visit does. It's made each time a walk enters the cell, and the walk's
-// recursion keeps it while a child's walk runs (on the 6502, a slot per
-// depth). The visit record keeps only what's left for a later visit.
-typedef struct pt_walk {
-    uint8_t vi;           // the visit
-    uint8_t x;            // where the next edge's span starts: the end of the
-                          // last one (the portal's left column to begin with)
-    uint8_t tmax, bmin;   // the bounds' extents over the portal: at least the
-                          // lowest top row, at most the highest bottom row.
-                          // 0 and 64 say the bound is the screen's edge all
-                          // along, and its rows aren't kept in top[] or bot[]
-    uint16_t wrap;        // the cell's window: screen angles at or past this,
-                          // 256..1024, are a turn less
-    int16_t u0, u1;       // the current side's ends' screen angles (u1 a
-                          // turn on, up to 1,535, for the eye's own cell's
-                          // last side)
-    uint8_t c0, c1;       // and their columns
-} pt_walk;
-
 // Vertex v's screen angle in the walk's window.
-static int16_t win_u(const pt_render *r, const pt_walk *w, uint8_t v)
+static int16_t vert_to_screen_angle(const pt_render *r, const pt_walk *w, uint8_t v)
 {
     uint16_t a = pt_vcache_vert(r->vc, r->map, v)->angle;
     uint16_t p = (uint16_t)((uint16_t)(a - r->vl) & 1023u);
@@ -752,7 +737,7 @@ static int8_t view8(int16_t u)
 // The column of a screen angle: in view, where its step's middle projects;
 // left of the view, 0; right of it, 128. On the 6502 its high byte says
 // which: negative, not zero, or zero, and then the low byte is the index.
-static uint8_t win_col(int16_t u)
+static uint8_t screen_angle_to_column(int16_t u)
 {
     if (u < 0)
         return 0;
@@ -772,10 +757,10 @@ static void side_end(const pt_render *r, pt_walk *w)
 {
     const pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
-    int16_t u = win_u(r, w, pt_map_side_v1(r->map, c, vs->side));
+    int16_t u = vert_to_screen_angle(r, w, pt_map_side_v1(r->map, c, vs->side));
     uint16_t d = (uint16_t)((uint16_t)(u - w->u0) & 1023u);
     w->u1 = d <= 512 ? pt_i16((int32_t)w->u0 + d) : u;
-    w->c1 = win_col(w->u1);
+    w->c1 = screen_angle_to_column(w->u1);
 }
 
 // Begin on the record's side: its start's screen angle and column, and its
@@ -783,8 +768,8 @@ static void side_end(const pt_render *r, pt_walk *w)
 static void side_start(const pt_render *r, pt_walk *w)
 {
     const pt_visit *vs = &r->visits[w->vi];
-    w->u0 = win_u(r, w, pt_map_side(r->map, vs->side)->v);
-    w->c0 = win_col(w->u0);
+    w->u0 = vert_to_screen_angle(r, w, pt_map_side(r->map, vs->side)->v);
+    w->c0 = screen_angle_to_column(w->u0);
     side_end(r, w);
 }
 
@@ -965,7 +950,7 @@ static uint8_t visit_of(pt_render *r, uint8_t cell)
 {
     uint8_t vi = r->cell_visit[cell];
     if (vi == 0) {
-        RC_PANIC(r->num_visits < PT_MAX_VISITS);
+        RC_PANIC(r->num_visits <= PT_MAX_VISITS);
         vi = r->num_visits++;
         const pt_cell *c = &r->map->cells[cell];
         r->visits[vi] = (pt_visit) {.cell = cell, .hc = height_of(r, c->ceil_z),
@@ -1354,7 +1339,7 @@ static void root_walk(pt_render *r, pt_walk *w)
         inst_clip(r, vs->inst, 0, PT_SCREEN_WIDTH, 0, PT_SCREEN_HEIGHT);
 }
 
-static void frame(pt_render *r, uint8_t angle, uint8_t cell)
+pt_walk pt_render_root(pt_render *r, uint8_t angle, uint8_t cell)
 {
     const pt_map *m = r->map;
     RC_ASSERT(cell >= 1 && cell < m->num_cells);
@@ -1371,7 +1356,7 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // the records, and every byte column's last toggled row: row 0 to begin
     // with, as lines running off the top toggle it unrecorded
     r->num_recs = 0;
-    memset(r->lastp1, 1, sizeof r->lastp1);
+    memset(r->toggle_end, 1, sizeof r->toggle_end);
     r->num_kept = 1;
     r->num_insts = 1;
     r->num_order = 0;
@@ -1383,6 +1368,13 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // fill starts each column from its colour
     pt_walk w;
     root_walk(r, &w);
+    return w;
+}
+
+static void frame(pt_render *r, uint8_t angle, uint8_t cell)
+{
+    const pt_map *m = r->map;
+    pt_walk w = pt_render_root(r, angle, cell);
     walk(r, &w, 1);
 
     // empty the visit cache while the visits are still there (on the 6502
@@ -1390,7 +1382,7 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
     // index, so only the cells visited are touched
     for (uint8_t i = 1; i < r->num_visits; i++)
         r->cell_visit[r->visits[i].cell] = 0;
-    pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->lastp1);
+    pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->toggle_end);
     for (uint8_t k = 0; k < r->num_order; k++) {
         const pt_inst *in = &r->insts[r->order[k]];
         uint8_t width = (uint8_t)(in->cx1 - in->cx0);

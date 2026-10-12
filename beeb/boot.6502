@@ -7,26 +7,25 @@ SECTION Boot, filename = "!BOOT", org = &FFFF1900, exec = &FFFF0000+boot_entry
 \\ none), print the title, run PORTAL.
 
 BASIC
-0CALLPAGE+{
-    EQUS AS_STRING(basic_entry-&1900)
+10CALLPAGE+{
+    EQUS AS_STRING(sram_check-&1900)
+}
+20*{
+.cmd
+    EQUS "/"
+.message
+    EQUS "PORTAL"
+.message_end
 }
 ENDBASIC
 
     ZA_ENTRY
 
 .basic_entry
-    LDA &18
-    STA messageloop+2
-    STA cmdhi+1
-
-    \\ silence the beep
-
-.boot_entry                             ; *RUN comes in here
-    CLI
-    LDA #15:LDX #0:JSR &FFF4            ; *FX15,0: flush the buffers
 
     \\ sideways RAM: a bank whose first byte takes a write
 
+.sram_check
     SEI                                 ; nothing pages it out under us
     LDX #15
 .probe
@@ -50,6 +49,13 @@ ENDBASIC
     STX &400                            ; the bank, for PORTAL
     LDA &F4:STA &FE30
     CLI
+    RTS
+
+    \\ *RUN comes in here
+
+.boot_entry
+    CLI
+    LDA #15:LDX #0:JSR &FFF4            ; *FX15,0: silence the beep
 
     \\ print the title
 
@@ -58,20 +64,17 @@ ENDBASIC
     LDA message,X
     JSR &FFE3                           ; OSASCI
     INX
-    CPX #message_end-message
+    CPX #message_end+1-message
     BNE messageloop
+    JSR &FFE7
+
+    JSR sram_check                      ; find a bank of sideways RAM
 
     \\ run PORTAL
 
     LDX #LO(cmd)
-.cmdhi
     LDY #HI(cmd)
     JMP &FFF7                           ; OSCLI
 
-.cmd
-    EQUS "/"
-.message
-    EQUS "PORTAL", 13, 13
-.message_end
 
 ENDSECTION

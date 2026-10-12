@@ -863,7 +863,7 @@ fixed routines. A steep one does a pixel pair a column.
 
 **Records.** Every run is recorded, 6 bytes: its columns, its row and its
 gradient. As it's recorded, each byte column's last toggled row is brought
-down, in `lastp1`.
+down, in `toggle_end`.
 
 **The fill** runs down each byte column of T, starting from the eye's cell's
 ceiling colour, EORing each byte into the running value and storing it in

@@ -84,7 +84,7 @@ typedef struct pt_kept {
 typedef struct pt_visit {
     uint8_t cell;         // the cell visited: it clears the cell's index when
                           // the capture's done
-    uint8_t k;            // the current side's ring position, 0..num: where the
+    uint8_t side;         // the current side, in the cell's ring: where the
                           // last walk stopped
     uint8_t xr;           // the right column of the portal last walked through;
                           // 0 until first walked

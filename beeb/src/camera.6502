@@ -1,11 +1,13 @@
 \\ camera.6502 - the camera: moved by the keys, a tick a vsync.
 
-\\ Where it is, u16.8. The vertex cache's angles are from here, in whole units.
+\\ Where it is, u16.8, and where it faces. The vertex cache's angles are from its whole units.
 
 ZA_AUTO1 camxf                          ; x's fraction
 ZA_AUTO2 camx                           ; x in whole units
 ZA_AUTO1 camyf                          ; y's fraction
 ZA_AUTO2 camy                           ; y in whole units
+ZA_AUTO1 camangle                       ; its facing, in 256ths of a turn: 0 faces +x
+ZA_AUTO1 camcell                        ; the cell it's in
 
 \\ Run a tick for each vsync the interrupt's counted, with the keys it's gathered. A stub for now.
 \\ A tick that changes camx or camy must reset the vertex cache (vcache_reset).

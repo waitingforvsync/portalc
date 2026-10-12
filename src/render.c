@@ -771,7 +771,7 @@ static void side_end(const pt_render *r, pt_walk *w)
 {
     const pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
-    int16_t u = win_u(r, w, pt_map_side_v1(r->map, c, vs->k));
+    int16_t u = win_u(r, w, pt_map_side_v1(r->map, c, vs->side));
     uint16_t d = (uint16_t)((uint16_t)(u - w->u0) & 1023u);
     w->u1 = d <= 512 ? pt_i16((int32_t)w->u0 + d) : u;
     w->c1 = win_col(w->u1);
@@ -781,8 +781,7 @@ static void side_end(const pt_render *r, pt_walk *w)
 static void side_start(const pt_render *r, pt_walk *w)
 {
     const pt_visit *vs = &r->visits[w->vi];
-    const pt_cell *c = &r->map->cells[vs->cell];
-    w->u0 = win_u(r, w, pt_map_side(r->map, c, vs->k)->v);
+    w->u0 = win_u(r, w, pt_map_side(r->map, vs->side)->v);
     w->c0 = win_col(w->u0);
     side_end(r, w);
 }
@@ -795,7 +794,7 @@ static void side_next(pt_render *r, pt_walk *w)
 {
     pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
-    vs->k = pt_map_ring_next(c, vs->k);
+    vs->side = pt_map_ring_next(c, vs->side);
     vs->kept = 0;
     RC_ASSERT(w->u1 < 256);
     w->u0 = w->u1;
@@ -979,8 +978,7 @@ static uint8_t visit_of(pt_render *r, uint8_t cell)
 // both measured from the view's left edge, so only the split moves, to half
 // a turn past the middle. cw may be from itself: the tail call builds the
 // child over its parent, which is done with. A first walk looks from the
-// edge after the twin (the side the walk came in by, at ring position
-// twin); a later one resumes from the edge its last walk stopped on - every
+// edge after the twin (the side the walk came in by); a later one resumes from the edge its last walk stopped on - every
 // earlier edge ends left of that walk's xr, which is at or left of xl.
 // Either way the cursor then goes to the first edge whose end is strictly
 // right of xl, at the latest the one ending at the portal's right end.
@@ -995,11 +993,11 @@ static void enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_walk *from, u
     *cw = (pt_walk) {.vi = vi, .x = xl, .tmax = tmax, .bmin = bmin, .wrap = wrap};
     bool first = vs->xr == 0;
     if (first)
-        vs->k = pt_map_ring_next(c, twin);
+        vs->side = pt_map_ring_next(c, twin);
     side_start(r, cw);
     if (first)
         vs->inst = inst_new(r, vs->cell, vs->hf);
-    for (uint8_t steps = c->num; cw->c1 <= xl; steps--) {
+    for (uint8_t steps = pt_u8((int32_t)pt_map_ring_end(c) - c->first - 1); cw->c1 <= xl; steps--) {
         RC_ASSERT(steps != 0);
         side_next(r, cw);
     }
@@ -1094,7 +1092,7 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
     const pt_map *m = r->map;
     pt_visit *vs = &r->visits[w->vi];
     const pt_cell *ca = &m->cells[vs->cell];
-    const pt_side *sd = pt_map_side(m, ca, vs->k);
+    const pt_side *sd = pt_map_side(m, vs->side);
 
     // 1. the column span: from where the visit's last span ended (the
     // portal's left column for its first edge), or the edge's start if
@@ -1112,7 +1110,7 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
     if (e->colour == PT_EDGE_SOFT) {
         uint8_t ci = visit_of(r, sd->adj);
         RC_ASSERT(r->visits[ci].xr <= xa);
-        enter(r, ci, pt_side_twin(sd), w, xa, xb, w->tmax, w->bmin, cw);
+        enter(r, ci, pt_map_twin(m, vs->side), w, xa, xb, w->tmax, w->bmin, cw);
         return true;
     }
 
@@ -1125,7 +1123,7 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
         ki = r->num_kept++;
         vs->kept = ki;
     }
-    pt_edgelines el = {.w = w, .sd = sd, .v1 = pt_map_side_v1(m, ca, vs->k), .kept = ki,
+    pt_edgelines el = {.w = w, .sd = sd, .v1 = pt_map_side_v1(m, ca, vs->side), .kept = ki,
                        .use = use};
     pt_pattern wall = pt_shade(pt_u8((int32_t)e->colour - 1));
     pt_pattern ca_ceil = pt_shade(ca->ceil);
@@ -1217,7 +1215,7 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
         return false;
     }
     RC_ASSERT(cv->xr <= xa);    // (as for a soft edge)
-    enter(r, ci, pt_side_twin(sd), w, xa, xb, ctmax, cbmin, cw);
+    enter(r, ci, pt_map_twin(m, vs->side), w, xa, xb, ctmax, cbmin, cw);
     return true;
 }
 
@@ -1257,7 +1255,7 @@ static void walk(pt_render *r, pt_walk *w, uint8_t depth)
     for (;;) {
         const pt_visit *vs = &r->visits[w->vi];
         const pt_cell *c = &r->map->cells[vs->cell];
-        for (uint8_t steps = pt_u8((int32_t)c->num + 1); w->c1 < vs->xr; steps--) {
+        for (uint8_t steps = pt_u8((int32_t)pt_map_ring_end(c) - c->first); w->c1 < vs->xr; steps--) {
             RC_ASSERT(steps != 0);
             pt_walk cw;
             if (process_edge(r, w, &cw))
@@ -1310,19 +1308,19 @@ static void root_walk(pt_render *r, pt_walk *w)
 {
     const pt_map *m = r->map;
     const pt_cell *c = &m->cells[r->cam_cell];
-    uint8_t k = 0;
+    uint8_t s = c->first;
     uint16_t off;    // the turn from the side's start to the view's left edge
-    for (;; k++) {
-        RC_ASSERT(k <= c->num);
-        uint16_t a0 = pt_vcache_vert(r->vc, m, pt_map_side(m, c, k)->v)->angle;
-        uint16_t a1 = pt_vcache_vert(r->vc, m, pt_map_side_v1(m, c, k))->angle;
+    for (;; s++) {
+        RC_ASSERT(s < pt_map_ring_end(c));
+        uint16_t a0 = pt_vcache_vert(r->vc, m, pt_map_side(m, s)->v)->angle;
+        uint16_t a1 = pt_vcache_vert(r->vc, m, pt_map_side_v1(m, c, s))->angle;
         off = (uint16_t)((uint16_t)(r->vl - a0) & 1023u);
         if (off < (uint16_t)((uint16_t)(a1 - a0) & 1023u))
             break;
     }
     uint8_t vi = visit_of(r, r->cam_cell);
     pt_visit *vs = &r->visits[vi];
-    vs->k = k;
+    vs->side = s;
     vs->xr = PT_SCREEN_WIDTH;
     *w = (pt_walk) {.vi = vi, .x = 0, .tmax = 0, .bmin = PT_SCREEN_HEIGHT,
                     .wrap = pt_u16(1024 - (int32_t)off)};

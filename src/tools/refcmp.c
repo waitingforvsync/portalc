@@ -54,12 +54,12 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
         int exit = -1;     // the side the ray leaves by
         int exit_e = -1;   // and its edge: an exact tie (the ray through a
                            // vertex) goes to the lower, whatever the ring order
-        for (uint8_t k = 0; k <= c->num; k++) {
-            const pt_side *sd = pt_map_side(&map, c, k);
+        for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
+            const pt_side *sd = pt_map_side(&map, s);
             if (sd->edge == entry)
                 continue;
             pt_vertex a = map.verts[sd->v];
-            pt_vertex b = map.verts[pt_map_side_v1(&map, c, k)];
+            pt_vertex b = map.verts[pt_map_side_v1(&map, c, s)];
             double ex = (double)b.x - a.x;
             double ey = (double)b.y - a.y;
             double den = dx * ey - dy * ex;
@@ -76,7 +76,7 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
             if (ahead && u >= -1e-9 && u <= 1 + 1e-9
                 && (tt < best || (tt == best && e < exit_e))) {
                 best = tt;
-                exit = k;
+                exit = s;
                 exit_e = e;
             }
         }
@@ -89,7 +89,7 @@ static uint8_t cast(double px, double py, uint8_t cell, double eye, double dx, d
             return (uint8_t)(c->floor + 1);
         if (lz < 0 && z < 8.0 * c->ceil_z)
             return (uint8_t)(c->ceil + 1);
-        const pt_side *sd = pt_map_side(&map, c, (uint8_t)exit);
+        const pt_side *sd = pt_map_side(&map, (uint8_t)exit);
         uint8_t colour = map.edges[sd->edge].colour;
         uint8_t adj = sd->adj;
         if (adj == 0)
@@ -111,9 +111,9 @@ static uint8_t holding_cell(double px, double py)
     for (uint8_t c = 1; c < map.num_cells; c++) {
         const pt_cell *cl = &map.cells[c];
         bool in = true;
-        for (uint8_t k = 0; k <= cl->num && in; k++) {
-            pt_vertex a = map.verts[pt_map_side(&map, cl, k)->v];
-            pt_vertex b = map.verts[pt_map_side_v1(&map, cl, k)];
+        for (uint8_t s = cl->first; s < pt_map_ring_end(cl) && in; s++) {
+            pt_vertex a = map.verts[pt_map_side(&map, s)->v];
+            pt_vertex b = map.verts[pt_map_side_v1(&map, cl, s)];
             double cr = ((double)b.x - a.x) * (py - a.y) - ((double)b.y - a.y) * (px - a.x);
             in = cr >= 0;
         }
@@ -217,13 +217,13 @@ static void all_poses(int which)
     for (uint8_t c = 1; c < map.num_cells; c++) {
         const pt_cell *cl = &map.cells[c];
         uint32_t sx = 0, sy = 0;
-        for (uint8_t k = 0; k <= cl->num; k++) {
-            pt_vertex v = map.verts[pt_map_side(&map, cl, k)->v];
+        for (uint8_t s = cl->first; s < pt_map_ring_end(cl); s++) {
+            pt_vertex v = map.verts[pt_map_side(&map, s)->v];
             sx += v.x;
             sy += v.y;
         }
-        uint16_t x = (uint16_t)(sx / (cl->num + 1));
-        uint16_t y = (uint16_t)(sy / (cl->num + 1));
+        uint16_t x = (uint16_t)(sx / (pt_map_ring_end(cl) - cl->first));
+        uint16_t y = (uint16_t)(sy / (pt_map_ring_end(cl) - cl->first));
         for (unsigned a = 0; a < 256; a += 4)
             frame(x, y, (uint8_t)a, c);
     }

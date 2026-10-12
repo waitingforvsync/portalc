@@ -89,18 +89,19 @@ which more under Angles) and its colour (0 for a soft edge, which only
 exists to keep cells convex and never draws). Cell 2 of map 0:
 
 ```
-cell 2   floor 64, ceiling 44
-  k=3  v0 -> v1   a wall
-  k=2  v1 -> v6   soft, into cell 3
-  k=1  v6 -> v5   into cell 1, the sunk square (floor 67)
-  k=0  v5 -> v0   soft, into cell 6
+cell 2   floor 64, ceiling 44, sides 4 to 7
+  4  v0 -> v1   a wall
+  5  v1 -> v6   soft, into cell 3
+  6  v6 -> v5   into cell 1, the sunk square (floor 67)
+  7  v5 -> v0   soft, into cell 6
 ```
 
-The ring is stored counter-clockwise and walked clockwise, counting `k`
-down from `num` and reloading it below 0, which is the cheap way round on
-the 6502. A side also keeps its quadrant and `twin`, the edge's position in
-the next cell's ring, so a walk into that cell knows where to start without
-searching.
+The rings are stored clockwise and end to end, so a cell keeps only its
+first side: its ring stops where the next cell's starts. The 6502 holds a
+side's number in Y, steps on with `INY`, and goes back to the first at the
+next cell's first. A side also keeps its quadrant. The way back in, the
+side running the same edge in the next cell, isn't stored: a walk into
+that cell searches its ring for it, which is a handful of compares.
 
 The eye is 80 units (10 steps) above the floor of its cell.
 

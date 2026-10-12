@@ -9,12 +9,12 @@ bool pt_testmaps_add_sprites(pt_map *m)
         const pt_cell *c = &m->cells[cells[i]];
         uint32_t sx = 0;
         uint32_t sy = 0;
-        for (uint8_t k = 0; k < (c->num + 1); k++) {
-            sx += m->verts[pt_map_side(m, c, k)->v].x;
-            sy += m->verts[pt_map_side(m, c, k)->v].y;
+        for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
+            sx += m->verts[pt_map_side(m, s)->v].x;
+            sy += m->verts[pt_map_side(m, s)->v].y;
         }
-        m->sprites[m->num_sprites] = pt_map_sprite(m, (uint16_t)(sx / (c->num + 1)),
-                                                   (uint16_t)(sy / (c->num + 1)), 64, 0);
+        m->sprites[m->num_sprites] = pt_map_sprite(m, (uint16_t)(sx / (pt_map_ring_end(c) - c->first)),
+                                                   (uint16_t)(sy / (pt_map_ring_end(c) - c->first)), 64, 0);
         m->cells[cells[i]].sprite = m->num_sprites++;
     }
     return pt_map_validate(m);

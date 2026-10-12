@@ -113,6 +113,8 @@ ENDMACRO
     LDA #LO(CAM_START_Y):STA camy
     LDA #HI(CAM_START_Y):STA camy+1
     LDA #0:STA camxf:STA camyf
+    LDA #CAM_START_ANGLE:STA camangle
+    LDA #CAM_START_CELL:STA camcell
 
     \\ the interrupt's state, and the vsync's interrupt on: go
 

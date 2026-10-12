@@ -67,7 +67,6 @@ int main(void)
     FIELD("vert_x", m.num_verts, m.verts[i].x);
     FIELD("vert_y", m.num_verts, m.verts[i].y);
     FIELD("cell_first", m.num_cells, m.cells[i].first);
-    FIELD("cell_num", m.num_cells, m.cells[i].num);
     FIELD("cell_floorz", m.num_cells, m.cells[i].floor_z);
     FIELD("cell_ceilz", m.num_cells, m.cells[i].ceil_z);
     FIELD("cell_floor", m.num_cells, m.cells[i].floor);
@@ -79,7 +78,7 @@ int main(void)
     FIELD("side_v", m.num_sides, m.sides[i].v);
     FIELD("side_edge", m.num_sides, m.sides[i].edge);
     FIELD("side_adj", m.num_sides, m.sides[i].adj);
-    FIELD("side_qt", m.num_sides, m.sides[i].qt);
+    FIELD("side_anghi", m.num_sides, m.sides[i].anghi);
     FIELD("sprite_x", m.num_sprites, m.sprites[i].x);
     FIELD("sprite_y", m.num_sprites, m.sprites[i].y);
     FIELD("sprite_art", m.num_sprites, m.sprites[i].art);
@@ -103,7 +102,10 @@ int main(void)
     table("vert_ylo", "MAP_VERTS", "LO(map_vert_y)");
     table("vert_yhi", "MAP_VERTS", "HI(map_vert_y)");
     printf("\n");
-    const char *cell_fields[] = {"first", "num", "floorz", "ceilz", "floor", "ceil", "sprite"};
+    // a ring ends where the next cell's begins: cell_first runs one past the cells, to where the
+    // sides end
+    table("cell_first", "MAP_CELLS+1", "map_cell_first, MAP_SIDES");
+    const char *cell_fields[] = {"floorz", "ceilz", "floor", "ceil", "sprite"};
     for (unsigned i = 0; i < sizeof cell_fields / sizeof *cell_fields; i++) {
         char label[32], value[32];
         snprintf(label, sizeof label, "cell_%s", cell_fields[i]);
@@ -118,7 +120,7 @@ int main(void)
     table("side_v", "MAP_SIDES", "map_side_v");
     table("side_edge", "MAP_SIDES", "map_side_edge");
     table("side_adj", "MAP_SIDES", "map_side_adj");
-    table("side_qt", "MAP_SIDES", "map_side_qt");
+    table("side_anghi", "MAP_SIDES", "map_side_anghi");
     printf("\n");
     table("sprite_xlo", "MAP_SPRITES", "LO(map_sprite_x)");
     table("sprite_xhi", "MAP_SPRITES", "HI(map_sprite_x)");

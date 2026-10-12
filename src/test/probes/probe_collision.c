@@ -17,13 +17,13 @@
 static pt_map map_;
 static pt_vcache vc_;
 
-// Exact distance from a point to the segment of the side at position k.
-static double seg_dist(const pt_map *m, const pt_cell *c, uint8_t k, double x, double y)
+// Exact distance from a point to the segment of cell c's side s.
+static double seg_dist(const pt_map *m, const pt_cell *c, uint8_t s, double x, double y)
 {
-    double ax = m->verts[pt_map_side(m, c, k)->v].x;
-    double ay = m->verts[pt_map_side(m, c, k)->v].y;
-    double bx = m->verts[pt_map_side_v1(m, c, k)].x;
-    double by = m->verts[pt_map_side_v1(m, c, k)].y;
+    double ax = m->verts[pt_map_side(m, s)->v].x;
+    double ay = m->verts[pt_map_side(m, s)->v].y;
+    double bx = m->verts[pt_map_side_v1(m, c, s)].x;
+    double by = m->verts[pt_map_side_v1(m, c, s)].y;
     double dx = bx - ax;
     double dy = by - ay;
     double t = ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy);
@@ -62,16 +62,16 @@ RC_TEST(probe, collision_distance)
         double x = cam.x / 256.0;
         double y = cam.y / 256.0;
         const pt_cell *cc = &m->cells[cam.cell];
-        for (uint8_t k = 0; k <= cc->num; k++) {
-            const pt_side *sd = pt_map_side(m, cc, k);
+        for (uint8_t s = cc->first; s < pt_map_ring_end(cc); s++) {
+            const pt_side *sd = pt_map_side(m, s);
             if (sd->adj == 0) {
-                double d = seg_dist(m, cc, k, x, y);
+                double d = seg_dist(m, cc, s, x, y);
                 if (d < worst)
                     worst = d;
             } else {
                 const pt_cell *nb = &m->cells[sd->adj];
-                for (uint8_t j = 0; j <= nb->num; j++) {
-                    if (pt_map_side(m, nb, j)->adj != 0)
+                for (uint8_t j = nb->first; j < pt_map_ring_end(nb); j++) {
+                    if (pt_map_side(m, j)->adj != 0)
                         continue;
                     double d = seg_dist(m, nb, j, x, y);
                     if (d < worst)

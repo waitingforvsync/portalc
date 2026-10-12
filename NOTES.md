@@ -412,32 +412,36 @@ edge   angle    the direction's byte within its quadrant
 side   v        the start vertex; the end is the next side's
        edge
        adj      the cell across, 0 for a solid wall
-       qt       quadrant | (twin << 2)
+       anghi    the direction's quadrant
 ```
 
 The angle byte needs no direction: either way round, it's the same byte,
-and only the quadrant differs. So the side keeps its own quadrant, in the
-low two bits of `qt`, and with the edge's byte that's its world angle,
-with no vertices fetched and no signs tested. The rest of `qt` is `twin`,
-the edge's position in adj's ring, which saves searching the child's ring
-for the way back in every time the walk enters a cell; it's under 8 here,
-and could be up to 63. An edge's length comes back if collision wants it.
+and only the quadrant differs. So the side keeps its own quadrant,
+`anghi`, and with the edge's byte that's its world angle, with no
+vertices fetched and no signs tested. The twin, the side running the same
+edge the other way in adj's ring, isn't stored: the walk searches the
+child's ring for the side on the same edge each time it enters a cell.
+A ring is under 8 sides, so that's a few compares, and far cheaper than
+working a quadrant out from signs. An edge's length comes back if
+collision wants it.
 
-### Rings stored backwards
+### Rings end to end
 
-A cell keeps `first`, its ring's base in the sides, and `num`, which holds
-its count LESS ONE. The ring is stored counter-clockwise, and still walked
-clockwise: a base pointer at `sides + first`, and positions counting down
-from `num`, which is the cheap way round on the 6502:
+A cell keeps only `first`, its ring's first side. The rings are stored
+clockwise, end to end in cell order, so a ring ends where the next cell's
+begins, and one entry past the last cell says where the sides end. A side
+is known by its number, which a byte holds, and the walk keeps it in Y:
 
 ```
-    DEY : BPL ok
-    LDY num                 ; below 0: round to the last position
+    INY
+    CPY cell_first+1,X      ; the next cell's first: round to this one's
+    BNE ok
+    LDY cell_first,X
 .ok
 ```
 
-Everything that names a side by ring, like a side's `twin`, uses these
-positions, 0 to `num`, not indices into the sides.
+The C names sides the same way, by their index in the sides, and a visit
+keeps the side its walk stopped on.
 
 ### One colour an edge
 
@@ -517,8 +521,8 @@ slide iterations, the hop walk) with new pieces:
   log sine near zero is steep, exactly where collision wants it accurate.
 - **The edge's length** joins the edge, for the foot cap.
 - **A candidate is its wall, looked up once:** the start vertex, the
-  direction and the foot cap, not a cell and a ring position to go back
-  through for each test.
+  direction and the foot cap, not a side to look up again for each
+  test.
 - **The slide reuses the resolve's distances.** The slide wants each wall's
   distance from where the move starts, and the resolve has just worked it
   out from there, unless it pushed (5% of ticks on a walk that hugs the
@@ -1982,6 +1986,7 @@ Settled:
 - **Grazing walls:** a row or two of error, taken over anything slower.
   Performance comes first.
 - **The vertex cache** goes by vertex, made on need, like the visits.
-- **A side's quadrant** is stored, as quadrant | (twin << 2).
+- **A side's quadrant** is stored, as `anghi`. Its twin is found by
+  searching the cell across.
 - **The posts' division:** a byte table, the quickest, with error only on
   the side of more overcorrection.

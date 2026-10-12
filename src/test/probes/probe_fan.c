@@ -35,9 +35,9 @@ RC_TEST(probe, fan_crossings)
         bool used = false;
         for (uint8_t c = 1; c < m->num_cells; c++) {
             const pt_cell *cc = &m->cells[c];
-            for (uint8_t k = 0; k <= cc->num; k++) {
-                const pt_side *sd = pt_map_side(m, cc, k);
-                if (sd->v == v || pt_map_side_v1(m, cc, k) == v) {
+            for (uint8_t s = cc->first; s < pt_map_ring_end(cc); s++) {
+                const pt_side *sd = pt_map_side(m, s);
+                if (sd->v == v || pt_map_side_v1(m, cc, s) == v) {
                     used = true;
                     if (sd->adj == 0)
                         solid = true;
@@ -73,11 +73,11 @@ RC_TEST(probe, fan_crossings)
                 const pt_cell *cc = &m->cells[cam.cell];
                 double px = (double)(cam.x >> 8);
                 double py = (double)(cam.y >> 8);
-                for (uint8_t k = 0; k <= cc->num; k++) {
-                    pt_vertex a = m->verts[pt_map_side(m, cc, k)->v];
-                    pt_vertex b = m->verts[pt_map_side_v1(m, cc, k)];
+                for (uint8_t s = cc->first; s < pt_map_ring_end(cc); s++) {
+                    pt_vertex a = m->verts[pt_map_side(m, s)->v];
+                    pt_vertex b = m->verts[pt_map_side_v1(m, cc, s)];
                     double len = hypot((double)b.x - a.x, (double)b.y - a.y);
-                    double d = pt_map_edge_side(m, cc, k, (uint16_t)px, (uint16_t)py) / len;
+                    double d = pt_map_edge_side(m, cc, s, (uint16_t)px, (uint16_t)py) / len;
                     if (d >= 0)
                         continue;
                     double r0 = hypot(a.x - px, a.y - py);

@@ -32,9 +32,9 @@ RC_TEST(probe, walk_from_reachable_states)
         bool used = false;
         for (uint8_t c = 1; c < m->num_cells; c++) {
             const pt_cell *cc = &m->cells[c];
-            for (uint8_t k = 0; k <= cc->num; k++) {
-                const pt_side *sd = pt_map_side(m, cc, k);
-                if (sd->v == v || pt_map_side_v1(m, cc, k) == v) {
+            for (uint8_t s = cc->first; s < pt_map_ring_end(cc); s++) {
+                const pt_side *sd = pt_map_side(m, s);
+                if (sd->v == v || pt_map_side_v1(m, cc, s) == v) {
                     used = true;
                     if (sd->adj == 0)
                         solid = true;

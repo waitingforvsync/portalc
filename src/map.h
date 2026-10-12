@@ -45,35 +45,21 @@ typedef struct pt_edge {
 } pt_edge;
 
 // A cell's side, one place in its ring: from its start vertex to the next
-// side's, clockwise, along an edge.
+// side's, clockwise, along an edge. Sides are known by their index in the
+// map's sides[], which a byte holds.
 typedef struct pt_side {
     uint8_t v;           // the start vertex
     uint8_t edge;
     uint8_t adj;         // the cell across it, 0 = solid wall
-    uint8_t qt;          // quadrant | (twin << 2): the quadrant of the side's
-                         // direction (with its edge's byte, its world angle),
-                         // and the edge's position in adj's ring, 0..num (the
-                         // child's walk starts from there; 0 for a wall)
+    uint8_t anghi;       // the quadrant of the side's direction: over its
+                         // edge's byte, its world angle
 } pt_side;
 
-// The quadrant of a side's direction, and its twin's ring position.
-static inline uint8_t pt_side_quadrant(const pt_side *sd)
-{
-    return (uint8_t)(sd->qt & 3u);
-}
-
-static inline uint8_t pt_side_twin(const pt_side *sd)
-{
-    return (uint8_t)(sd->qt >> 2);
-}
-
 typedef struct pt_cell {
-    uint8_t first;       // its ring's base: sides[first + k] is position k
-    uint8_t num;         // the ring's count LESS ONE: its last position. The
-                         // ring is stored counter-clockwise, so the 6502
-                         // walks it clockwise from a base pointer at sides +
-                         // first, counting positions down from num and
-                         // reloading it below 0
+    uint8_t first;       // its ring's first side, clockwise. The rings run on
+                         // end to end, so a ring ends where the next cell's
+                         // begins: the 6502 steps a side on with INY, and
+                         // back to first at the next cell's
     uint8_t floor_z;     // z in 8-unit steps, increasing downwards: floor_z > ceil_z
     uint8_t ceil_z;
     uint8_t floor;       // catalogue shade indices
@@ -94,7 +80,9 @@ typedef struct pt_sprite {
 
 typedef struct pt_map {
     pt_vertex verts[PT_MAX_VERTS];
-    pt_cell cells[PT_MAX_CELLS];    // cell 0 is the "outside" and never used
+    pt_cell cells[PT_MAX_CELLS + 1];    // cell 0 is the "outside" and never used;
+                                        // past the last, one with only its first,
+                                        // where the sides end
     pt_edge edges[PT_MAX_EDGES];
     pt_side sides[PT_MAX_SIDES];    // the cells' rings
     pt_sprite sprites[PT_MAX_SPRITES];    // sprite 0 is unused ("none")
@@ -110,26 +98,38 @@ typedef struct pt_map {
 // A side's direction, a world angle: its quadrant over its edge's byte.
 static inline uint16_t pt_map_side_angle(const pt_map *m, const pt_side *sd)
 {
-    return (uint16_t)((uint16_t)((uint16_t)pt_side_quadrant(sd) << 8) | m->edges[sd->edge].angle);
+    return (uint16_t)((uint16_t)((uint16_t)sd->anghi << 8) | m->edges[sd->edge].angle);
 }
 
-// The side at position k (0..num) of cell c's ring.
-static inline const pt_side *pt_map_side(const pt_map *m, const pt_cell *c, uint8_t k)
+// Side s.
+static inline const pt_side *pt_map_side(const pt_map *m, uint8_t s)
 {
-    return &m->sides[c->first + k];
+    return &m->sides[s];
 }
 
-// The next position clockwise from k: one down, wrapping round to num.
-static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t k)
+// One past the last side of cell c's ring: the next cell's first.
+static inline uint8_t pt_map_ring_end(const pt_cell *c)
 {
-    return k == 0 ? c->num : (uint8_t)(k - 1);
+    return c[1].first;
 }
 
-// Position k's end vertex: the next side's start.
-static inline uint8_t pt_map_side_v1(const pt_map *m, const pt_cell *c, uint8_t k)
+// The next side clockwise from s in cell c's ring: the one after it,
+// wrapping round from the last to the first.
+static inline uint8_t pt_map_ring_next(const pt_cell *c, uint8_t s)
 {
-    return pt_map_side(m, c, pt_map_ring_next(c, k))->v;
+    s++;
+    return s == pt_map_ring_end(c) ? c->first : s;
 }
+
+// Side s's end vertex: the next side's start.
+static inline uint8_t pt_map_side_v1(const pt_map *m, const pt_cell *c, uint8_t s)
+{
+    return pt_map_side(m, pt_map_ring_next(c, s))->v;
+}
+
+// Portal side s's twin: the side of the cell across that runs along the same
+// edge, found by searching that cell's ring.
+uint8_t pt_map_twin(const pt_map *m, uint8_t s);
 
 // Build the demo scene: a pentagonal room with a depressed square in the
 // centre of its floor holding a boulder, a corridor to a second, square
@@ -152,9 +152,9 @@ bool pt_map_validate(const pt_map *m);
 // with its scale's log made (by the host, which builds maps).
 pt_sprite pt_map_sprite(const pt_map *m, uint16_t x, uint16_t y, uint16_t size, uint8_t art);
 
-// The signed distance of a point from the line of the side at position k
-// of cell c, s16.8: positive on the cell's interior side.
-int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t k, uint16_t x, uint16_t y);
+// The signed distance of a point from the line of cell c's side s, s16.8:
+// positive on the cell's interior side.
+int32_t pt_map_edge_side(const pt_map *m, const pt_cell *c, uint8_t s, uint16_t x, uint16_t y);
 
 // True when the point lies inside the cell (boundary included).
 bool pt_map_cell_contains(const pt_map *m, uint8_t cell, uint16_t x, uint16_t y);

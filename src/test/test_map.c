@@ -11,31 +11,33 @@ static void check_structure(const pt_map *m)
 {
     RC_CHECK_TRUE(pt_map_validate(m));
 
-    // the rings partition sides[], stored counter-clockwise: clockwise is
-    // counting down, from the first back round to the last
+    // the rings partition sides[], each [first, last) and stored clockwise:
+    // clockwise is counting up, from the last back round to the first
     uint16_t total = 0;
     uint16_t walls = 0;
     for (uint8_t c = 1; c < m->num_cells; c++) {
         const pt_cell *cell = &m->cells[c];
-        RC_CHECK(cell->num, >=, (uint8_t)2);
+        RC_CHECK(pt_map_ring_end(cell) - cell->first, >=, 3);
         RC_CHECK(cell->first, ==, (uint8_t)total);
-        total += cell->num + 1;
-        for (uint8_t k = 0; k <= cell->num; k++) {
-            uint8_t want = k == 0 ? cell->num : (uint8_t)(k - 1);
-            RC_CHECK(pt_map_ring_next(cell, k), ==, want);
+        total = pt_map_ring_end(cell);
+        for (uint8_t s = cell->first; s < pt_map_ring_end(cell); s++) {
+            uint8_t want = s + 1 == pt_map_ring_end(cell) ? cell->first : (uint8_t)(s + 1);
+            RC_CHECK(pt_map_ring_next(cell, s), ==, want);
 
             // across a portal, the twin is the same edge the other way round
-            const pt_side *sd = pt_map_side(m, cell, k);
+            const pt_side *sd = pt_map_side(m, s);
             if (sd->adj == 0) {
                 walls++;
                 continue;
             }
             const pt_cell *d = &m->cells[sd->adj];
-            const pt_side *t = pt_map_side(m, d, pt_side_twin(sd));
+            uint8_t ts = pt_map_twin(m, s);
+            RC_CHECK(ts >= d->first && ts < pt_map_ring_end(d), ==, true);
+            const pt_side *t = pt_map_side(m, ts);
             RC_CHECK(t->edge, ==, sd->edge);
             RC_CHECK(t->adj, ==, c);
-            RC_CHECK(t->v, ==, pt_map_side_v1(m, cell, k));
-            RC_CHECK(pt_map_side_v1(m, d, pt_side_twin(sd)), ==, sd->v);
+            RC_CHECK(t->v, ==, pt_map_side_v1(m, cell, s));
+            RC_CHECK(pt_map_side_v1(m, d, ts), ==, sd->v);
         }
     }
     RC_CHECK(total, ==, (uint16_t)m->num_sides);
@@ -45,16 +47,16 @@ static void check_structure(const pt_map *m)
     // signs and the byte make the true angle's 1024th
     for (uint8_t c = 1; c < m->num_cells; c++) {
         const pt_cell *cell = &m->cells[c];
-        for (uint8_t k = 0; k <= cell->num; k++) {
-            pt_vertex a = m->verts[pt_map_side(m, cell, k)->v];
-            pt_vertex b = m->verts[pt_map_side_v1(m, cell, k)];
+        for (uint8_t s = cell->first; s < pt_map_ring_end(cell); s++) {
+            pt_vertex a = m->verts[pt_map_side(m, s)->v];
+            pt_vertex b = m->verts[pt_map_side_v1(m, cell, s)];
             int32_t dx = (int32_t)b.x - a.x;
             int32_t dy = (int32_t)b.y - a.y;
             double t = atan2((double)dy, (double)dx) * (512.0 / 3.14159265358979323846);
             if (t < 0)
                 t += 1024.0;
             uint16_t q = pt_quadrant((int16_t)dx, (int16_t)dy);
-            double d = (q << 8 | m->edges[pt_map_side(m, cell, k)->edge].angle) - t;
+            double d = (q << 8 | m->edges[pt_map_side(m, s)->edge].angle) - t;
             RC_CHECK(d > -1.0 - 1e-9 && d < 1e-9, ==, true);
         }
     }
@@ -64,10 +66,10 @@ static void check_structure(const pt_map *m)
     // angle's step and the products' rounding of its line
     for (uint8_t c = 1; c < m->num_cells; c++) {
         const pt_cell *cell = &m->cells[c];
-        for (uint8_t k = 0; k <= cell->num; k++) {
-            const pt_side *sd = pt_map_side(m, cell, k);
+        for (uint8_t s = cell->first; s < pt_map_ring_end(cell); s++) {
+            const pt_side *sd = pt_map_side(m, s);
             pt_vertex a = m->verts[sd->v];
-            pt_vertex b = m->verts[pt_map_side_v1(m, cell, k)];
+            pt_vertex b = m->verts[pt_map_side_v1(m, cell, s)];
             int16_t dx = (int16_t)(b.x - a.x);
             int16_t dy = (int16_t)(b.y - a.y);
             uint16_t ang = (uint16_t)(pt_quadrant(dx, dy) << 8 | m->edges[sd->edge].angle);
@@ -86,12 +88,12 @@ static void check_structure(const pt_map *m)
         const pt_cell *cell = &m->cells[c];
         uint32_t cx = 0;
         uint32_t cy = 0;
-        for (uint8_t k = 0; k <= cell->num; k++) {
-            cx += m->verts[pt_map_side(m, cell, k)->v].x;
-            cy += m->verts[pt_map_side(m, cell, k)->v].y;
+        for (uint8_t s = cell->first; s < pt_map_ring_end(cell); s++) {
+            cx += m->verts[pt_map_side(m, s)->v].x;
+            cy += m->verts[pt_map_side(m, s)->v].y;
         }
-        uint16_t px = (uint16_t)(cx / (cell->num + 1));
-        uint16_t py = (uint16_t)(cy / (cell->num + 1));
+        uint16_t px = (uint16_t)(cx / (pt_map_ring_end(cell) - cell->first));
+        uint16_t py = (uint16_t)(cy / (pt_map_ring_end(cell) - cell->first));
         RC_CHECK(pt_map_find_cell(m, px, py), ==, c);
     }
     RC_CHECK(pt_map_find_cell(m, 10, 10), ==, (uint8_t)0);

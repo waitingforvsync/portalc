@@ -53,7 +53,7 @@ const pt_polar *pt_vcache_vert(pt_vcache *vc, const pt_map *m, uint8_t v)
     return &vc->polar[e];
 }
 
-// Has the position crossed the side at position k of cell ci, into adj?
+// Has the position crossed side s of cell ci, into adj?
 // Seen from it, the side's vertices run clockwise from inside the cell:
 // the angle from its start to its end is under a half turn. Exactly a half
 // turn is the position on the side: the lower-numbered cell keeps it, so
@@ -61,11 +61,11 @@ const pt_polar *pt_vcache_vert(pt_vcache *vc, const pt_map *m, uint8_t v)
 // side's line but past an end, where it isn't this side that's crossed: if
 // it's outside the cell at all, it's outside the side on round from that
 // end.
-static bool side_crossed(pt_vcache *vc, const pt_map *m, const pt_cell *c, uint8_t k,
+static bool side_crossed(pt_vcache *vc, const pt_map *m, const pt_cell *c, uint8_t s,
                          uint8_t ci, uint8_t adj)
 {
-    uint16_t a0 = pt_vcache_vert(vc, m, pt_map_side(m, c, k)->v)->angle;
-    uint16_t a1 = pt_vcache_vert(vc, m, pt_map_side_v1(m, c, k))->angle;
+    uint16_t a0 = pt_vcache_vert(vc, m, pt_map_side(m, s)->v)->angle;
+    uint16_t a1 = pt_vcache_vert(vc, m, pt_map_side_v1(m, c, s))->angle;
     uint16_t d = (uint16_t)((uint16_t)(a1 - a0) & 1023u);
     if (d == 512)
         return adj < ci;
@@ -79,9 +79,9 @@ uint8_t pt_vcache_locate(pt_vcache *vc, const pt_map *m, uint8_t cell)
     for (uint8_t pass = 0; pass < 8; pass++) {
         const pt_cell *c = &m->cells[cell];
         bool crossed = false;
-        for (uint8_t k = 0; k <= c->num; k++) {
-            uint8_t adj = pt_map_side(m, c, k)->adj;
-            if (adj != 0 && side_crossed(vc, m, c, k, cell, adj)) {
+        for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
+            uint8_t adj = pt_map_side(m, s)->adj;
+            if (adj != 0 && side_crossed(vc, m, c, s, cell, adj)) {
                 cell = adj;
                 crossed = true;
                 break;

@@ -48,9 +48,9 @@ static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
 }
 
 // A side's direction: its stored quadrant over its edge's angle byte.
-static uint16_t side_angle(const pt_map *m, const pt_cell *c, uint8_t k)
+static uint16_t side_angle(const pt_map *m, uint8_t s)
 {
-    return pt_map_side_angle(m, pt_map_side(m, c, k));
+    return pt_map_side_angle(m, pt_map_side(m, s));
 }
 
 // Every wall interaction happens in the side's own frame, in whole world
@@ -76,12 +76,12 @@ static bool foot_in_range(const pt_map *m, const cand *cd, uint16_t x, uint16_t 
     return t >= 0 && t <= cd->len;
 }
 
-// The wall at position k of cell c's ring as a candidate: what the tests
-// above need of it, looked up once.
-static cand make_cand(const pt_map *m, const pt_cell *c, uint8_t k, uint8_t capped)
+// Wall side s as a candidate: what the tests above need of it, looked up
+// once.
+static cand make_cand(const pt_map *m, uint8_t s, uint8_t capped)
 {
-    const pt_side *sd = pt_map_side(m, c, k);
-    return (cand) {.v = sd->v, .angle = side_angle(m, c, k),
+    const pt_side *sd = pt_map_side(m, s);
+    return (cand) {.v = sd->v, .angle = side_angle(m, s),
                    .len = pt_i16((int32_t)m->edges[sd->edge].len8 << 3), .capped = capped};
 }
 
@@ -233,21 +233,21 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
     uint8_t nc = 0;
     uint8_t posts[MAX_CAND];
     uint8_t np = 0;
-    for (uint8_t k = 0; k <= cc->num; k++) {
-        const pt_side *sd = pt_map_side(m, cc, k);
-        uint16_t a = side_angle(m, cc, k);
+    for (uint8_t s = cc->first; s < pt_map_ring_end(cc); s++) {
+        const pt_side *sd = pt_map_side(m, s);
+        uint16_t a = side_angle(m, s);
         if (sd->adj == 0) {
             RC_ASSERT(nc < MAX_CAND);
-            cands[nc++] = make_cand(m, cc, k, 0);
+            cands[nc++] = make_cand(m, s, 0);
             add_post(posts, &np, sd->v);
-            add_post(posts, &np, pt_map_side_v1(m, cc, k));
+            add_post(posts, &np, pt_map_side_v1(m, cc, s));
         } else if (side_across(m, sd->v, a, px, py) < PT_CAM_RADIUS) {
             const pt_cell *nb = &m->cells[sd->adj];
-            for (uint8_t j = 0; j <= nb->num; j++) {
-                const pt_side *nd = pt_map_side(m, nb, j);
+            for (uint8_t j = nb->first; j < pt_map_ring_end(nb); j++) {
+                const pt_side *nd = pt_map_side(m, j);
                 if (nd->adj == 0) {
                     RC_ASSERT(nc < MAX_CAND);
-                    cands[nc++] = make_cand(m, nb, j, 1);
+                    cands[nc++] = make_cand(m, j, 1);
                     add_post(posts, &np, nd->v);
                     add_post(posts, &np, pt_map_side_v1(m, nb, j));
                 }

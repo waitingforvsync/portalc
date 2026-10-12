@@ -19,13 +19,13 @@ int main(void)
         const pt_cell *cc = &m.cells[c];
         pt_pattern f = pt_shade(cc->floor);
         pt_pattern ce = pt_shade(cc->ceil);
-        printf("cell %d first=%d num-1=%d fz=%d cz=%d floor=%02X%02X ceil=%02X%02X\n", c,
-               cc->first, cc->num, cc->floor_z, cc->ceil_z, f.e, f.o, ce.e, ce.o);
-        for (uint8_t k = 0; k <= cc->num; k++) {
-            const pt_side *sd = pt_map_side(&m, cc, k);
-            printf("  side %d: v%d -> v%d edge %d adj %d twin %d angle %d\n", k, sd->v,
-                   pt_map_side_v1(&m, cc, k), sd->edge, sd->adj, pt_side_twin(sd),
-                   pt_map_side_angle(&m, sd));
+        printf("cell %d first=%d last=%d fz=%d cz=%d floor=%02X%02X ceil=%02X%02X\n", c,
+               cc->first, pt_map_ring_end(cc), cc->floor_z, cc->ceil_z, f.e, f.o, ce.e, ce.o);
+        for (uint8_t s = cc->first; s < pt_map_ring_end(cc); s++) {
+            const pt_side *sd = pt_map_side(&m, s);
+            printf("  side %d: v%d -> v%d edge %d adj %d twin %d angle %d\n", s, sd->v,
+                   pt_map_side_v1(&m, cc, s), sd->edge, sd->adj,
+                   sd->adj == 0 ? -1 : (int)pt_map_twin(&m, s), pt_map_side_angle(&m, sd));
         }
     }
 

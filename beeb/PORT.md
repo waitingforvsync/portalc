@@ -37,7 +37,9 @@ ambitions.
 | `pt_exp2` (`exp2_byte`) | `EXP2_8` | done: every l under 2048 |
 | `pt_polar_of` and `pt_quadrant`, called by `pt_vcache_vert` | `POLAR` | done: a near square and a far grid, summed |
 | `pt_view_col` | `LDA a2c,X` | done (a lookup) |
-| `pt_lsec`, `pt_logsin`, `pt_mul_sin`, `pt_dot_dir`, `pt_mulu8` and the rest | the tables only | not started |
+| `pt_log_secant`, with the C's `view8` | `LOG_SECANT`: where in `lsec` it is | done, in `edge_ends`' check |
+| `pt_log_sine` | `LOG_SINE`: where in `lsec16` it is, negated | done, in `edge_ends`' check |
+| `pt_mul_sin`, `pt_dot_dir`, `pt_mulu8` and the rest | the tables only | not started |
 
 ### The map and the vertex cache
 
@@ -47,6 +49,7 @@ ambitions.
 | `pt_render_init`, `pt_vcache_init`: emptied caches | `map_init` (map.6502): `vc_slot`, `cell_visit`, `vc_num` | done |
 | `pt_vcache_vert` | `VCACHE_VERT_TO_X`, with `vcache_make` on a miss | done: every vertex from every vertex, `portalc_vcacheref` |
 | `pt_vcache_reset` | `vcache_reset` | done |
+| `pt_map_ring_next` (map.h) | `RING_NEXT` (map_macros.6502) | done |
 | `pt_vcache_move`, `pt_vcache_locate` | — | not started |
 
 ### The camera
@@ -59,17 +62,20 @@ ambitions.
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_render_root`, `frame`'s setup | `.capture`'s start (capture.6502) | done, sprites aside: `portalc_captureref` |
+| `pt_render_root`, `frame`'s setup | `.capture`'s start (capture.6502) | done, sprites aside: `portalc_captureref`, from 146 places, each cell's centroid and near each of its corners |
 | `pt_render_root_side`, `root_screen_angle` | inline in `.capture` | done |
 | `root_walk` | inline in `.capture` | done, sprites aside (`inst_new`, `inst_clip`) |
 | `visit_of` | `visit_of` | done |
 | `height_of`, `pt_render_height` | `HEIGHT_OF` | done: every z at every eye height |
 | `vert_to_screen_angle` | `VERT_TO_SCREEN_ANGLE` | done |
 | `screen_angle_to_column` | `SCREEN_ANGLE_TO_COLUMN` | done |
-| `side_start`, `side_end` | inline in `.capture` | done. `side_end`'s near case is untested: see [Next](#next) |
+| `side_start` | inline in `.capture` | done |
+| `side_end` | `side_end` | done |
+| `side_next` | `side_next`, which runs on into `side_end` | done: the eye's cell walked side by side to the portal's right column, as `walk` walks it |
+| `edge_ends` | `edge_ends` | done: each of those sides with columns |
 | `frame`'s visit cache clear | `.capture`'s end | done |
-| `walk`, `side_next`, `descend`, `enter` | — | not started |
-| `process_edge`, `edge_ends`, `edge_line`, `make_line` | — | not started |
+| `walk`, `descend`, `enter` | — | not started |
+| `process_edge`, `edge_line`, `make_line` | — | not started |
 | `scan_of`, `scan` and the column functions, `close_columns`, `flat_top` | — | not started |
 | `record`, `plot_run`, plot.c's `pt_plot_` | — | not started |
 | `inst_new`, `inst_clip`, `inst_hide` | — | not started (sprites) |
@@ -113,6 +119,8 @@ or two bytes of zero page.
 | `visits[i].inst` | — (sprites) |
 | `pt_walk.vi`, `.x`, `.tmax`, `.bmin`, `.wrap` | `walk_vi`, `walk_x`, `walk_tmax`, `walk_bmin`, `walk_wrap` |
 | `pt_walk.u0`, `.u1`, `.c0`, `.c1` | `walk_u0`, `walk_u1`, `walk_c0`, `walk_c1` |
+| — | `walk_e0`, `walk_e1`: the ends' vertex cache entries |
+| `pt_ends.logdepth0`, `.logdepth1`, `.logcolumns` | `logdepth0`, `logdepth1`, `logcolumns` |
 
 ### The vertex cache
 
@@ -166,6 +174,8 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   call `vcache_reset`. The C's `pt_vcache_move` compares positions instead.
 - **Fewer checks.** `vcache_make` doesn't check for a full cache, and
   `visit_of` doesn't check for too many visits. The C panics on both.
+  `side_next` doesn't check that it isn't leaving the eye's cell's last
+  side, a turn on, which the C asserts.
 - **The root side search doesn't test the last side.** If no earlier side
   is the one, the last one is. The C asserts that it gets that far.
 - **A height is two bytes.** `below` is bit 7 of the log's high byte, which
@@ -175,20 +185,27 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   bound.
 - **Tables numbered from 1 keep entry 0, unused:** the visits and the
   vertex cache's entries. There's never a `table-1` base.
+- **The walk keeps its side's ends' vertex cache entries** (`walk_e0`,
+  `walk_e1`), so `edge_ends` reads their polar forms straight off. The C
+  looks the vertices up again, finding the end's round the ring.
+- **`edge_ends` adds log sines negated** (`LOG_SINE` points at `lsec16`), so
+  where the C halves a sum of two log sines, rounding down, the 6502 halves
+  their negations' sum + 1.
 
 ## Next
 
-- The walk proper: `walk`, `side_next`, `process_edge` and everything
-  under it, then `descend` and `enter` for the cells beyond the portals.
-  One thing to decide first: where a child walk's state goes, since the
-  `walk_` zero page holds one walk.
+- The walk proper, a step at a time, each checked against the C:
+  1. ~~The ends of a side: `edge_ends`, and `side_next`.~~ Done.
+  2. Lines: `make_line`, which needs a 16-bit exp and a multiply.
+  3. The plotters into T, and `record` with `toggle_end`.
+  4. The clips: `scan`, `clip_plain`, `clip_floor`, `clip_ceil`,
+     `close_columns`.
+  5. The walk: `walk`, `process_edge`, `enter`, `descend`, the kept lines.
+     One thing to decide first: where a child walk's state goes, since the
+     `walk_` zero page holds one walk.
 - The kept lines and the records stay as the C has them for now.
 - Then `update_camera`'s turn keys, the fill and the unplot. That's the
   first demo.
 - Later: sprites, then moving, collision and `pt_vcache_locate`.
-- A testing gap: `side_end`'s near case only matters on the eye's own
-  cell's last side. There the end has to be a turn on, column 128, not
-  column 0. The walk only gets to that side through `side_next`. Once
-  that's in, `make test` needs camera positions whose view's right edge
-  is on that side, such as near a corner looking across the cell. From a
-  cell's centre it hardly ever is.
+- To revisit: wiping all of `Persist` in one go in `map_init` (15 bytes
+  against 23), which would mean nothing in `Persist` is set before it runs.

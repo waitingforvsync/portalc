@@ -62,7 +62,8 @@ ENDMACRO
 \\
 \\ Outputs:
 \\     angle: the screen angle, signed: walk_wrap - 1024 up to walk_wrap, negative left of the view
-\\     A, X: corrupted
+\\     X: the vertex's vertex cache entry
+\\     A: corrupted
 \\     Y: preserved
 
 MACRO VERT_TO_SCREEN_ANGLE angle

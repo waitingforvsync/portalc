@@ -228,3 +228,41 @@ MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, logdistlo, logdisthi
     EOR flip:STA anglo,Y
     LDA quadrant:STA anghi,Y
 ENDMACRO
+
+\\ The view angle's log secant for an in-view screen angle u (pt_log_secant of u - 128): where in
+\\ lsec it is. A distance's log less it is the depth's.
+\\
+\\ Inputs:
+\\     A: u, 0 to 255
+\\
+\\ Outputs:
+\\     X: the place in lsec of 256 log2 sec, at the middle of u's step
+\\     A: corrupted
+
+MACRO LOG_SECANT
+    EOR #&80                            ; the view angle, u - 128
+    BPL right                           ; right of straight ahead: itself
+    EOR #&FF                            ; left of it: its middle is |v| - 0.5 on, ~v
+.right
+    TAX
+ENDMACRO
+
+\\ A 10-bit angle a's log sine, negated (pt_log_sine): where in lsec16 it is. Only a's low 9 bits
+\\ count, as sin over the half turn mirrors about the right angle.
+\\
+\\ Inputs:
+\\     X: a's low byte
+\\     A: its high byte
+\\
+\\ Outputs:
+\\     X: the place in lsec16 of -256 log2 |sin a|, at the middle of a's step
+\\     A: corrupted
+
+MACRO LOG_SINE
+    LSR A                               ; bit 8 into C
+    TXA
+    BCS second                          ; 256 to 511: cos of a - 256, there
+    EOR #&FF                            ; 0 to 255: cos of 255 - a
+.second
+    TAX
+ENDMACRO

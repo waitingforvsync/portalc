@@ -116,13 +116,6 @@ static pt_height height_of(const pt_render *r, uint8_t z)
     return pt_render_height(z, r->eye_z);
 }
 
-// An edge's ends as its lines see them: the logs of their depths (256 log2,
-// in whole units), and of the columns between them (the walk's c1 - c0).
-typedef struct pt_ends {
-    int16_t ld0, ld1;
-    int16_t ldc;
-} pt_ends;
-
 // 2^(l / 256), 0 under 1 and saturating at 0xFFFF.
 static uint16_t exp2_sat(int16_t l)
 {
@@ -142,13 +135,13 @@ static uint16_t exp2_sat(int16_t l)
 // The edge's line at height h over its columns [x0, x1), from its ends:
 // each end's row is its offset from the screen's middle, 64 * 8h / depth,
 // u8.8: 2^(h.l - log depth). The gradient is the offsets' difference over
-// the columns', by their logs (the columns' is the edge's, ldc, the same for
-// all its lines). An end at or past the screen's edge, nearer than 2h, cuts
-// the line where it reaches that edge, (32 rows - the far end's offset) / g
-// columns on from the far end, and those columns are counted to the last
-// one whose row is still on the screen; the columns cut off are beyond every
-// bound on that side, and with both ends there the line has no columns at
-// all.
+// the columns', by their logs (the columns' is the edge's, logcolumns, the
+// same for all its lines). An end at or past the screen's edge, nearer than
+// 2h, cuts the line where it reaches that edge, (32 rows - the far end's
+// offset) / g columns on from the far end, and those columns are counted to
+// the last one whose row is still on the screen; the columns cut off are
+// beyond every bound on that side, and with both ends there the line has no
+// columns at all.
 static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, pt_pattern col)
 {
     RC_ASSERT(x0 < x1);
@@ -162,8 +155,8 @@ static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, 
         L.rl = row_of(mid);
         return L;
     }
-    int16_t l0 = pt_i16((int32_t)h.l - e->ld0);
-    int16_t l1 = pt_i16((int32_t)h.l - e->ld1);
+    int16_t l0 = pt_i16((int32_t)h.l - e->logdepth0);
+    int16_t l1 = pt_i16((int32_t)h.l - e->logdepth1);
     bool near0 = l0 >= PT_EDGE_L;
     bool near1 = l1 >= PT_EDGE_L;
     if (near0 && near1)
@@ -188,9 +181,9 @@ static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, 
             uint16_t w0 = exp2_sat(pt_i16((int32_t)l0 - 8 * 256));
             uint16_t w1 = exp2_sat(pt_i16((int32_t)l1 - 8 * 256));
             uint16_t dw = w1 > w0 ? pt_u16((int32_t)w1 - w0) : pt_u16((int32_t)w0 - w1);
-            lg = pt_i16((int32_t)pt_log2(dw) + 8 * 256 - e->ldc);
+            lg = pt_i16((int32_t)pt_log2(dw) + 8 * 256 - e->logcolumns);
         } else {
-            lg = pt_i16((int32_t)pt_log2(dr) - e->ldc);
+            lg = pt_i16((int32_t)pt_log2(dr) - e->logcolumns);
         }
         gm = exp2_sat(lg);
         gm = gm > 0x7FFF ? (uint16_t)0x7FFF : gm;
@@ -204,7 +197,7 @@ static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, 
         uint16_t d = (uint16_t)((dr + 16u) >> 5);
         uint8_t d8 = d > 255 ? (uint8_t)255 : (uint8_t)d;
         if (d8 != 0) {
-            lg = pt_i16((int32_t)pt_log2_8(d8) + 5 * 256 - e->ldc);
+            lg = pt_i16((int32_t)pt_log2_8(d8) + 5 * 256 - e->logcolumns);
             RC_ASSERT(lg < 13 * 256);
             gm = exp2_sat(lg);
         }
@@ -790,6 +783,11 @@ static void side_next(pt_render *r, pt_walk *w)
     side_end(r, w);
 }
 
+void pt_render_side_next(pt_render *r, pt_walk *w)
+{
+    side_next(r, w);
+}
+
 // ---- sprites ----
 
 // A cell's sprite as it's seen, at the cell's first visit: spritescale's
@@ -844,7 +842,7 @@ static uint8_t inst_new(pt_render *r, uint8_t cell, pt_height hf)
     uint16_t scale = pt_exp2(pt_u16(ls));
 
     // the left column
-    int32_t lt = 14 * 256 + (int32_t)pt_logsin(va) + pt_lsec16(i);
+    int32_t lt = 14 * 256 + (int32_t)pt_log_sine(va) + pt_lsec16(i);
     uint16_t off = lt < 0 ? (uint16_t)0 : pt_exp2(pt_u16(lt));
     int32_t centre = left ? 64 * 256 - (int32_t)off : 64 * 256 + (int32_t)off;
     uint16_t pw = pt_u16((int32_t)((128u + (uint32_t)w * scale) >> 8));
@@ -1036,9 +1034,9 @@ static void edge_ends(const pt_render *r, pt_edgelines *el)
     bool in0 = w->u0 >= 0;
     bool in1 = w->u1 < 256;
     if (in0)
-        el->e.ld0 = pt_i16((int32_t)p0->lr - pt_lsec(view8(w->u0)));
+        el->e.logdepth0 = pt_i16((int32_t)p0->lr - pt_log_secant(view8(w->u0)));
     if (in1)
-        el->e.ld1 = pt_i16((int32_t)p1->lr - pt_lsec(view8(w->u1)));
+        el->e.logdepth1 = pt_i16((int32_t)p1->lr - pt_log_secant(view8(w->u1)));
     if (!in0 || !in1) {
         // the edge's direction, its quadrant stored with the side; the view's
         // edges' rays, at vl and vl + 256, are a half step off its steps'
@@ -1046,16 +1044,26 @@ static void edge_ends(const pt_render *r, pt_edgelines *el)
         uint16_t w = pt_map_side_angle(m, el->sd);
         const pt_polar *pk = in1 ? p1 : p0;
         uint16_t aw = (uint16_t)(pk->angle - w);
-        int16_t ls = pt_i16(((int32_t)pt_logsin((uint16_t)(aw - 1u)) + pt_logsin(aw)) >> 1);
+        int16_t ls = pt_i16(((int32_t)pt_log_sine((uint16_t)(aw - 1u)) + pt_log_sine(aw)) >> 1);
         int16_t ld = pt_i16((int32_t)pk->lr + ls - 128);
         if (!in0)
-            el->e.ld0 = pt_i16((int32_t)ld - pt_logsin((uint16_t)(r->vl - 1u - w)));
+            el->e.logdepth0 = pt_i16((int32_t)ld - pt_log_sine((uint16_t)(r->vl - 1u - w)));
         if (!in1)
-            el->e.ld1 = pt_i16((int32_t)ld - pt_logsin((uint16_t)(r->vl + 255u - w)));
+            el->e.logdepth1 = pt_i16((int32_t)ld - pt_log_sine((uint16_t)(r->vl + 255u - w)));
     }
     RC_ASSERT(w->c0 < w->c1);    // the edge has columns in its portal
-    el->e.ldc = pt_i16(pt_log2_8(pt_u8((int32_t)w->c1 - w->c0)));
+    el->e.logcolumns = pt_i16(pt_log2_8(pt_u8((int32_t)w->c1 - w->c0)));
     el->have = true;
+}
+
+pt_ends pt_render_ends(const pt_render *r, const pt_walk *w)
+{
+    const pt_map *m = r->map;
+    const pt_visit *vs = &r->visits[w->vi];
+    pt_edgelines el = {.w = w, .sd = pt_map_side(m, vs->side),
+                       .v1 = pt_map_side_v1(m, &m->cells[vs->cell], vs->side)};
+    edge_ends(r, &el);
+    return el.e;
 }
 
 // The side's line at height h (in slot k of its kept lines), in colour col:

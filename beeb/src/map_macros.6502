@@ -1,0 +1,20 @@
+\\ map_macros.6502 - the map's macros: getting round a cell's ring.
+
+\\ The next side clockwise round a cell's ring (pt_map_ring_next): the one after, or after the last,
+\\ the first.
+\\
+\\ Inputs:
+\\     Y: the side
+\\     X: its cell
+\\
+\\ Outputs:
+\\     Y: the next side
+\\     A: corrupted
+\\     X: preserved
+
+MACRO RING_NEXT
+    INY
+    TYA:CMP cell_first+1,X:BNE done     ; the next cell's first: past the ring's end
+    LDY cell_first,X                    ; round to its first
+.done
+ENDMACRO

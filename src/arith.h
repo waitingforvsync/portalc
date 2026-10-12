@@ -89,7 +89,7 @@ pt_polar pt_polar_of(int16_t dx, int16_t dy);
 
 // -256 * log2 cos of view angle v at its step's middle: a length's log less
 // this is the depth's.
-uint8_t pt_lsec(int8_t v);
+uint8_t pt_log_secant(int8_t v);
 
 // -256 log2 cos at the middle of step i of the right angle, i = 0..255: 0 to
 // 2,137, past 45 degrees (128 on) in 16 bits.
@@ -97,7 +97,7 @@ uint16_t pt_lsec16(uint8_t i);
 
 // 256 log2 |sin a| at the middle of step a, for any 10-bit angle: 0 down to
 // -2,137 a half step off the axis.
-int16_t pt_logsin(uint16_t a);
+int16_t pt_log_sine(uint16_t a);
 
 // The screen column of the middle of step u of the view, counted from its
 // left edge (view angle u - 128), 0..128: the first column whose centre

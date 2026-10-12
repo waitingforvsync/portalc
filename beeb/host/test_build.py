@@ -76,17 +76,17 @@ def vcache_expected(c, n):
 
 
 def capture_expected(c):
-    """The capture's sums, by the camera's cell: at each angle, the root walk (its 16-bit fields low
-    byte first), its visit (a height as the log's low byte, then its high with the side in bit 7),
-    the eye's height, the counts and each byte column's toggle_end. Then HEIGHT_OF's, by the eye's
-    height: each height's low byte, then its high."""
-    flat, cells = c['frame'], c['cells']
-    per = 53
+    """The capture's sums, by the camera's place: at each angle, the root walk (its 16-bit fields
+    low byte first), its visit (a height as the log's low byte, then its high with the side in bit
+    7), the eye's height, the counts and each byte column's toggle_end; then each side of the eye's
+    cell walked, its screen angles and columns, and its ends if it has columns. Then HEIGHT_OF's,
+    by the eye's height: each height's low byte, then its high."""
+    frames, places = c['frames'], c['places']
     s1s, s2s = [], []
-    for cell in range(1, cells):
+    for p in range(places):
         bs = []
         for a in range(256):
-            f = flat[((cell - 1) * 256 + a) * per:((cell - 1) * 256 + a + 1) * per]
+            f = frames[p * 256 + a]
             vi, x, tmax, bmin, wrap, u0, u1, c0, c1 = f[0:9]
             vcell, vside, vxr, vkept, hcb, hcl, hfb, hfl = f[9:17]
             u0 &= 0xFFFF
@@ -96,6 +96,15 @@ def capture_expected(c):
             bs += [vcell, vside, vxr, vkept, hcl & 0xFF, (hcl >> 8) | (hcb << 7), hfl & 0xFF,
                    (hfl >> 8) | (hfb << 7)]
             bs += f[17:21] + f[21:53]
+            i = 53
+            while i < len(f):
+                side, u0, u1, c0, c1 = f[i:i + 5]
+                i += 5
+                bs += [side, u0 & 0xFF, (u0 >> 8) & 0xFF, u1 & 0xFF, (u1 >> 8) & 0xFF, c0, c1]
+                if c0 < c1:
+                    for v in f[i:i + 3]:
+                        bs += [v & 0xFF, (v >> 8) & 0xFF]
+                    i += 3
         s1, s2 = fletcher_bytes(bs)
         s1s.append(s1)
         s2s.append(s2)
@@ -110,8 +119,8 @@ def capture_expected(c):
         h1s.append(s1)
         h2s.append(s2)
     return [
-        ('capture s1', 't_capture1', 1, 1, bytes(s1s)),
-        ('capture s2', 't_capture2', 1, 1, bytes(s2s)),
+        ('capture s1', 't_capture1', 0, 0, bytes(s1s)),
+        ('capture s2', 't_capture2', 0, 0, bytes(s2s)),
         ('HEIGHT_OF s1', 't_height1', 0, 0, bytes(h1s)),
         ('HEIGHT_OF s2', 't_height2', 0, 0, bytes(h2s)),
     ]

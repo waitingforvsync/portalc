@@ -403,7 +403,7 @@ pt_polar pt_polar_of(int16_t dx, int16_t dy)
     return (pt_polar) {.angle = (uint16_t)((uint16_t)(q << 8) | a), .lr = pt_i16((int32_t)lmaj + lh)};
 }
 
-uint8_t pt_lsec(int8_t v)
+uint8_t pt_log_secant(int8_t v)
 {
     RC_ASSERT(inited_);
     // a negative step's middle is |v| - 0.5 from straight ahead: ~v
@@ -416,7 +416,7 @@ uint16_t pt_lsec16(uint8_t i)
     return lsec16_[i];
 }
 
-int16_t pt_logsin(uint16_t a)
+int16_t pt_log_sine(uint16_t a)
 {
     RC_ASSERT(inited_);
     // sin over the half turn is symmetric about the right angle: step j's

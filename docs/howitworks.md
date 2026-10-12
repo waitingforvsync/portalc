@@ -1020,11 +1020,11 @@ times the sketch, as `main`'s model did, its front end would be 36k.
    log2 |o1 - o0| = l1 + F(l1 - l0),      F(Δ) = 256 log2(1 - 2^(-Δ/256))
    ```
 
-   and l1 - l0 = ld0 - ld1, as h.l cancels: the same for all of the edge's
-   lines. So F is one lookup an edge (about 1 KB of table), and a line's
-   gradient is exp(log h + a constant for the edge). The big wall checks
-   out: Δ = 394, F = -156, and 3,310 - 156 = 3,154, log2 5,120 exactly.
-   About 0.6k.
+   and l1 - l0 = logdepth0 - logdepth1, as h.l cancels: the same for all
+   of the edge's lines. So F is one lookup an edge (about 1 KB of table),
+   and a line's gradient is exp(log h + a constant for the edge). The big
+   wall checks out: Δ = 394, F = -156, and 3,310 - 156 = 3,154, log2 5,120
+   exactly. About 0.6k.
 3. **No exp for the far end.** Its row is only for the fast path's test,
    which could be done in logs against a small table of row distances, as
    long as it stays at least as conservative. About 0.9k.

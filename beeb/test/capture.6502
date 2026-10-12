@@ -1,44 +1,70 @@
-\\ test/capture.6502 - make test's check of the capture: its setup and root walk from each cell's
-\\ centroid at every angle, and HEIGHT_OF, for host/test_build.py to compare with the C's.
+\\ test/capture.6502 - make test's check of the capture: its setup, root walk and the eye's cell's
+\\ sides from places in each cell, and HEIGHT_OF, for host/test_build.py to compare with the C's.
 
-\\ Each cell's centroid, as the C's tools take it: the mean of its ring's vertices, truncated.
+\\ The camera's places, cell by cell, as the C's tool takes them: the centroid (the mean of its
+\\ ring's vertices, truncated), then 7/8 of the way from it to each vertex in turn, near the
+\\ corners, where the view's right edge can land on the cell's last side.
 
 cell_bounds = CONCAT(map_cell_first, {MAP_SIDES})
 
-FUNCTION ring_mean(xs, c)
-    f = cell_bounds[c]
-    e = cell_bounds[c+1]
-= SUM(xs[map_side_v[f..<e]]) DIV (e-f)
+FUNCTION ring(c) = map_side_v[cell_bounds[c]..<cell_bounds[c+1]]
+FUNCTION centre(xs, c) = SUM(xs[ring(c)]) DIV LEN(ring(c))
+FUNCTION cell_places(xs, c) = CONCAT(centre(xs, c), (centre(xs, c)+7*xs[ring(c)]) DIV 8)
+
+FUNCTION places(xs, c)
+    IF c == MAP_CELLS
+        r = {}
+    ELSE
+        r = CONCAT(cell_places(xs, c), places(xs, c+1))
+    ENDIF
+= r
+
+FUNCTION place_cells(c)
+    IF c == MAP_CELLS
+        r = {}
+    ELSE
+        r = CONCAT(c, 0*ring(c)+c, place_cells(c+1))
+    ENDIF
+= r
+
+place_x = places(map_vert_x, 1)
+place_y = places(map_vert_y, 1)
+place_cell = place_cells(1)
+PLACES = LEN(place_cell)
+ASSERT PLACES <= 256, "test: the places are a byte's"
 
 SECTION TestResults
-.t_capture1 SKIP MAX_CELLS              ; the capture's Fletcher sums, by the camera's cell
-.t_capture2 SKIP MAX_CELLS
+.t_capture1 SKIP PLACES                 ; the capture's Fletcher sums, by the camera's place
+.t_capture2 SKIP PLACES
 .t_height1  SKIP &100                   ; HEIGHT_OF's, by the eye's height
 .t_height2  SKIP &100
 ENDSECTION
 
-\\ From each cell's centroid, at every angle: the capture's setup and root walk. Too many answers
-\\ to keep, so each cell's go into a pair of sums; then every height from every eye height.
+\\ From each place, at every angle: the capture's setup and root walk, then the eye's cell walked
+\\ as the walk walks it. Too many answers to keep, so each place's go into a pair of sums; then
+\\ every height from every eye height.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
-\\     t_capture1, t_capture2: the capture's sums, by the camera's cell
+\\     t_capture1, t_capture2: the capture's sums, by the camera's place
 \\     t_height1, t_height2: HEIGHT_OF's, by the eye's height
 
 .test_capture
 {
+    ZA_AUTO1 place                      ; local: the camera's place
     ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
     ZA_AUTO1 sum2                       ; local: and the sum of the sums
 
-    LDA #1:STA camcell
-.cell
-    LDX camcell
-    LDA t_centrexlo,X:STA camx
-    LDA t_centrexhi,X:STA camx+1
-    LDA t_centreylo,X:STA camy
-    LDA t_centreyhi,X:STA camy+1
+    LDA #0:STA place
+.position
+    LDX place
+    LDA t_placecell,X:STA camcell
+    LDA t_placexlo,X:STA camx
+    LDA t_placexhi,X:STA camx+1
+    LDA t_placeylo,X:STA camy
+    LDA t_placeyhi,X:STA camy+1
     JSR vcache_reset
     LDA #0:STA camangle:STA camangle+1:STA sum1:STA sum2
 .angle
@@ -67,6 +93,29 @@ ENDSECTION
     CPX #SCREEN_WIDTH/4
     BNE ends
 
+    \\ the eye's cell, a side at a time until one ends at or past the portal's right column: each
+    \\ side, its ends' screen angles and columns, and its ends as its lines see them if it has
+    \\ columns
+
+.step
+    LDX walk_vi
+    LDA visit_side,X:FLETCHER sum1, sum2
+    FOR v = {walk_u0, walk_u0+1, walk_u1, walk_u1+1, walk_c0, walk_c1}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    LDA walk_c0:CMP walk_c1:BCS walked  ; no columns
+    JSR edge_ends
+    FOR v = {logdepth0, logdepth0+1, logdepth1, logdepth1+1, logcolumns, logcolumns+1}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+.walked
+    LDX walk_vi
+    LDA walk_c1:CMP visit_xr,X
+    BCS turned                          ; the last side
+    JSR side_next
+    JMP step
+
+.turned
     CLC:LDA camangle:ADC #4             ; the next of the C's 256ths
     STA camangle
     LDA camangle+1:ADC #0:AND #3:STA camangle+1
@@ -74,13 +123,13 @@ ENDSECTION
     BEQ angles                          ; round to 0: all 256
     JMP angle
 .angles
-    LDX camcell
+    LDX place
     LDA sum1:STA t_capture1,X
     LDA sum2:STA t_capture2,X
-    INC camcell
-    LDA camcell:CMP #MAP_CELLS
+    INC place
+    LDA place:CMP #PLACES
     BEQ heights
-    JMP cell
+    JMP position
 
     \\ every height from every eye height: the log's low byte, then its high and the side
 
@@ -106,25 +155,15 @@ ENDSECTION
     RTS
 }
 
-\\ The centroids, by cell: cell 0, the outside, has none.
+\\ The places: each one's cell and position.
 
-    FITPAGE MAP_CELLS
-.t_centrexlo
-FOR c = 0..MAP_CELLS-1
-    EQUB LO((c != 0)*ring_mean(map_vert_x, MAX({c, 1})))
-NEXT
-    FITPAGE MAP_CELLS
-.t_centrexhi
-FOR c = 0..MAP_CELLS-1
-    EQUB HI((c != 0)*ring_mean(map_vert_x, MAX({c, 1})))
-NEXT
-    FITPAGE MAP_CELLS
-.t_centreylo
-FOR c = 0..MAP_CELLS-1
-    EQUB LO((c != 0)*ring_mean(map_vert_y, MAX({c, 1})))
-NEXT
-    FITPAGE MAP_CELLS
-.t_centreyhi
-FOR c = 0..MAP_CELLS-1
-    EQUB HI((c != 0)*ring_mean(map_vert_y, MAX({c, 1})))
-NEXT
+    FITPAGE PLACES
+.t_placecell EQUB place_cell
+    FITPAGE PLACES
+.t_placexlo  EQUB LO(place_x)
+    FITPAGE PLACES
+.t_placexhi  EQUB HI(place_x)
+    FITPAGE PLACES
+.t_placeylo  EQUB LO(place_y)
+    FITPAGE PLACES
+.t_placeyhi  EQUB HI(place_y)

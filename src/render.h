@@ -218,4 +218,16 @@ pt_walk pt_render_root(pt_render *r, uint8_t angle, uint8_t cell);
 // A height z as an edge's lines see it from an eye at eye_z (height_of).
 pt_height pt_render_height(uint8_t z, uint8_t eye_z);
 
+// An edge's ends as its lines see them: the logs of their depths (256 log2,
+// in whole units), and of the columns between them (the walk's c1 - c0).
+typedef struct pt_ends {
+    int16_t logdepth0, logdepth1;
+    int16_t logcolumns;
+} pt_ends;
+
+// The walk on to its next side (side_next), and its side's ends
+// (edge_ends), for the tools' checks. The side must have columns.
+void pt_render_side_next(pt_render *r, pt_walk *w);
+pt_ends pt_render_ends(const pt_render *r, const pt_walk *w);
+
 #endif

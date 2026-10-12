@@ -107,7 +107,8 @@ RC_TEST_STEP(arith, packed_tables, fix)
     }
     for (int32_t v = -128; v < 128; v++) {
         double mid = v < 0 ? -v - 0.5 : v + 0.5;
-        RC_CHECK(pt_lsec((int8_t)v), ==, (uint8_t)lround(-256.0 * log2(cos(mid * (PI / 512.0)))));
+        RC_CHECK(pt_log_secant((int8_t)v), ==,
+                 (uint8_t)lround(-256.0 * log2(cos(mid * (PI / 512.0)))));
         RC_CHECK(pt_view_col((uint8_t)(v + 128)), ==,
                  (uint8_t)lround(64.0 + 64.0 * tan((v + 0.5) * (PI / 512.0))));
     }
@@ -119,7 +120,7 @@ RC_TEST_STEP(arith, lsec16_logsin, fix)
 {
     (void)fix;
     for (uint32_t i = 0; i < 128; i++)
-        RC_CHECK(pt_lsec16((uint8_t)i), ==, pt_lsec((int8_t)i));
+        RC_CHECK(pt_lsec16((uint8_t)i), ==, pt_log_secant((int8_t)i));
     double worst = 0;
     for (uint32_t i = 0; i < 256; i++) {
         double want = -256.0 * log2(cos((i + 0.5) * (PI / 512.0)));
@@ -128,7 +129,7 @@ RC_TEST_STEP(arith, lsec16_logsin, fix)
     RC_CHECK(worst, <, 1.2);    // three roundings: the log's, lsx's, the constant's
     for (uint32_t a = 0; a < 1024; a++) {
         double want = 256.0 * log2(fabs(sin((a + 0.5) * (PI / 512.0))));
-        RC_CHECK(fabs(pt_logsin((uint16_t)a) - want), <, 1.2);
+        RC_CHECK(fabs(pt_log_sine((uint16_t)a) - want), <, 1.2);
     }
 }
 

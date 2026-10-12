@@ -15,8 +15,16 @@ ZA_AUTO1 walk_bmin                      ; and the highest bottom row
 ZA_AUTO2 walk_wrap                      ; its window: screen angles at or past this are a turn less
 ZA_AUTO2 walk_u0                        ; its side's start's screen angle
 ZA_AUTO2 walk_u1                        ; and its end's
+ZA_AUTO1 walk_e0                        ; the start's vertex cache entry
+ZA_AUTO1 walk_e1                        ; and the end's
 ZA_AUTO1 walk_c0                        ; the start's column
 ZA_AUTO1 walk_c1                        ; and the end's
+
+\\ The walk's side's ends as its lines see them (edge_ends).
+
+ZA_AUTO2 logdepth0                      ; 256 log2 of the start's depth, in whole units
+ZA_AUTO2 logdepth1                      ; and the end's
+ZA_AUTO2 logcolumns                     ; 256 log2 of the side's columns, walk_c1 - walk_c0
 
 \\ Each cell's visit, 0 for none: all 0 between captures, as each visit clears its own.
 
@@ -135,24 +143,79 @@ ENDSECTION
     LDA startangle:ADC #1:STA walk_wrap
     LDA startangle+1:ADC #0:STA walk_wrap+1
 
-    \\ the side's start (side_start): its screen angle in the window, and its column
+    \\ the side's start (side_start): its screen angle in the window, its entry and its column,
+    \\ then its end
 
     LDX side_v,Y
     VERT_TO_SCREEN_ANGLE walk_u0
+    STX walk_e0
     SCREEN_ANGLE_TO_COLUMN walk_u0
     STA walk_c0
+    JSR side_end
 
-    \\ and its end, the next side's start (side_end): its start's screen angle plus its turn round
-    \\ from it, if that's at most a half turn, as it is for a side facing the eye
+    \\ the visit cache emptied, while the visits are still here: each clears its own cell's
 
+    LDX num_visits
+    DEX                                 ; the last visit made
+    BEQ done
+    LDA #0
+.forget
+    LDY visit_cell,X:STA cell_visit,Y
+    DEX
+    BNE forget
+.done
+    RTS
+}
+
+\\ On to the walk's next side clockwise (side_next): its start is the last one's end. Any lines kept
+\\ were the last side's.
+\\
+\\ Inputs:
+\\     walk_vi and the walk: on a side that doesn't end a turn on
+\\
+\\ Outputs:
+\\     visit_side, visit_kept: the next side, and none kept
+\\     walk_u0, walk_e0, walk_c0: its start, the last side's end
+\\     walk_u1, walk_e1, walk_c1: its end (side_end)
+\\     A, X, Y: corrupted
+
+.side_next
+{
+    LDX walk_vi
+    LDA #0:STA visit_kept,X
+    LDY visit_side,X
+    LDA visit_cell,X:TAX
+    RING_NEXT
+    LDX walk_vi
+    TYA:STA visit_side,X
+    LDA walk_u1:STA walk_u0
+    LDA walk_u1+1:STA walk_u0+1
+    LDA walk_e1:STA walk_e0
+    LDA walk_c1:STA walk_c0             ; then on into side_end, Y the side
+}
+
+\\ The walk's side's end, the next side's start (side_end): its screen angle, the start's plus its
+\\ turn round from it if that's at most a half turn, as for a side facing the eye; and its column.
+\\
+\\ Inputs:
+\\     Y: the side
+\\     walk_vi, walk_u0, walk_wrap: the walk's visit, its side's start, and its window's split
+\\     viewleft: the view's left edge
+\\
+\\ Outputs:
+\\     walk_u1, walk_e1, walk_c1: the end's screen angle, vertex cache entry and column
+\\     A, X, Y: corrupted
+
+.side_end
+{
     ZA_AUTO2 turn                       ; local: the end's turn from the start, 10 bits
 
-    INY
-    CPY ringend:BNE next
-    LDX camcell:LDY cell_first,X        ; the last side's: round to the first's
-.next
+    LDX walk_vi
+    LDA visit_cell,X:TAX
+    RING_NEXT                           ; the next side: its start is the end
     LDX side_v,Y
     VERT_TO_SCREEN_ANGLE walk_u1
+    STX walk_e1
     SEC
     LDA walk_u1:SBC walk_u0:STA turn
     LDA walk_u1+1:SBC walk_u0+1:AND #3:STA turn+1
@@ -166,17 +229,103 @@ ENDSECTION
 .far
     SCREEN_ANGLE_TO_COLUMN walk_u1
     STA walk_c1
+    RTS
+}
 
-    \\ the visit cache emptied, while the visits are still here: each clears its own cell's
+\\ The walk's side's ends as its lines see them (edge_ends): the logs of their depths, and of the
+\\ side's columns. The side must have columns.
+\\
+\\ Inputs:
+\\     walk_vi and the walk: its side, and its ends' screen angles, entries and columns
+\\     viewleft: the view's left edge
+\\
+\\ Outputs:
+\\     logdepth0, logdepth1: 256 log2 of the start's and end's depths, in whole units
+\\     logcolumns: 256 log2 of the side's columns
+\\     A, X, Y: corrupted
 
-    LDX num_visits
-    DEX                                 ; the last visit made
-    BEQ done
-    LDA #0
-.forget
-    LDY visit_cell,X:STA cell_visit,Y
-    DEX
-    BNE forget
+.edge_ends
+{
+    \\ the columns' log, and an end in view: its distance's log less its view angle's log secant
+
+    SEC:LDA walk_c1:SBC walk_c0:TAX
+    LOG2_8
+    STA logcolumns:STY logcolumns+1
+    LDA walk_u0+1:BMI start             ; the start's left of the view
+    LDA walk_u0
+    LOG_SECANT
+    LDY walk_e0
+    SEC
+    LDA vc_logdistlo,Y:SBC lsec,X:STA logdepth0
+    LDA vc_logdisthi,Y:SBC #0:STA logdepth0+1
+.start
+    LDA walk_u1+1:BNE out               ; the end's right of the view
+    LDA walk_u1
+    LOG_SECANT
+    LDY walk_e1
+    SEC
+    LDA vc_logdistlo,Y:SBC lsec,X:STA logdepth1
+    LDA vc_logdisthi,Y:SBC #0:STA logdepth1+1
+    LDA walk_u0+1:BMI out
+    RTS                                 ; both in view
+
+    \\ an end out of view, in front or behind: where the side's line crosses the view's edge's
+    \\ ray (Doom's clipper). The end in view (or the start, if neither is) is the line's distance
+    \\ from the eye over |sin| of its angle from the line, that over |sin| of the ray's angle from
+    \\ the line is the distance along the ray, and cos 45 degrees (-128 in the log) makes it a depth
+
+    ZA_AUTO2 direction                  ; local: the side's world angle
+    ZA_AUTO2 bearing                    ; local: the end's angle from it
+    ZA_AUTO2 logline                    ; local: the log of the line's distance, less 128
+    ZA_AUTO2 logsine                    ; local: the bearing's log sine, negated, + 128
+    ZA_AUTO2 ray                        ; local: the left edge's ray's angle from the side's, less 1
+
+.out
+    LDX walk_vi:LDY visit_side,X
+    LDX side_edge,Y
+    LDA edge_angle,X:STA direction
+    LDA side_anghi,Y:STA direction+1
+    LDY walk_e0                         ; the start, unless the end's in view
+    LDA walk_u1+1:BNE bear
+    LDY walk_e1
+.bear
+    SEC
+    LDA vc_anglo,Y:SBC direction:STA bearing
+    LDA vc_anghi,Y:SBC direction+1:STA bearing+1
+    LDA vc_logdistlo,Y:STA logline
+    LDA vc_logdisthi,Y:STA logline+1
+    LDX bearing:LDA bearing+1
+    LOG_SINE
+    TXA:TAY                             ; Y: the bearing's
+    SEC
+    LDA bearing:SBC #1:TAX
+    LDA bearing+1:SBC #0
+    LOG_SINE                            ; X: the step before's
+    SEC                                 ; + 1: the C halves the sum negated, rounding down
+    LDA lsec16lo,X:ADC lsec16lo,Y:STA logsine
+    LDA lsec16hi,X:ADC lsec16hi,Y
+    ADC #1                              ; + 256: halved, the 128 off (C clear)
+    LSR A:ROR logsine
+    STA logsine+1
+    SEC
+    LDA logline:SBC logsine:STA logline
+    LDA logline+1:SBC logsine+1:STA logline+1
+    CLC                                 ; (the - 1)
+    LDA viewleft:SBC direction:STA ray
+    LDA viewleft+1:SBC direction+1:STA ray+1
+    LDA walk_u0+1:BPL end               ; the start's in view
+    LDX ray:LDA ray+1
+    LOG_SINE
+    CLC
+    LDA logline:ADC lsec16lo,X:STA logdepth0
+    LDA logline+1:ADC lsec16hi,X:STA logdepth0+1
+.end
+    LDA walk_u1+1:BEQ done              ; the end's in view
+    LDX ray:LDA ray+1:EOR #1            ; the right edge's ray: a quarter turn on
+    LOG_SINE
+    CLC
+    LDA logline:ADC lsec16lo,X:STA logdepth1
+    LDA logline+1:ADC lsec16hi,X:STA logdepth1+1
 .done
     RTS
 }

@@ -601,22 +601,23 @@ piece, and clockwise along the sides facing the eye the angles only go up.
 The eye's own cell spans the whole turn: its window starts where the walk
 does, at the side across the view's left edge.
 
-A vertex's place is its angle from the view's left edge, `vl` (the
+A vertex's screen angle is its angle from the view's left edge, `vl` (the
 camera's angle less 128), u = (angle - vl) & 1023: one 10-bit subtract,
 the same in every window. All a window adds is where the turn splits: a
-place at or past the visit's `wrap` is a turn less, negative. Then the
-high byte gives the column: negative 0, not zero 128, and zero means the
-low byte is `pt_view_col`'s index, the view angle plus 128. A child's
-window splits half a turn past the portal's middle, its places' average.
+screen angle at or past the visit's `wrap` is a turn less, negative. Then
+the high byte gives the column: negative 0, not zero 128, and zero means
+the low byte is `pt_view_col`'s index, the view angle plus 128. A child's
+window splits half a turn past the portal's middle, its screen angles'
+average.
 
-It used to keep `lo`, the window's start, `tl`, the left edge's place in
-it, and `lo8`, so the view angle was the byte t + `lo8`. A review found
+It used to keep `lo`, the window's start, `tl`, the left edge's screen
+angle in it, and `lo8`, so the view angle was the byte t + `lo8`. A review found
 `lo8` was always 128 - `tl`, and `lo` + `tl` always the left edge itself:
 three numbers for one. Byte-identical frames.
 
 A side's end is the next side's start, so the visit carries the current
-side's two places and columns, and moving on costs one vertex: its place
-and column. It used to work the columns out afresh each time it asked,
+side's two screen angles and columns, and moving on costs one vertex: its
+screen angle and column. It used to work the columns out afresh each time it asked,
 2.8 times a side, two vertices each.
 
 ### Facing away
@@ -1142,7 +1143,7 @@ carries and tables that could save a byte or a step. Per frame over map
 
 | | before | after |
 |---|---|---|
-| vertex places worked out | 57 (79) | 16.2 (25.4) |
+| vertex screen angles worked out | 57 (79) | 16.2 (25.4) |
 | polar forms, the camera having moved | 21.6 (29.4) | 11.8 (16.8) |
 | logs | 42.2 (53.9) | 32.0 (42.8) |
 | exps | 44.3 (57.3) | 39.7 (49.7) |
@@ -1742,7 +1743,7 @@ memo and its sprite, 6 bytes and the window where it's 26 now. The rest is
 the walk's own state for the visit it's on, and could be carried by
 `walk()` and handed to a child's (on the 6502, zero page, saved on the
 stack across a child's walk), with the heights in per-cell arrays. A
-resumed walk makes its side's places and columns again from the vertex
+resumed walk makes its side's screen angles and columns again from the vertex
 cache, the same values in the same window, for about 30 cycles.
 
 Two more steps were planned on top: the window derived from the side a
@@ -1771,8 +1772,8 @@ And with the lines kept, the record slimmed after all: the side, the
 portal's right column, the sprite and the lines, 32 bytes (it was 26 and no
 lines). The window, the side's ends and columns, the portal's left column
 and bounds, and the heights all belong to the walk in progress, made again
-each time it enters the cell: about 40 cycles to place and column the side
-again, and 30 a height. A revisit centres its window on its own portal,
+each time it enters the cell: about 40 cycles for the side's screen angles
+and columns again, and 30 a height. A revisit centres its window on its own portal,
 which gives the same columns. "Kept" is lines[0].x0 = 255, cleared when the
 walk moves to another side, and a side with no ceiling line marks it with
 a 0. It can't just be inferred: a child past the depth cap is entered but

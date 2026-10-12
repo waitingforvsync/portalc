@@ -6,7 +6,7 @@ ZA_AUTO1 camxf                          ; x's fraction
 ZA_AUTO2 camx                           ; x in whole units
 ZA_AUTO1 camyf                          ; y's fraction
 ZA_AUTO2 camy                           ; y in whole units
-ZA_AUTO1 camangle                       ; its facing, in 256ths of a turn: 0 faces +x
+ZA_AUTO2 camangle                       ; its facing, in 1024ths of a turn (10 bits): 0 faces +x
 ZA_AUTO1 camcell                        ; the cell it's in
 
 \\ Run a tick for each vsync the interrupt's counted, with the keys it's gathered. A stub for now.

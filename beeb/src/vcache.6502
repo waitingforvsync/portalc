@@ -44,23 +44,6 @@ ENDSECTION
     RTS
 }
 
-\\ Vertex X's entry, made if it's not there yet.
-\\
-\\ Inputs:
-\\     X: the vertex
-\\     camx, camy: the camera
-\\
-\\ Outputs:
-\\     Y: its entry
-\\     X: preserved
-\\     A: corrupted
-
-MACRO VCACHE_VERT
-    LDY vc_slot,X:BNE hit               ; made already
-    JSR vcache_make
-.hit
-ENDMACRO
-
 \\ Make vertex X's entry: the next one, linked both ways, with its polar form from the camera.
 \\
 \\ Inputs:
@@ -68,16 +51,20 @@ ENDMACRO
 \\     camx, camy: the camera
 \\
 \\ Outputs:
-\\     Y: its entry
-\\     X: preserved
-\\     A: corrupted
+\\     A: its entry
+\\     Y: preserved
+\\     X: corrupted
 
 .vcache_make
 {
+    ZA_AUTO1 ysave                      ; local: the caller's Y
+
+    STY ysave
     INC vc_num:LDY vc_num
     TXA:STA vc_vert,Y
     TYA:STA vc_slot,X
     POLAR vert_xlo, vert_xhi, vert_ylo, vert_yhi, vc_anglo, vc_anghi, vc_logdistlo, vc_logdisthi
-    LDX vc_vert,Y                       ; the vertex, which POLAR loses
+    TYA                                 ; the entry
+    LDY ysave
     RTS
 }

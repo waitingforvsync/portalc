@@ -696,18 +696,18 @@ static void close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, 
 
 // ---- angles and columns ----
 //
-// A vertex's place is its angle from the view's left edge, (angle - vl) &
-// 1023: one 10-bit subtract, the same for every walk. The view is places 0
-// to 255, and there a place is the column table's index. All a walk adds is
-// where its turn splits: its cell is read in a window of one turn, the
-// places from wrap - 1024 to wrap - 1 (one at or past wrap counts a turn
-// less, left of the view), which holds the cell in one piece. A cell seen
-// through a portal spans under a half turn, the portal's middle among it,
-// and its window is centred there; the eye's own cell spans the whole turn,
-// and its window starts where the walk does (root_walk). So clockwise along
-// the sides facing the eye the places only rise, even round the back of the
-// view. Left of the view, a place below 0, is column 0, and right of it,
-// 256 on, 128.
+// A vertex's screen angle is its angle from the view's left edge, (angle -
+// vl) & 1023: one 10-bit subtract, the same for every walk. The view is
+// screen angles 0 to 255, and there a screen angle is the column table's
+// index. All a walk adds is where its turn splits: its cell is read in a
+// window of one turn, the screen angles from wrap - 1024 to wrap - 1 (one at
+// or past wrap counts a turn less, left of the view), which holds the cell
+// in one piece. A cell seen through a portal spans under a half turn,
+// the portal's middle among it, and its window is centred there; the eye's
+// own cell spans the whole turn, and its window starts where the walk does
+// (root_walk). So clockwise along the sides facing the eye the screen angles
+// only rise, even round the back of the view. Left of the view, a screen
+// angle below 0, is column 0, and right of it, 256 on, 128.
 //
 // A window's made each time a walk enters the cell, centred on the portal
 // it comes in by. Any portal into a cell has its middle within the cell's
@@ -727,14 +727,15 @@ typedef struct pt_walk {
                           // lowest top row, at most the highest bottom row.
                           // 0 and 64 say the bound is the screen's edge all
                           // along, and its rows aren't kept in top[] or bot[]
-    uint16_t wrap;        // the cell's window: places at or past this, 256..1024,
-                          // are a turn less
-    int16_t u0, u1;       // the current side's ends' places (u1 a turn on, up
-                          // to 1,535, for the eye's own cell's last side)
+    uint16_t wrap;        // the cell's window: screen angles at or past this,
+                          // 256..1024, are a turn less
+    int16_t u0, u1;       // the current side's ends' screen angles (u1 a
+                          // turn on, up to 1,535, for the eye's own cell's
+                          // last side)
     uint8_t c0, c1;       // and their columns
 } pt_walk;
 
-// Vertex v's place in the walk's window.
+// Vertex v's screen angle in the walk's window.
 static int16_t win_u(const pt_render *r, const pt_walk *w, uint8_t v)
 {
     uint16_t a = pt_vcache_vert(r->vc, r->map, v)->angle;
@@ -742,14 +743,14 @@ static int16_t win_u(const pt_render *r, const pt_walk *w, uint8_t v)
     return p >= w->wrap ? pt_i16((int32_t)p - 1024) : (int16_t)p;
 }
 
-// The view angle of an in-view place, a byte: u - 128.
+// The view angle of an in-view screen angle, a byte: u - 128.
 static int8_t view8(int16_t u)
 {
     return (int8_t)(uint8_t)((uint8_t)u ^ 0x80u);
 }
 
-// The column of a place: in view, where its step's middle projects; left of
-// the view, 0; right of it, 128. On the 6502 the place's high byte says
+// The column of a screen angle: in view, where its step's middle projects;
+// left of the view, 0; right of it, 128. On the 6502 its high byte says
 // which: negative, not zero, or zero, and then the low byte is the index.
 static uint8_t win_col(int16_t u)
 {
@@ -761,10 +762,10 @@ static uint8_t win_col(int16_t u)
 }
 
 // The current side's end. A side facing the eye turns clockwise by up to
-// a half turn, and its end is its start's place plus that: in a child's
-// window that's where the end is anyway, and in the eye's own cell, whose
-// window is a whole turn, the last side runs on round to the first one's
-// start, a turn up. One facing away (a cell seen through a portal has a
+// a half turn, and its end is its start's screen angle plus that: in a
+// child's window that's where the end is anyway, and in the eye's own cell,
+// whose window is a whole turn, the last side runs on round to the first
+// one's start, a turn up. One facing away (a cell seen through a portal has a
 // chain of them, the portal among them) turns back, its end at or left of
 // its start in the window, and spans nothing.
 static void side_end(const pt_render *r, pt_walk *w)
@@ -777,7 +778,8 @@ static void side_end(const pt_render *r, pt_walk *w)
     w->c1 = win_col(w->u1);
 }
 
-// Begin on the record's side: its start's place and column, and its end's.
+// Begin on the record's side: its start's screen angle and column, and its
+// end's.
 static void side_start(const pt_render *r, pt_walk *w)
 {
     const pt_visit *vs = &r->visits[w->vi];
@@ -787,7 +789,8 @@ static void side_start(const pt_render *r, pt_walk *w)
 }
 
 // On to the next side clockwise: its start is this one's end, so a side
-// costs one vertex's place and column. Any lines kept were the last side's.
+// costs one vertex's screen angle and column. Any lines kept were the last
+// side's.
 // The walk only moves on from a side ending left of its portal's right
 // column, so never from the eye's own cell's last, a turn on.
 static void side_next(pt_render *r, pt_walk *w)
@@ -974,12 +977,13 @@ static uint8_t visit_of(pt_render *r, uint8_t cell)
 
 // Enter visit vi over [xl, xr), its bounds already written, from the walk
 // whose current side is the portal (from): the child's walk, *cw, in a
-// window centred on the portal's middle. From's places are the child's too,
-// both measured from the view's left edge, so only the split moves, to half
-// a turn past the middle. cw may be from itself: the tail call builds the
-// child over its parent, which is done with. A first walk looks from the
-// edge after the twin (the side the walk came in by); a later one resumes from the edge its last walk stopped on - every
-// earlier edge ends left of that walk's xr, which is at or left of xl.
+// window centred on the portal's middle. From's screen angles are the
+// child's too, both measured from the view's left edge, so only the split
+// moves, to half a turn past the middle. cw may be from itself: the tail
+// call builds the child over its parent, which is done with. A first walk
+// looks from the edge after the twin (the side the walk came in by); a later
+// one resumes from the edge its last walk stopped on - every earlier edge
+// ends left of that walk's xr, which is at or left of xl.
 // Either way the cursor then goes to the first edge whose end is strictly
 // right of xl, at the latest the one ending at the portal's right end.
 static void enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_walk *from, uint8_t xl,
@@ -1025,7 +1029,8 @@ static void enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_walk *from, u
 // visit record points at them. Then the next visit works out no ends and
 // makes no lines at all, only rows partway along them.
 typedef struct pt_edgelines {
-    const pt_walk *w;      // the walk: the side's ends' places and columns
+    const pt_walk *w;      // the walk: the side's ends' screen angles and
+                           // columns
     const pt_side *sd;
     uint8_t v1;            // the end's vertex (the start's is the side's)
     bool have;             // e is worked out
@@ -1255,7 +1260,8 @@ static void walk(pt_render *r, pt_walk *w, uint8_t depth)
     for (;;) {
         const pt_visit *vs = &r->visits[w->vi];
         const pt_cell *c = &r->map->cells[vs->cell];
-        for (uint8_t steps = pt_u8((int32_t)pt_map_ring_end(c) - c->first); w->c1 < vs->xr; steps--) {
+        uint8_t sides = pt_u8((int32_t)pt_map_ring_end(c) - c->first);
+        for (uint8_t steps = sides; w->c1 < vs->xr; steps--) {
             RC_ASSERT(steps != 0);
             pt_walk cw;
             if (process_edge(r, w, &cw))
@@ -1297,33 +1303,51 @@ static void unplot(pt_render *r)
 
 // ---- the frame ----
 
-// The camera's cell's walk, begun on the root portal, the whole screen: its
-// first edge is the side whose angles straddle the view's left edge,
-// starting at or before it and ending after it, and its window starts
-// there: the start's place is minus how far round the edge is from it, and
-// the split just past it. The angles put the eye inside the cell (the
-// camera found the cell by them), so its sides run all the way round it and
-// one does. Its bounds are the screen's edges.
-static void root_walk(pt_render *r, pt_walk *w)
+// Vertex v's screen angle measured from one past the view's left edge: a - vl
+// - 1, in 10 bits (on the 6502, the subtract with C clear).
+static uint16_t root_screen_angle(pt_vcache *vc, const pt_map *m, uint8_t v, uint16_t vl)
 {
-    const pt_map *m = r->map;
-    const pt_cell *c = &m->cells[r->cam_cell];
+    uint16_t a = pt_vcache_vert(vc, m, v)->angle;
+    return (uint16_t)((uint16_t)(a - vl - 1u) & 1023u);
+}
+
+pt_root_side pt_render_root_side(pt_vcache *vc, const pt_map *m, uint8_t cell, uint16_t vl)
+{
+    // the angles put the eye inside the cell (the camera found the cell by
+    // them), so its sides run all the way round it, clockwise, each screen
+    // angle on from the last but at the edge, where they wrap: the side the
+    // edge lies on is the first whose end's screen angle is below its
+    // start's. Measuring from one past the edge puts a start on the edge at
+    // 1023, so it's that side, and a side of no width never is. A side's end
+    // is the next one's start, and the last's is the first's
+    const pt_cell *c = &m->cells[cell];
     uint8_t s = c->first;
-    uint16_t off;    // the turn from the side's start to the view's left edge
+    uint16_t start = root_screen_angle(vc, m, pt_map_side(m, s)->v, vl);
+    uint16_t first = start;
     for (;; s++) {
         RC_ASSERT(s < pt_map_ring_end(c));
-        uint16_t a0 = pt_vcache_vert(r->vc, m, pt_map_side(m, s)->v)->angle;
-        uint16_t a1 = pt_vcache_vert(r->vc, m, pt_map_side_v1(m, c, s))->angle;
-        off = (uint16_t)((uint16_t)(r->vl - a0) & 1023u);
-        if (off < (uint16_t)((uint16_t)(a1 - a0) & 1023u))
+        uint16_t end = pt_map_ring_next(c, s) == c->first
+                           ? first
+                           : root_screen_angle(vc, m, pt_map_side_v1(m, c, s), vl);
+        if (end < start)
             break;
+        start = end;
     }
+    // the window starts at the side's start: the split is its angle from the
+    // edge itself, a whole turn for one on it
+    return (pt_root_side) {.side = s, .wrap = pt_u16((int32_t)start + 1)};
+}
+
+// The camera's cell's walk, begun on the root portal, the whole screen, from
+// the side pt_render_root_side finds. Its bounds are the screen's edges.
+static void root_walk(pt_render *r, pt_walk *w)
+{
+    pt_root_side rs = pt_render_root_side(r->vc, r->map, r->cam_cell, r->vl);
     uint8_t vi = visit_of(r, r->cam_cell);
     pt_visit *vs = &r->visits[vi];
-    vs->side = s;
+    vs->side = rs.side;
     vs->xr = PT_SCREEN_WIDTH;
-    *w = (pt_walk) {.vi = vi, .x = 0, .tmax = 0, .bmin = PT_SCREEN_HEIGHT,
-                    .wrap = pt_u16(1024 - (int32_t)off)};
+    *w = (pt_walk) {.vi = vi, .x = 0, .tmax = 0, .bmin = PT_SCREEN_HEIGHT, .wrap = rs.wrap};
     side_start(r, w);
     vs->inst = inst_new(r, vs->cell, vs->hf);
     if (vs->inst != 0)

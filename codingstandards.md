@@ -148,6 +148,10 @@ The rest:
   0, unused, and is read as it is. One numbered from 0 (vc_slot, by
   vertex) is looped over upwards, or down to 0.
 - Hot-path code like multiplies goes inline, as a `MACRO`.
+- A file's macros go in a file of their own beside it, `vcache_macros.6502`
+  for `vcache.6502`, which `portal.6502` includes first, before any code,
+  so no macro waits on the order of the includes. The tests' are in
+  `test/`, included first by `test/test.6502`.
 
 ### Memory
 
@@ -178,7 +182,8 @@ The rest:
 
 - What the C has, the 6502 matches byte for byte, and `make test` checks
   it in b2: the loader's tables against `portalc_tables`, the macros
-  against `portalc_arithref`, the vertex cache against `portalc_vcacheref`.
+  against `portalc_arithref`, the vertex cache against `portalc_vcacheref`,
+  the capture against `portalc_captureref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit, in make test's own build
   (`-D TEST=TRUE`), which leaves them at the top of the sideways RAM bank.
@@ -214,5 +219,9 @@ The C is a model of the BBC build, so it's written the 6502's way.
   read the 6502's way (`pt_log2` through `nrm` and `k8`).
 - The 6502 points under Speed apply here too: bytes, tables, sign-picked
   paths, nothing negated.
+- The C can be more careful than the 6502: asserts and checks the 6502
+  skips, as hardening. Where the 6502 takes a shortcut (`root_side` takes
+  the last side untested), the C keeps the check, so a case that would
+  break the shortcut is caught there and designed round.
 - Match the code round it: its comment density, naming and idiom.
 - Build with clang, always.

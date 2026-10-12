@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """test_build.py - boot make test's PORTAL in b2, as a Master 128, and check its checks' answers
-(test/) against the C's (portalc_arithref, portalc_vcacheref)."""
+(test/) against the C's (portalc_arithref, portalc_vcacheref, portalc_captureref)."""
 
 import json
 import sys
@@ -9,7 +9,7 @@ import time
 import b2
 from test_tables import symbols
 
-USAGE = 'usage: test_build.py DISC SYMBOLS ARITH VCACHE (the test build, its symbols, the C\'s JSON)'
+USAGE = 'usage: test_build.py DISC SYMBOLS ARITH VCACHE CAPTURE (the test build, its symbols, the C\'s JSON)'
 DONE = 0xA5
 
 
@@ -66,6 +66,26 @@ def vcache_expected(c, n):
     ]
 
 
+def capture_expected(c):
+    """The root walk's sums, by the camera's cell: at each angle, the side, then the split's low
+    byte and high."""
+    flat, cells = c['root'], c['cells']
+    s1s, s2s = [], []
+    for cell in range(1, cells):
+        bs = []
+        base = (cell - 1) * 512
+        for i in range(base, base + 512, 2):
+            side, wrap = flat[i], flat[i + 1]
+            bs += [side, wrap & 0xFF, wrap >> 8]
+        s1, s2 = fletcher_bytes(bs)
+        s1s.append(s1)
+        s2s.append(s2)
+    return [
+        ('root_side s1', 't_root1', 1, 1, bytes(s1s)),
+        ('root_side s2', 't_root2', 1, 1, bytes(s2s)),
+    ]
+
+
 def expected(c):
     """(name, label, where in it, the first answer's input, the answers)."""
     log8 = c['log2_8']
@@ -95,16 +115,18 @@ def expected(c):
 
 
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 6:
         print(USAGE, file=sys.stderr)
         return 2
-    disc, sympath, apath, vpath = sys.argv[1:]
+    disc, sympath, apath, vpath, cpath = sys.argv[1:]
     syms = symbols(sympath)
     with open(apath) as f:
         checks = expected(json.load(f))
     with open(vpath) as f:
         vc = json.load(f)
     checks += vcache_expected(vc, vc['verts'])
+    with open(cpath) as f:
+        checks += capture_expected(json.load(f))
 
     proc = None if b2.alive() else b2.private()
     try:

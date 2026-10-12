@@ -11,22 +11,8 @@ SECTION TestResults
 ENDSECTION
 
 SECTION Frame                           ; the loader's, before the engine's
-.t_entry    SKIP MAX_VERTS              ; each vertex's entry when first asked for
+.t_entry    SKIP MAX_VERTS              ; each place's entry when first asked for
 ENDSECTION
-
-\\ Add A to a pair of Fletcher sums, mod 256.
-\\
-\\ Inputs:
-\\     A: the byte
-\\     sum1, sum2: the sums
-\\
-\\ Outputs:
-\\     sum1, sum2: with it added
-
-MACRO FLETCHER sum1, sum2
-    CLC:ADC sum1:STA sum1
-    CLC:ADC sum2:STA sum2
-ENDMACRO
 
 \\ From each vertex in turn: empty the cache, ask for every vertex, all misses, then again, all
 \\ hits. Too many answers to keep, so each vertex's go into a pair of sums.
@@ -57,8 +43,8 @@ ENDMACRO
     LDA #0:STA place
 .first
     LDY place:LDX t_order,Y
-    VCACHE_VERT
-    TYA:STA t_entry,X
+    VCACHE_VERT_TO_X
+    TXA:STA t_entry,Y
     INC place
     LDA place:CMP #MAP_VERTS
     BNE first
@@ -71,13 +57,13 @@ ENDMACRO
     LDA #0:STA place:STA sum1:STA sum2
 .again
     LDY place:LDX t_order,Y
-    VCACHE_VERT
-    LDA t_entry,X:FLETCHER sum1, sum2
-    TYA:FLETCHER sum1, sum2
-    LDA vc_anglo,Y:FLETCHER sum1, sum2
-    LDA vc_anghi,Y:FLETCHER sum1, sum2
-    LDA vc_logdistlo,Y:FLETCHER sum1, sum2
-    LDA vc_logdisthi,Y:FLETCHER sum1, sum2
+    VCACHE_VERT_TO_X
+    LDA t_entry,Y:FLETCHER sum1, sum2
+    TXA:FLETCHER sum1, sum2
+    LDA vc_anglo,X:FLETCHER sum1, sum2
+    LDA vc_anghi,X:FLETCHER sum1, sum2
+    LDA vc_logdistlo,X:FLETCHER sum1, sum2
+    LDA vc_logdisthi,X:FLETCHER sum1, sum2
     INC place
     LDA place:CMP #MAP_VERTS
     BNE again

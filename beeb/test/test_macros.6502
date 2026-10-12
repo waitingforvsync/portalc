@@ -1,0 +1,15 @@
+\\ test/test_macros.6502 - macros for any of make test's checks.
+
+\\ Add A to a pair of Fletcher sums, mod 256.
+\\
+\\ Inputs:
+\\     A: the byte
+\\     sum1, sum2: the sums
+\\
+\\ Outputs:
+\\     sum1, sum2: with it added
+
+MACRO FLETCHER sum1, sum2
+    CLC:ADC sum1:STA sum1
+    CLC:ADC sum2:STA sum2
+ENDMACRO

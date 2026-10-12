@@ -1,0 +1,15 @@
+\\ capture_macros.6502 - the capture's macros.
+
+\\ The view's left edge, from the camera's facing: 128 less, in 10 bits.
+\\
+\\ Inputs:
+\\     camangle: the camera's facing, in 1024ths of a turn
+\\
+\\ Outputs:
+\\     viewleft: the view's left edge
+\\     A: corrupted
+
+MACRO VIEW_LEFT
+    LDA camangle:SEC:SBC #128:STA viewleft
+    LDA camangle+1:SBC #0:AND #3:STA viewleft+1
+ENDMACRO

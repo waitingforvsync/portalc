@@ -1,5 +1,5 @@
-\\ arith.6502 - the arithmetic macros: arith.c's logs and exps, from the loader's tables.
-\\ A log is 256 log2: a fraction byte and a whole part.
+\\ arith_macros.6502 - the arithmetic macros: arith.c's logs, exps and polar forms.
+\\ A log is 256 log2: a fraction byte and a whole part, from the loader's tables.
 
 \\ 256 log2 b, as pt_log2_8.
 \\

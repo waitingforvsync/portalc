@@ -6,8 +6,11 @@ TEST_RESULTS = &A000
 SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
 ENDSECTION
 
+INCLUDE "test_macros.6502"
+INCLUDE "arith_macros.6502"
 INCLUDE "arith.6502"
 INCLUDE "vcache.6502"
+INCLUDE "capture.6502"
 
 SECTION TestResults
 .t_done     SKIP 1                      ; &A5 once every check's answers are written
@@ -26,6 +29,7 @@ ENDSECTION
     LDA #0:STA t_done
     JSR test_arith
     JSR test_vcache
+    JSR test_capture
     LDA #&A5:STA t_done
     RTS
 }

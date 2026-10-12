@@ -1,0 +1,83 @@
+\\ test/capture.6502 - make test's check of the capture: the root walk's side and split, from each
+\\ cell's centroid at every angle, for host/test_build.py to compare with the C's.
+
+\\ Each cell's centroid, as the C's tools take it: the mean of its ring's vertices, truncated.
+
+cell_bounds = CONCAT(map_cell_first, {MAP_SIDES})
+
+FUNCTION ring_mean(xs, c)
+    f = cell_bounds[c]
+    e = cell_bounds[c+1]
+= SUM(xs[map_side_v[f..<e]]) DIV (e-f)
+
+SECTION TestResults
+.t_root1    SKIP MAX_CELLS              ; root_side's Fletcher sums, by the camera's cell
+.t_root2    SKIP MAX_CELLS
+ENDSECTION
+
+\\ From each cell's centroid, at every angle: the root walk's side and split. Too many answers to
+\\ keep, so each cell's go into a pair of sums.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_root1, t_root2: the sums, by the camera's cell
+
+.test_capture
+{
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #1:STA camcell
+.cell
+    LDX camcell
+    LDA t_centrexlo,X:STA camx
+    LDA t_centrexhi,X:STA camx+1
+    LDA t_centreylo,X:STA camy
+    LDA t_centreyhi,X:STA camy+1
+    JSR vcache_reset
+    LDA #0:STA camangle:STA camangle+1:STA sum1:STA sum2
+.angle
+    VIEW_LEFT
+    JSR root_side
+    PHA
+    TYA:FLETCHER sum1, sum2             ; the side
+    PLA:FLETCHER sum1, sum2             ; the split, low
+    TXA:FLETCHER sum1, sum2             ; and high
+    CLC:LDA camangle:ADC #4             ; the next of the C's 256ths
+    STA camangle
+    LDA camangle+1:ADC #0:AND #3:STA camangle+1
+    ORA camangle
+    BNE angle                           ; round to 0: all 256
+    LDX camcell
+    LDA sum1:STA t_root1,X
+    LDA sum2:STA t_root2,X
+    INC camcell
+    LDA camcell:CMP #MAP_CELLS
+    BNE cell
+    RTS
+}
+
+\\ The centroids, by cell: cell 0, the outside, has none.
+
+    FITPAGE MAP_CELLS
+.t_centrexlo
+FOR c = 0..MAP_CELLS-1
+    EQUB LO((c != 0)*ring_mean(map_vert_x, MAX({c, 1})))
+NEXT
+    FITPAGE MAP_CELLS
+.t_centrexhi
+FOR c = 0..MAP_CELLS-1
+    EQUB HI((c != 0)*ring_mean(map_vert_x, MAX({c, 1})))
+NEXT
+    FITPAGE MAP_CELLS
+.t_centreylo
+FOR c = 0..MAP_CELLS-1
+    EQUB LO((c != 0)*ring_mean(map_vert_y, MAX({c, 1})))
+NEXT
+    FITPAGE MAP_CELLS
+.t_centreyhi
+FOR c = 0..MAP_CELLS-1
+    EQUB HI((c != 0)*ring_mean(map_vert_y, MAX({c, 1})))
+NEXT

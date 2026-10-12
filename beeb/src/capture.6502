@@ -1,11 +1,15 @@
 \\ capture.6502 - the capture: the walk through the cells, plotting their lines into T.
 \\ It only touches T, so it needn't wait for the buffer.
 
+\\ The frame's view: shared by the capture's routines.
+
+ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen angles' zero
+
 \\ Ready the visit cache, the records, lastp1 and the sprites' pool, then walk from the camera's
-\\ cell. A stub for now.
+\\ cell. Only the view and the root walk's side, for now.
 \\
 \\ Inputs:
-\\     camx, camy: the camera
+\\     camx, camy, camangle, camcell: the camera
 \\
 \\ Outputs:
 \\     T: the frame's lines
@@ -13,5 +17,68 @@
 
 .capture
 {
+    VIEW_LEFT
+    JSR root_side
+    RTS
+}
+
+\\ The side of the camera's cell that straddles the view's left edge, where the walk begins, and
+\\ its window's split, as pt_render_root_side.
+\\
+\\ Inputs:
+\\     camcell: the camera's cell
+\\     viewleft: the view's left edge
+\\     camx, camy: the camera, for the vertex cache
+\\
+\\ Outputs:
+\\     Y: the side
+\\     A, X: the walk's wrap, low and high: the side's start's screen angle + 1 (1 to 1024)
+
+.root_side
+{
+    ZA_AUTO1 ringend                    ; local: the next cell's first side
+    ZA_AUTO2 startangle                 ; local: the side's start's screen angle, from viewleft + 1
+    ZA_AUTO2 endangle                   ; local: and its end's
+
+    LDX camcell
+    LDA cell_first+1,X:STA ringend
+    LDY cell_first,X
+    LDX side_v,Y
+    VCACHE_VERT_TO_X
+    CLC                                 ; (the - 1)
+    LDA vc_anglo,X:SBC viewleft:STA startangle
+    LDA vc_anghi,X:SBC viewleft+1:AND #3
+    STA startangle+1
+
+    \\ the next side's start is this one's end: the edge is on the first side whose end's screen
+    \\ angle is below its start's, and on the last if it's on none before it
+
+.side
+    INY
+    CPY ringend:BEQ found               ; the last side: it's the one
+    LDX side_v,Y
+    VCACHE_VERT_TO_X
+    CLC
+    LDA vc_anglo,X:SBC viewleft:STA endangle
+    LDA vc_anghi,X:SBC viewleft+1:AND #3
+    STA endangle+1
+    CMP startangle+1:BCC found              ; the high byte below the start's
+    BNE on
+    LDA endangle:CMP startangle:BCC found
+.on
+    LDA endangle:STA startangle
+    LDA endangle+1:STA startangle+1
+    BCS side                            ; (always: C set by the compares)
+    ZA_UNREACHABLE
+
+    \\ the side before, and the split: its start's screen angle + 1
+
+.found
+    DEY
+    LDX startangle+1
+    LDA startangle:CLC:ADC #1
+    BCC done
+    INX
+.done
     RTS
 }

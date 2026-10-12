@@ -356,8 +356,9 @@ X = 64 + 64 tan v
 ```
 
 `a2c` holds round(X) at the middle of every in-view step, indexed by the
-step's place from the view's left edge, v + 128, 0..255. As a byte that's
-`v EOR $80`, but the walk has the place to hand anyway (Windows, below).
+step's screen angle, its angle from the view's left edge, v + 128, 0..255.
+As a byte that's `v EOR $80`, but the walk has the screen angle to hand
+anyway (Windows, below).
 Column c's centre is at c + 0.5, so the first column whose centre lies right
 of X is round(X), and that's a vertex's column. An edge covers the half-open
 run of columns [sx, ex): those whose centre rays cross it. The next edge
@@ -392,7 +393,7 @@ straight ahead: the middle of step |k| - 1. In two's complement |k| - 1 is
 ~k, so a negative v is looked up at `~v`.
 
 v0 in the example, from cell 6: its angle is 105 and the camera's 224, so
-v = -119, place 9 from the view's left edge. `a2c[9]` = 7, its column.
+v = -119, screen angle 9. `a2c[9]` = 7, its column.
 `lsec[118]` = 108, so its depth's log is 2,000 - 108 = 1,892: 168 units.
 About 30 cycles for both, no multiply.
 
@@ -651,19 +652,19 @@ cell, and its recursion keeps them while a child's walk runs.
 
 ![Visit windows](hiw-window.svg)
 
-**Windows.** A vertex's place is its angle from the view's left edge, vl,
-the camera's angle less 128:
+**Windows.** A vertex's screen angle is its angle from the view's left
+edge, vl, the camera's angle less 128:
 
 ```
 u = (angle - vl) mod 1024
 ```
 
-One 10-bit subtract, the same for every visit. The view is places 0 to 255,
-and there the place is `a2c`'s index. The catch is behind the eye: mod
+One 10-bit subtract, the same for every visit. The view is screen angles 0
+to 255, and there the screen angle is `a2c`'s index. The catch is behind the eye: mod
 1024, a vertex just left of the view comes out at 1,000-odd, way off to the
 right. So each visit reads its cell in a window of one turn, split where
-the cell isn't: a place at or past the visit's `wrap` counts a turn less,
-negative, left of the view.
+the cell isn't: a screen angle at or past the visit's `wrap` counts a turn
+less, negative, left of the view.
 
 ```
 if u >= wrap: u = u - 1024     ; CMP, and SBC #4 on the high byte
@@ -680,19 +681,19 @@ otherwise                      ; a2c[low byte]
   goes in at -414.
 - **A cell seen through a portal** spans under a half turn, with the
   portal's middle among it, so its window is centred there, made again on
-  each visit: wrap is the middle's place plus 512. Every portal into the
-  cell has its middle among it, so any of them gives a window holding the
-  cell in one piece. And places don't depend on the window, only on where
-  it splits, so they all give the same columns. Cell 2's portal runs from
+  each visit: wrap is the middle's screen angle plus 512. Every portal into
+  the cell has its middle among it, so any of them gives a window holding
+  the cell in one piece. And screen angles don't depend on the window, only
+  on where it splits, so they all give the same columns. Cell 2's portal runs from
   v0, at 9, to v5, at 369, so its middle is at 189, and wrap is 701.
 
 Cell 3 is seen twice in the example, through cell 2 and then through cell
-1, in windows split at 725 and 786. Its vertices' places are the same both
-times.
+1, in windows split at 725 and 786. Its vertices' screen angles are the
+same both times.
 
 **Facing.** Seen from the eye, a side that faces it turns clockwise, its end
-by less than a half turn on from its start, so in the window its places
-rise. One that faces away (a cell seen through a portal has a run of them,
+by less than a half turn on from its start, so in the window its screen
+angles rise. One that faces away (a cell seen through a portal has a run of them,
 the portal back among them) turns the other way:
 
 ```
@@ -704,8 +705,8 @@ faces away otherwise: it spans nothing
 In the eye's own cell every side faces it, the turns add up to the whole
 turn, and the last side runs on to the split, past the view's right edge:
 cell 6's v5-v4 runs from 369 to 610. A side's end is the next side's
-start, so the visit carries the current side's places and columns, and
-moving on costs one vertex.
+start, so the visit carries the current side's screen angles and columns,
+and moving on costs one vertex.
 
 **An edge**, in `process_edge`:
 

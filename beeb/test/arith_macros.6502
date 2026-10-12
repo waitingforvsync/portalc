@@ -1,0 +1,104 @@
+\\ test/arith_macros.6502 - the arithmetic check's macros: LOG2_16 at one bound, POLAR over one
+\\ square of points.
+
+\\ LOG2_16 at bound bits, over every x under it. Too many answers to keep, so each high byte's
+\\ go into a pair of sums.
+\\
+\\ Inputs:
+\\     bits: the bound, 9 to 16
+\\
+\\ Outputs:
+\\     t_log16s1, t_log16s2: the sums, from 2^(bits - 8) - 2
+
+MACRO TEST_LOG2_16 bits
+    ZA_AUTO1 xhi                        ; local: x's high byte
+    ZA_AUTO1 xlo                        ; local: and low
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA xhi
+    LDA #1:STA xlo                      ; from 1, under 256
+.row
+    LDA #0:STA sum1:STA sum2
+.col
+    LDA xlo:LDX xhi
+    LOG2_16 bits
+    CLC:ADC sum1:STA sum1
+    CLC:ADC sum2:STA sum2
+    TXA:CLC:ADC sum1:STA sum1
+    CLC:ADC sum2:STA sum2
+    INC xlo
+    BNE col
+    LDX xhi
+    LDA sum1:STA t_log16s1+(1 << (bits - 8))-2,X
+    LDA sum2:STA t_log16s2+(1 << (bits - 8))-2,X
+    INX:STX xhi
+    CPX #LO(1 << (bits - 8))
+    BNE row
+ENDMACRO
+
+\\ POLAR over a square of 256 by 256 points, a row at a time. Too many answers to keep, so each
+\\ row's go into a pair of sums.
+\\
+\\ Inputs:
+\\     xlo, xhi: the points' x, and the rows' y
+\\     sums1, sums2: the sums' tables
+\\
+\\ Outputs:
+\\     sums1, sums2: the sums, by row
+
+MACRO TEST_POLAR xlo, xhi, sums1, sums2
+    ZA_AUTO1 row                        ; local: y's index
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA row
+.rows
+
+    \\ the rows's y, at every point
+
+    LDX row:LDA xlo,X
+    LDX #0
+.ylo
+    STA t_pylo,X
+    INX
+    BNE ylo
+    LDX row:LDA xhi,X
+    LDX #0
+.yhi
+    STA t_pyhi,X
+    INX
+    BNE yhi
+
+    \\ POLAR at every point, its answer at its index
+
+    LDX #0
+.point
+    TXA:TAY
+    POLAR xlo, xhi, t_pylo, t_pyhi, t_palo, t_pahi, t_plogdistlo, t_plogdisthi
+    INY:TYA:TAX
+    BEQ sums
+    JMP point
+
+    \\ the rows's sums, point by point
+
+.sums
+
+    LDA #0:STA sum1:STA sum2
+    LDX #0
+.sum
+    FOR t = {t_palo, t_pahi, t_plogdistlo, t_plogdisthi}
+        LDA t,X
+        CLC:ADC sum1:STA sum1
+        CLC:ADC sum2:STA sum2
+    NEXT
+    INX
+    BNE sum
+    LDX row
+    LDA sum1:STA sums1,X
+    LDA sum2:STA sums2,X
+    INC row
+    BEQ done
+    JMP rows
+.done
+ENDMACRO

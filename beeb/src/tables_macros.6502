@@ -1,0 +1,120 @@
+\\ tables_macros.6502 - the bit a delta packing that tables.6502 makes its smooth tables from:
+\\ the packing, done at assembly time, and the loader's unpacking.
+
+\\ A bit a delta: a table's first entry, then a bit for each delta after it, over a base for each
+\\ byte of bits. The first byte holds the (n - 1) MOD 8 odd deltas, under a set bit; every other,
+\\ 8. A byte whose deltas fit the one before's base keeps it, so the bases run monotonically.
+
+FUNCTION pk_deltas(v) = v[1..]-v[..LEN(v)-2]
+
+FUNCTION pk_groups(d, k, nb, b)
+    IF b == nb
+        r = {}
+    ELIF b == 0
+        r = CONCAT({d[0..<k]}, pk_groups(d, k, nb, 1))
+    ELSE
+        r = CONCAT({d[k+8*(b-1)..<k+8*b]}, pk_groups(d, k, nb, b+1))
+    ENDIF
+= r
+
+FUNCTION pk_bases(gs, i, prev, has)
+    IF i == LEN(gs)
+        r = {}
+    ELSE
+        g = gs[i]
+        IF LEN(g) == 0
+            b = 0
+        ELIF has AND prev <= MIN(g) AND MAX(g) <= prev+1
+            b = prev
+        ELSE
+            b = MIN(g)
+        ENDIF
+        r = CONCAT(b, pk_bases(gs, i+1, b, LEN(g) > 0))
+    ENDIF
+= r
+
+FUNCTION pk_bits(gs, bs, k, i)
+    IF i == LEN(gs)
+        r = {}
+    ELSE
+        g = gs[i]
+        IF LEN(g) == 0
+            bb = 0
+        ELSE
+            ASSERT MIN(g) >= bs[i] AND MAX(g) <= bs[i]+1, "a delta off its byte's base"
+            bb = SUM((g > bs[i])*(1 << (0..<LEN(g))))
+        ENDIF
+        r = CONCAT(bb+(i == 0)*(1 << k), pk_bits(gs, bs, k, i+1))
+    ENDIF
+= r
+
+\\ The first entry byte b of bits makes: 1 for the first, k + 8(b - 1) + 1 after it.
+
+FUNCTION pk_entry(k, b)
+    IF b == 0
+        e = 1
+    ELSE
+        e = k+8*(b-1)+1
+    ENDIF
+= e
+
+\\ A table's packing, from its ideal values v: the deltas by byte, the bytes' bases, and the bytes
+\\ of bits, stored last first.
+
+FUNCTION pk_k(v) = (LEN(v)-1) MOD 8
+FUNCTION pk_nb(v) = (LEN(v)-1) DIV 8+1
+FUNCTION pk_gs(v) = pk_groups(pk_deltas(v), pk_k(v), pk_nb(v), 0)
+FUNCTION pk_bs(v) = pk_bases(pk_gs(v), 0, 0, FALSE)
+FUNCTION pk_packed(v) = REVERSE(pk_bits(pk_gs(v), pk_bs(v), pk_k(v), 0))
+
+\\ Unpack a table of a bit a delta, as beebdoom does.
+\\
+\\ Inputs:
+\\     table: where it goes
+\\     v: its ideal values, which the packing came from
+\\     bits: its bits, PACKed
+\\
+\\ Outputs:
+\\     table: made
+\\     bits: corrupted
+
+MACRO UNPACK table, v, bits
+    k = pk_k(v)
+    nb = pk_nb(v)
+    bs = pk_bs(v)
+    blo = MIN(bs)
+    bhi = MAX(bs)
+    falling = MIN(bs[..nb-2]-bs[1..]) >= 0
+    ASSERT falling OR MAX(bs[..nb-2]-bs[1..]) <= 0, "UNPACK: the bases must run one way"
+    ASSERT blo < bhi OR MAX(v) <= 255, "UNPACK: a wrap needs a compare to clear its carry"
+
+    LDA #v[0]:LDY #0:LDX #nb-1
+    CLC:BCC store                       ; (always)
+    ZA_UNREACHABLE
+.loop
+    ADC #blo                            ; the delta's bit, over the least base
+    FOR t = blo+1..<bhi+1               ; 1 more for each base above it, from a compare: the
+        IF falling                      ; bases run one way, so it's the bytes before this one
+            CPX #nb-SUM((bs >= t)*1):ADC #0
+        ELSE                            ; or the entries after it
+            CPY #pk_entry(k, FIND((bs >= t)*1, 1)):ADC #0
+        ENDIF
+    NEXT
+.store
+    STA table,Y:INY
+.next
+    ROR bits,X:BNE loop                 ; the next delta's bit, or the set bit
+    DEX:BPL next                        ; the set bit, in C, goes on
+ENDMACRO
+
+\\ A table's bits, packed at assembly time, for UNPACK.
+\\
+\\ Inputs:
+\\     v: its ideal values
+\\
+\\ Outputs:
+\\     the bytes of bits, last first
+
+MACRO PACK v
+    EQUB pk_packed(v)
+ENDMACRO

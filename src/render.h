@@ -178,4 +178,15 @@ void pt_render_view(pt_render *r, uint8_t angle, uint8_t cell);
 // cell by its angles, then as pt_render_view.
 void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle, uint8_t cell);
 
+// Where the camera cell's walk begins: the side that straddles the view's
+// left edge, and its window's split (pt_walk's wrap).
+typedef struct pt_root_side {
+    uint8_t side;
+    uint16_t wrap;
+} pt_root_side;
+
+// The root walk's side, for the eye in cell with the view's left edge at vl
+// (10 bits), from the vertex cache's angles.
+pt_root_side pt_render_root_side(pt_vcache *vc, const pt_map *m, uint8_t cell, uint16_t vl);
+
 #endif

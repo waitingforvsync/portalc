@@ -2,6 +2,7 @@
 
 SCREEN_HEIGHT = 64                      ; canvas rows, two scanlines each (mode5.h)
 MAX_VERTS = 64                          ; the map's caps (map.h's PT_MAX_): size tables by these
+MAX_CELLS = 32
 MAX_VCACHE = 63                         ; vcache.h's PT_MAX_VCACHE: with entry 0, four tables a page
 IN_FWD = 1                              ; the input bits (camera.h's PT_IN_)
 IN_BACK = 2

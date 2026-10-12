@@ -1,0 +1,26 @@
+\\ entry_macros.6502 - the loader's macros.
+
+\\ Copy whole pages forwards, the operands' high bytes stepped on, self-modified (it runs once).
+\\
+\\ Inputs:
+\\     src, dst: from and to
+\\     pages: 1 to 255
+\\
+\\ Outputs:
+\\     X, Y: 0
+\\     A: corrupted
+
+MACRO COPY src, dst, pages
+    ASSERT pages >= 1 AND pages <= &FF, "COPY: 1 to 255 pages"
+    LDX #pages
+    LDY #0
+.loop
+    LDA src,Y
+    STA dst,Y
+    INY
+    BNE loop
+    INC loop+2                          ; src's high byte
+    INC loop+5                          ; dst's
+    DEX
+    BNE loop
+ENDMACRO

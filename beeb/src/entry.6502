@@ -7,31 +7,6 @@
 ASSERT entry >= T_JUNK_TOP, "the loader starts at T's top junk row or higher"
 ASSERT maincode_image >= MAINCODE_ORG, "main RAM's code must load above where it runs"
 
-\\ Copy whole pages forwards, the operands' high bytes stepped on, self-modified (it runs once).
-\\
-\\ Inputs:
-\\     src, dst: from and to
-\\     pages: 1 to 255
-\\
-\\ Outputs:
-\\     X, Y: 0
-\\     A: corrupted
-
-MACRO COPY src, dst, pages
-    ASSERT pages >= 1 AND pages <= &FF, "COPY: 1 to 255 pages"
-    LDX #pages
-    LDY #0
-.loop
-    LDA src,Y
-    STA dst,Y
-    INY
-    BNE loop
-    INC loop+2                          ; src's high byte
-    INC loop+5                          ; dst's
-    DEX
-    BNE loop
-ENDMACRO
-
 \\ Take the machine over, page in the sideways RAM bank !BOOT found, set up the screen, copy the
 \\ payloads out, make the tables, and start.
 \\
@@ -113,7 +88,9 @@ ENDMACRO
     LDA #LO(CAM_START_Y):STA camy
     LDA #HI(CAM_START_Y):STA camy+1
     LDA #0:STA camxf:STA camyf
-    LDA #CAM_START_ANGLE:STA camangle
+    LDA #LO(CAM_START_ANGLE*4)          ; the map's 256ths, in 1024ths
+    STA camangle
+    LDA #HI(CAM_START_ANGLE*4):STA camangle+1
     LDA #CAM_START_CELL:STA camcell
 
     \\ the interrupt's state, and the vsync's interrupt on: go

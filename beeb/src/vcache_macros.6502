@@ -1,0 +1,20 @@
+\\ vcache_macros.6502 - the vertex cache's macros: a vertex's entry, made on a miss by
+\\ vcache.6502's vcache_make.
+
+\\ Vertex X's entry, made if it's not there yet.
+\\
+\\ Inputs:
+\\     X: the vertex
+\\     camx, camy: the camera
+\\
+\\ Outputs:
+\\     X: its entry
+\\     Y: preserved
+\\     A: corrupted
+
+MACRO VCACHE_VERT_TO_X
+    LDA vc_slot,X:BNE hit               ; made already
+    JSR vcache_make
+.hit
+    TAX
+ENDMACRO

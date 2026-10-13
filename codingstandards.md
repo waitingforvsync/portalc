@@ -142,16 +142,17 @@ The rest:
 - An index that's one short (as it came out of the sum that made it)
   stays as it is: fold the one into the address, `LDA table+1,X`, never an
   `INX` first.
-- Never a base before the table, `table-1,X`: with the table on a page
-  boundary, that's the page before, and every access pays the crossing.
-  A table numbered from 1 (the vertex cache's entries) keeps its element
-  0, unused, and is read as it is. One numbered from 0 (vc_slot, by
+- Never a base before the table, `table-1,X`, unless `FITPAGE_FROM` puts
+  the base on the table's page (`exp2_skip-8,Y`): with the table on a page
+  boundary, the base is on the page before, and every access pays the
+  crossing. A table numbered from 1 (the vertex cache's entries) keeps its
+  element 0, unused, and is read as it is. One numbered from 0 (vc_slot, by
   vertex) is looped over upwards, or down to 0.
 - Hot-path code like multiplies goes inline, as a `MACRO`.
 - A file's macros go in a file of their own beside it, `vcache_macros.6502`
   for `vcache.6502`, which `portal.6502` includes first, before any code,
-  so no macro waits on the order of the includes. The tests' are in
-  `test/`, included first by `test/test.6502`.
+  so no macro waits on the order of the includes. The checks' are in
+  `test/`, included first by each check's program.
 
 ### Memory
 
@@ -181,14 +182,18 @@ The rest:
 ### Checking
 
 - What the C has, the 6502 matches byte for byte, and `make test` checks
-  it in b2: the loader's tables against `portalc_tables`, the macros
-  against `portalc_arithref`, the vertex cache against `portalc_vcacheref`,
-  the capture against `portalc_captureref`.
+  it in b2: `make test_tables`, the loader's tables against
+  `portalc_tables`; `make test_arith`, the macros against
+  `portalc_arithref`; `make test_vcache`, the vertex cache against
+  `portalc_vcacheref`; `make test_capture`, the capture against
+  `portalc_captureref`.
 - A macro or routine is run over every input where that's feasible,
-  summed where the answers won't fit, in make test's own build
-  (`-D TEST=TRUE`), which leaves them at the top of the sideways RAM bank.
-  Each check is a file in `test/`, run by `test/test.6502` and compared by
-  `host/test_build.py`. Break it once on purpose, to see the check fail.
+  summed where the answers won't fit. Each check is its own program,
+  `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
+  needs: the loader runs it and stops, leaving its answers in HAZEL, &C000
+  to &DFFF (`test/test.6502`), for `host/test_build.py` to compare. A new
+  check is a new program and a name in the Makefile's `CHECKS`. Break it
+  once on purpose, to see the check fail.
 - Sums are Fletcher's, mod 255 (`FLETCHER`, a carry out added back in).
   Mod 256, a byte that's the same in every frame of a row of 256 adds
   nothing, so an error in it can't show.

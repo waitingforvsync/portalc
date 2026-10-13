@@ -1,5 +1,5 @@
 \\ entry.6502 - the loader, PORTAL's entry point: it takes the machine over, copies the payloads
-\\ to where they run, makes the tables and starts the engine.
+\\ to where they run, makes the tables and starts the engine, or in a check's build, the check.
 
 \\ The loader lies above all it writes, and T's clear wipes it. Sideways RAM's image, lowest, may
 \\ lie under main RAM's code, so it goes first; main RAM's loads above where it runs.
@@ -8,13 +8,13 @@ ASSERT entry >= T_JUNK_TOP, "the loader starts at T's top junk row or higher"
 ASSERT maincode_image >= MAINCODE_ORG, "main RAM's code must load above where it runs"
 
 \\ Take the machine over, page in the sideways RAM bank !BOOT found, set up the screen, copy the
-\\ payloads out, make the tables, and start.
+\\ payloads out, make the tables, and start; or run the check and stop, interrupts off.
 \\
 \\ Inputs:
 \\     BOOT_BANK: the bank
 \\
 \\ Outputs:
-\\     none: it goes on to start
+\\     none: it goes on to start, or stops
 
 .entry
 {
@@ -48,8 +48,10 @@ ASSERT maincode_image >= MAINCODE_ORG, "main RAM's code must load above where it
     LDA #&0F:STA &FE42                  ; port B's low half: the addressable latch
     LDA #3:STA &FE40                    ; latch bit 3 low: we scan the keyboard
     LDA #&00:STA &FE4C                  ; PCR: CA1 vsync, CA2 keyboard
-    LDA #LO(irq):STA &204               ; IRQ1V
-    LDA #HI(irq):STA &205
+    IF NOT(DEFINED(TEST))
+        LDA #LO(irq):STA &204           ; IRQ1V
+        LDA #HI(irq):STA &205
+    ENDIF
 
     \\ sideways RAM: the bank !BOOT found, paged in for good (no OS to tell)
 
@@ -78,28 +80,31 @@ ASSERT maincode_image >= MAINCODE_ORG, "main RAM's code must load above where it
 
     JSR make_tables
     IF DEFINED(TEST)
-        JSR test                        ; make test's build: check the macros
+        \\ make test's build: the check, then nothing, its answers left for the host
+        JSR test
+    .@  JMP @-
+    ELSE
+
+        \\ the camera, where the map starts it
+
+        LDA #LO(CAM_START_X):STA camx
+        LDA #HI(CAM_START_X):STA camx+1
+        LDA #LO(CAM_START_Y):STA camy
+        LDA #HI(CAM_START_Y):STA camy+1
+        LDA #0:STA camxf:STA camyf
+        LDA #LO(CAM_START_ANGLE*4)      ; the map's 256ths, in 1024ths
+        STA camangle
+        LDA #HI(CAM_START_ANGLE*4):STA camangle+1
+        LDA #CAM_START_CELL:STA camcell
+
+        \\ the interrupt's state, and the vsync's interrupt on: go
+
+        LDA #HI(SCREEN_B):STA base      ; to draw into: R12 and R13 show SCREEN_A
+        LDA #0:STA request_swap:STA framectr:STA keys
+        LDA #&82:STA &FE4E              ; system VIA: CA1 (vsync) on
+        CLI
+        JMP start
     ENDIF
-
-    \\ the camera, where the map starts it
-
-    LDA #LO(CAM_START_X):STA camx
-    LDA #HI(CAM_START_X):STA camx+1
-    LDA #LO(CAM_START_Y):STA camy
-    LDA #HI(CAM_START_Y):STA camy+1
-    LDA #0:STA camxf:STA camyf
-    LDA #LO(CAM_START_ANGLE*4)          ; the map's 256ths, in 1024ths
-    STA camangle
-    LDA #HI(CAM_START_ANGLE*4):STA camangle+1
-    LDA #CAM_START_CELL:STA camcell
-
-    \\ the interrupt's state, and the vsync's interrupt on: go
-
-    LDA #HI(SCREEN_B):STA base          ; to draw into: R12 and R13 show SCREEN_A
-    LDA #0:STA request_swap:STA framectr:STA keys
-    LDA #&82:STA &FE4E                  ; system VIA: CA1 (vsync) on
-    CLI
-    JMP start
 }
 
 .crtcregs

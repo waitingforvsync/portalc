@@ -1,0 +1,7 @@
+\\ arith.6502 - the arithmetic macros' constant data: EXP2_16's way into its run of shifts.
+
+\\ For a whole part n of 8 to 15, the bytes of EXP2_16's run of seven shifts (ASL A:ROL high, 3
+\\ bytes each) to skip, so that n - 8 are left: 3 * (15 - n). Read by n, from exp2_skip-8.
+
+    FITPAGE_FROM -8, 16
+.exp2_skip  EQUB 3*(15-(8..15))

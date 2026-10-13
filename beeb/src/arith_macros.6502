@@ -66,10 +66,55 @@ MACRO LOG2_16 bits
 .one
             LSR A
         ELSE
-            LDY k8,X:CLC                ; a shift at a time
-            DEY:BEQ join                ; k = 1: none
-.shift
-            LSR A:DEY:BNE shift
+
+            \\ k from 1 up, a compare each; at 16 bits, past k = 2, k = 6 on split off
+
+            CPX #2:BCC join             ; k = 1: none, C clear
+            CPX #4:BCC one              ; k = 2
+            IF bits == 16
+                CPX #32:BCS high        ; k = 6 on
+            ENDIF
+            CPX #8:BCC two              ; k = 3
+            CPX #16:BCC three           ; k = 4
+            IF bits == 13
+                BCS four                ; k = 5 (always)
+                ZA_UNREACHABLE
+            ELIF bits == 14
+                CPX #32:BCC four        ; k = 5, else 6
+                BCS five                ; (always)
+                ZA_UNREACHABLE
+            ELIF bits == 15
+                CPX #32:BCC four        ; k = 5
+                CPX #64:BCC five        ; k = 6, else 7
+                BCS six                 ; (always)
+                ZA_UNREACHABLE
+            ELSE
+                BCS four                ; k = 5 (always)
+                ZA_UNREACHABLE
+.high
+                CPX #64:BCC five        ; k = 6
+                CPX #128:BCC six        ; k = 7, else 8
+            ENDIF
+            IF bits == 16
+.seven
+                LSR A
+            ENDIF
+            IF bits >= 15
+.six
+                LSR A
+            ENDIF
+            IF bits >= 14
+.five
+                LSR A
+            ENDIF
+.four
+            LSR A
+.three
+            LSR A
+.two
+            LSR A
+.one
+            LSR A
         ENDIF
 
         \\ the rest of x under its leading one, rounded, and k
@@ -330,20 +375,15 @@ MACRO EXP2_16 bits
         LDY high
     ELSE
 
-        \\ into a run of the pairs of shifts at the k-th from its end, self-modified
+        \\ into a run of seven pairs of shifts at the k-th from its end (exp2_skip's), self-modified
 
-        ZA_AUTO1 pairs                  ; local: the pairs to skip, bits - 1 - n
-
-        TYA:EOR #&FF:ADC #bits-1        ; (C set)
-        STA pairs
-        ASL A:ADC pairs                 ; 3 bytes a pair (C clear: under 8, doubled)
-        STA skip+1
+        LDA exp2_skip-8,Y:STA skip+1
         LDA #1:STA high                 ; 1.f's 1
         LDA expf,X
 .skip
-        BCC run                         ; (always: C clear) self-modified
+        BCS run                         ; (always: C set) self-modified
 .run
-        FOR i = 1..bits-9
+        FOR i = 1..7
             ASL A:ROL high
         NEXT
         LDY high

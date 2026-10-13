@@ -32,7 +32,9 @@ MACRO TEST_LOG2_16 bits
     LDA sum2:STA t_log16s2+(1 << (bits - 8))-2,X
     INX:STX xhi
     CPX #LO(1 << (bits - 8))
-    BNE row
+    BEQ rows
+    JMP row
+.rows
 ENDMACRO
 
 \\ POLAR over a square of 256 by 256 points, a row at a time. Too many answers to keep, so each

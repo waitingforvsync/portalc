@@ -15,6 +15,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
 .swramcode_image
     SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
         INCLUDE "src/start.6502"
+        INCLUDE "src/arith.6502"
         INCLUDE "src/clear.6502"
         INCLUDE "src/map.6502"
         INCLUDE "src/vcache.6502"
@@ -23,9 +24,6 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         INCLUDE "src/capture.6502"
         INCLUDE "src/fill.6502"
         INCLUDE "src/sprites.6502"
-        IF DEFINED(TEST)
-            INCLUDE "test/test.6502"    ; make test's build: the checks
-        ENDIF
     ENDSECTION
 
 .maincode_image

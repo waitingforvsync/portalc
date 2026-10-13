@@ -33,9 +33,9 @@ ambitions.
 | C | 6502 | State |
 |---|---|---|
 | `pt_log2_8` | `LOG2_8` | done: every b, `portalc_arithref` |
-| `pt_log2` | `LOG2_16 bits` | done: every x at each bound from 9 to 16, summed |
+| `pt_log2` | `LOG2_16 bits`: the low byte shifted down k - 1, through compares on the high byte into a run of shifts | done: every x at each bound from 9 to 16, summed |
 | `pt_exp2` (`exp2_byte`) | `EXP2_8` | done: every l under 2048 |
-| `pt_exp2` | `EXP2_16 bits`: `EXP2_8`, or 1.f shifted up, through compares into a run of shifts up to 2^13, a self-modified branch into it past that | done, in `make_line`'s check |
+| `pt_exp2` | `EXP2_16 bits`: `EXP2_8`, or 1.f shifted up, through compares into a run of shifts up to 2^13, and past that a branch into it self-modified from `exp2_skip` (arith.6502) | done, in `make_line`'s check |
 | `pt_mulu8` | `MULTIPLIER` (a) then `MULTIPLY` (a * Y), by the quarter squares | done, in `make_line`'s check |
 | `pt_polar_of` and `pt_quadrant`, called by `pt_vcache_vert` | `POLAR` | done: a near square and a far grid, summed |
 | `pt_view_col` | `LDA a2c,X` | done (a lookup) |
@@ -189,7 +189,7 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - **A height is two bytes.** `below` is bit 7 of the log's high byte, which
   is otherwise 0 or 17 to 24.
 - **`LOG2_16` and `EXP2_16` take bounds.** `LOG2_16`'s is `MAP_OFFSET_BITS`
-  (map.6502), from the map's span; `make_line` works out an end on the
+  (map_macros.6502), from the map's span; `make_line` works out an end on the
   screen's offset with `EXP2_16 13`, inline, and the rest with `exp2_sat`'s
   `EXP2_16 16`. The bound decides how they shift. The C's have none.
 - **Tables numbered from 1 keep entry 0, unused:** the visits and the

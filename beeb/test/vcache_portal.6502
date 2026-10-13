@@ -1,0 +1,36 @@
+\\ test/vcache_portal.6502 - make test_vcache's PORTAL: the vertex cache's check, with the engine
+\\ it needs: the map, the cache, and the capture, whose visits map_init clears.
+
+INCLUDE "../src/memory.6502"
+INCLUDE "../src/constants.6502"
+INCLUDE "../src/macros.6502"
+INCLUDE "../src/arith_macros.6502"
+INCLUDE "../src/tables_macros.6502"
+INCLUDE "../src/map_macros.6502"
+INCLUDE "../src/vcache_macros.6502"
+INCLUDE "../src/capture_macros.6502"
+INCLUDE "../src/entry_macros.6502"
+INCLUDE "test_macros.6502"
+
+check = test_vcache
+
+SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
+.swramcode_image
+    SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
+        INCLUDE "../src/arith.6502"
+        INCLUDE "../src/map.6502"
+        INCLUDE "../src/vcache.6502"
+        INCLUDE "../src/camera.6502"
+        INCLUDE "../src/capture.6502"
+        INCLUDE "test.6502"
+        INCLUDE "vcache.6502"
+    ENDSECTION
+
+.maincode_image
+    SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
+        INCLUDE "../src/mapdata.6502"
+    ENDSECTION
+
+    INCLUDE "../src/entry.6502"
+    INCLUDE "../src/tables.6502"
+ENDSECTION

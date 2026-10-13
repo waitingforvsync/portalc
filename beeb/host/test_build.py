@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""test_build.py - boot make test's PORTAL in b2, as a Master 128, and check its checks' answers
-(test/) against the C's (portalc_arithref, portalc_vcacheref, portalc_captureref)."""
+"""test_build.py - boot one of make test's checks in b2, as a Master 128 (its own PORTAL, from
+test/CHECK_portal.6502), and compare its answers with its C tool's: portalc_CHECKref."""
 
 import json
 import sys
@@ -9,7 +9,8 @@ import time
 import b2
 from test_tables import symbols
 
-USAGE = 'usage: test_build.py DISC SYMBOLS ARITH VCACHE CAPTURE (the test build, its symbols, the C\'s JSON)'
+USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache or capture; its build, its '
+         'symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -56,10 +57,10 @@ def fletcher_bytes(values):
     return s1, s2
 
 
-def vcache_expected(c, n):
+def vcache_expected(c):
     """The vertex cache's sums, by the camera's vertex: each vertex's first entry, its entry
     the second time, and its polar form."""
-    flat = c['vcache']
+    flat, n = c['vcache'], c['verts']
     s1s, s2s = [], []
     for p in range(n):
         bs = []
@@ -156,8 +157,9 @@ def capture_expected(c):
     ]
 
 
-def expected(c):
-    """(name, label, where in it, the first answer's input, the answers)."""
+def arith_expected(c):
+    """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
+    answer's input, the answers)."""
     log8 = c['log2_8']
     sums = [fletcher(c['log2'][hi * 256 + (1 if hi == 0 else 0):hi * 256 + 256])
             for hi in range(256)]
@@ -192,19 +194,17 @@ def expected(c):
     ]
 
 
+EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected}
+
+
 def main():
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 5 or sys.argv[1] not in EXPECTED:
         print(USAGE, file=sys.stderr)
         return 2
-    disc, sympath, apath, vpath, cpath = sys.argv[1:]
+    check, disc, sympath, cpath = sys.argv[1:]
     syms = symbols(sympath)
-    with open(apath) as f:
-        checks = expected(json.load(f))
-    with open(vpath) as f:
-        vc = json.load(f)
-    checks += vcache_expected(vc, vc['verts'])
     with open(cpath) as f:
-        checks += capture_expected(json.load(f))
+        checks = EXPECTED[check](json.load(f))
 
     proc = None if b2.alive() else b2.private()
     try:
@@ -213,7 +213,7 @@ def main():
         end = time.time() + 120
         while b2.peek(syms['t_done'], 1)[0] != DONE:
             if time.time() > end:
-                print('test: the checks never finished')
+                print('test_%s: the check never finished' % check)
                 return 1
             time.sleep(0.5)
         got = [b2.peek(syms[label] + at, len(want)) for _, label, at, _, want in checks]
@@ -230,7 +230,7 @@ def main():
         i = diffs[0]
         print('  %-16s %4d answers: %d differ, first [%d] Beeb &%02X, C &%02X'
               % (name, len(want), len(diffs), first + i, g[i], want[i]))
-    print('test: %s' % ('all the same as the C' if bad == 0 else '%d differ' % bad))
+    print('test_%s: %s' % (check, 'all the same as the C' if bad == 0 else '%d differ' % bad))
     return 0 if bad == 0 else 1
 
 

@@ -14,3 +14,20 @@ MACRO FITPAGE size
         ALIGN &100
     ENDIF
 ENDMACRO
+
+\\ FITPAGE from a base before the table, as table-8,Y reads one: the bytes from the base in one
+\\ page, so no read crosses from the base's.
+\\
+\\ Inputs:
+\\     offset: the base, from the table: 0 or less (-8 for table-8)
+\\     size: the bytes from the base, the table's last included
+\\
+\\ Outputs:
+\\     P%: on, if need be, to put the base at the next page's start
+
+MACRO FITPAGE_FROM offset, size
+    ASSERT offset <= 0 AND size > -offset AND size <= &100, "FITPAGE_FROM: base and table, a page"
+    IF ((P%+offset) AND &FF)+size > &100
+        SKIP &100-((P%+offset) AND &FF)
+    ENDIF
+ENDMACRO

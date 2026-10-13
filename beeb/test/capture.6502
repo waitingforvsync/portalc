@@ -62,6 +62,7 @@ ENDSECTION
     ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
     ZA_AUTO1 sum2                       ; local: and the sum of the sums
 
+    JSR map_init                        ; the vertex cache and visits empty
     LDA #0:STA place
 .position
     LDX place

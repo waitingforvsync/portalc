@@ -1,38 +1,25 @@
-\\ test/test.6502 - make test's checks, which the loader runs in its -D TEST=TRUE build. They
-\\ leave their answers at the top of the sideways RAM bank, for host/test_build.py to compare.
+\\ test/test.6502 - what make test's checks share: where their answers go, and the run, which the
+\\ loader calls in a check's build (-D TEST=TRUE). Each check's program names its check, check.
 
-TEST_RESULTS = &B000
+TEST_RESULTS = &C000                    ; HAZEL, the filing system's 8K: paged in, its OS gone
+TEST_RESULTS_END = &E000
 
-SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
+SECTION TestResults, org = TEST_RESULTS, guard = TEST_RESULTS_END, virtual = TRUE
+.t_done     SKIP 1                      ; &A5 once the check's answers are written
 ENDSECTION
 
-INCLUDE "test_macros.6502"
-INCLUDE "arith_macros.6502"
-INCLUDE "capture_macros.6502"
-INCLUDE "arith.6502"
-INCLUDE "vcache.6502"
-INCLUDE "capture.6502"
-
-SECTION TestResults
-.t_done     SKIP 1                      ; &A5 once every check's answers are written
-ENDSECTION
-
-\\ Run every check.
+\\ Run the check.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
-\\     TestResults: the answers, t_done last
+\\     TestResults: its answers, t_done last
 
 .test
 {
     LDA #0:STA t_done
-    JSR test_arith
-    JSR test_vcache
-    JSR test_capture
+    JSR check
     LDA #&A5:STA t_done
     RTS
 }
-
-ASSERT P% <= TEST_RESULTS, "test: the code runs into its answers"

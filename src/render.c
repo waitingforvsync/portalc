@@ -25,21 +25,6 @@
 
 #include "plot.h"
 
-// A candidate line from make_line, before clipping against the bounds: on
-// the screen over [x0, x1), and beyond its edge on the side below says
-// either side of that (the screen pre-clip cut it off there).
-typedef struct pt_line {
-    uint8_t x0;
-    uint8_t x1;
-    uint16_t y;       // the row at x0, u8.8 with the rounding bias in
-    uint16_t g;       // sign bit + u7.8 magnitude
-    uint8_t rl;       // a row at or past its last column, towards its end:
-                      // with the row at x0, its rows' extremes
-    uint8_t below;    // the side it is cut off on: below the screen, or above
-    uint8_t ce;
-    uint8_t co;
-} pt_line;
-
 // ---- row arithmetic ----
 //
 // Every u8.8 row (the plot DDA) carries the +128 rounding bias in its
@@ -256,6 +241,11 @@ static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, 
     RC_ASSERT(ok);
     (void)ok;
     return L;
+}
+
+pt_line pt_render_line(const pt_walk *w, const pt_ends *e, pt_height h)
+{
+    return make_line(w->c0, w->c1, e, h, (pt_pattern) {0});
 }
 
 // ---- plotting ----

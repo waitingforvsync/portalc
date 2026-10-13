@@ -75,12 +75,27 @@ def vcache_expected(c, n):
     ]
 
 
+def line_bytes(f, i):
+    """A line's bytes from the C's values at f[i], as LINE_SUMS sums them: its columns, its side
+    (&80 below), then if it has columns its row and gradient (low byte first) and end row; and
+    where its values end."""
+    x0, x1, below = f[i:i + 3]
+    bs = [x0, x1, below << 7]
+    i += 3
+    if x0 < x1:
+        y, g, rl = f[i:i + 3]
+        bs += [y & 0xFF, y >> 8, g & 0xFF, g >> 8, rl]
+        i += 3
+    return bs, i
+
+
 def capture_expected(c):
     """The capture's sums, by the camera's place: at each angle, the root walk (its 16-bit fields
     low byte first), its visit (a height as the log's low byte, then its high with the side in bit
     7), the eye's height, the counts and each byte column's toggle_end; then each side of the eye's
-    cell walked, its screen angles and columns, and its ends if it has columns. Then HEIGHT_OF's,
-    by the eye's height: each height's low byte, then its high."""
+    cell walked, its screen angles and columns, and if it has columns its ends and its lines at the
+    cell's ceiling and floor and the eye's height. Then HEIGHT_OF's, by the eye's height: each
+    height's low byte, then its high; and the made-up lines', by row."""
     frames, places = c['frames'], c['places']
     s1s, s2s = [], []
     for p in range(places):
@@ -105,6 +120,9 @@ def capture_expected(c):
                     for v in f[i:i + 3]:
                         bs += [v & 0xFF, (v >> 8) & 0xFF]
                     i += 3
+                    for _ in range(3):
+                        lb, i = line_bytes(f, i)
+                        bs += lb
         s1, s2 = fletcher_bytes(bs)
         s1s.append(s1)
         s2s.append(s2)
@@ -118,11 +136,23 @@ def capture_expected(c):
         s1, s2 = fletcher_bytes(bs)
         h1s.append(s1)
         h2s.append(s2)
+    l1s, l2s = [], []
+    lines, i = c['lines'], 0
+    for row in range(256):
+        bs = []
+        for _ in range(256):
+            lb, i = line_bytes(lines, i)
+            bs += lb
+        s1, s2 = fletcher_bytes(bs)
+        l1s.append(s1)
+        l2s.append(s2)
     return [
         ('capture s1', 't_capture1', 0, 0, bytes(s1s)),
         ('capture s2', 't_capture2', 0, 0, bytes(s2s)),
         ('HEIGHT_OF s1', 't_height1', 0, 0, bytes(h1s)),
         ('HEIGHT_OF s2', 't_height2', 0, 0, bytes(h2s)),
+        ('lines s1', 't_lines1', 0, 0, bytes(l1s)),
+        ('lines s2', 't_lines2', 0, 0, bytes(l2s)),
     ]
 
 
@@ -141,11 +171,19 @@ def expected(c):
             ('LOG2_16 %d s1' % bits, 't_log16s1', rows - 2, 0, bytes(s[0] for s in sums[:rows])),
             ('LOG2_16 %d s2' % bits, 't_log16s2', rows - 2, 0, bytes(s[1] for s in sums[:rows])),
         ]
+    exp1, exp2 = [], []
+    for row in range(8):
+        bs = []
+        for v in c['exp2'][row * 256:row * 256 + 256]:
+            bs += [v & 0xFF, v >> 8]
+        s1, s2 = fletcher_bytes(bs)
+        exp1.append(s1)
+        exp2.append(s2)
     near1, near2 = polar_sums(c['polar_near'])
     far1, far2 = polar_sums(c['polar_far'])
     return checks + [
-        ('EXP2_8 byte', 't_exp', 0, 0, bytes(v & 0xFF for v in c['exp2'])),
-        ('EXP2_8 carry', 't_expc', 0, 0, bytes(v >> 8 for v in c['exp2'])),
+        ('EXP2_8 s1', 't_exp1', 0, 0, bytes(exp1)),
+        ('EXP2_8 s2', 't_exp2', 0, 0, bytes(exp2)),
         ('POLAR bound', 't_bits', 0, 0, bytes([c['polar_bits']])),
         ('POLAR near s1', 't_pnear1', 0, 0, near1),
         ('POLAR near s2', 't_pnear2', 0, 0, near2),

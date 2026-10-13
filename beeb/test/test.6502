@@ -1,13 +1,14 @@
 \\ test/test.6502 - make test's checks, which the loader runs in its -D TEST=TRUE build. They
 \\ leave their answers at the top of the sideways RAM bank, for host/test_build.py to compare.
 
-TEST_RESULTS = &A000
+TEST_RESULTS = &B000
 
 SECTION TestResults, org = TEST_RESULTS, guard = SWRAM_END, virtual = TRUE
 ENDSECTION
 
 INCLUDE "test_macros.6502"
 INCLUDE "arith_macros.6502"
+INCLUDE "capture_macros.6502"
 INCLUDE "arith.6502"
 INCLUDE "vcache.6502"
 INCLUDE "capture.6502"

@@ -1,0 +1,23 @@
+\\ test/capture_macros.6502 - the capture check's macros.
+
+\\ A line (make_line's) into a pair of Fletcher sums: its columns and side, then its rows if it has
+\\ columns.
+\\
+\\ Inputs:
+\\     line_x0 to line_below: the line
+\\     s1, s2: the sums
+\\
+\\ Outputs:
+\\     s1, s2: the line added
+\\     A: corrupted
+
+MACRO LINE_SUMS s1, s2
+    LDA line_x0:FLETCHER s1, s2
+    LDA line_x1:FLETCHER s1, s2
+    LDA line_below:FLETCHER s1, s2
+    LDA line_x0:CMP line_x1:BCS done    ; no columns
+    FOR v = {line_y, line_y+1, line_grad, line_grad+1, line_endy}
+        LDA v:FLETCHER s1, s2
+    NEXT
+.done
+ENDMACRO

@@ -230,4 +230,23 @@ typedef struct pt_ends {
 void pt_render_side_next(pt_render *r, pt_walk *w);
 pt_ends pt_render_ends(const pt_render *r, const pt_walk *w);
 
+// A candidate line from make_line, before clipping against the bounds: on
+// the screen over [x0, x1), and beyond its edge on the side below says
+// either side of that (the screen pre-clip cut it off there).
+typedef struct pt_line {
+    uint8_t x0;
+    uint8_t x1;
+    uint16_t y;       // the row at x0, u8.8 with the rounding bias in
+    uint16_t g;       // sign bit + u7.8 magnitude
+    uint8_t rl;       // a row at or past its last column, towards its end:
+                      // with the row at x0, its rows' extremes
+    uint8_t below;    // the side it is cut off on: below the screen, or above
+    uint8_t ce;
+    uint8_t co;
+} pt_line;
+
+// The walk's side's line at height h, from its ends (make_line), with no
+// colour, for the tools' checks.
+pt_line pt_render_line(const pt_walk *w, const pt_ends *e, pt_height h);
+
 #endif

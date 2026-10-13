@@ -1,6 +1,14 @@
 \\ capture.6502 - the capture: the walk through the cells, plotting their lines into T.
 \\ It only touches T, so it needn't wait for the buffer.
 
+\\ How far a line's offset from the screen's middle row runs to its top or bottom edge, and its
+\\ log's high byte; and the middle row, as a line's rows have it.
+
+EDGE_OFFSET = SCREEN_HEIGHT DIV 2*256   ; 32 rows, u8.8
+EDGE_LOG = 13                           ; 2^13 = 32 * 256
+LINE_MIDDLE = EDGE_OFFSET+128           ; 32 rows down, u8.8, the rounding half in
+ASSERT 1 << EDGE_LOG == EDGE_OFFSET, "the capture: the screen's edge's log"
+
 \\ The frame's view and counts, and the walk in progress: shared by the capture's routines.
 
 ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen angles' zero
@@ -25,6 +33,15 @@ ZA_AUTO1 walk_c1                        ; and the end's
 ZA_AUTO2 logdepth0                      ; 256 log2 of the start's depth, in whole units
 ZA_AUTO2 logdepth1                      ; and the end's
 ZA_AUTO2 logcolumns                     ; 256 log2 of the side's columns, walk_c1 - walk_c0
+
+\\ The side's line at a height (make_line), before it's clipped.
+
+ZA_AUTO1 line_x0                        ; its columns on the screen, [x0, x1): none if x0 = x1
+ZA_AUTO1 line_x1
+ZA_AUTO2 line_y                         ; its row at x0, u8.8, the rounding half in
+ZA_AUTO2 line_grad                      ; its gradient: bit 15 the sign, then u7.8 rows a column
+ZA_AUTO1 line_endy                      ; a row at or past its last column, towards its end
+ZA_AUTO1 line_below                     ; &80: below the eye, beyond the screen's bottom; 0: top
 
 \\ Each cell's visit, 0 for none: all 0 between captures, as each visit clears its own.
 
@@ -327,6 +344,342 @@ ENDSECTION
     LDA logline:ADC lsec16lo,X:STA logdepth1
     LDA logline+1:ADC lsec16hi,X:STA logdepth1+1
 .done
+    RTS
+}
+
+\\ The walk's side's line at a height (make_line): its columns on the screen and its rows, from its
+\\ ends' depths. An end too near, past the screen's edge, cuts it where it reaches the edge.
+\\
+\\ Inputs:
+\\     X, A: the height, as the visits hold it: the log's low byte, then its high, below in bit 7
+\\     walk_c0, walk_c1: the side's columns
+\\     logdepth0, logdepth1, logcolumns: its ends (edge_ends)
+\\
+\\ Outputs:
+\\     line_x0, line_x1: the line's columns, none if they're the same
+\\     line_y, line_grad, line_endy: its rows, if it has columns
+\\     line_below: the height's side
+\\     A, X, Y: corrupted
+
+.make_line
+{
+    ZA_AUTO2 logoffset0                 ; local: the start's offset's log (l0)
+    ZA_AUTO2 logoffset1                 ; local: and the end's (l1)
+    ZA_AUTO1 near                       ; local: bit 7 the end's too near, bit 6 the start's
+    ZA_AUTO2 offset0                    ; local: the start's offset from the middle row (o0)
+    ZA_AUTO2 offset1                    ; local: and the end's (o1)
+    ZA_AUTO2 rise                       ; local: their difference, unsigned (dr)
+    ZA_AUTO1 sign                       ; local: &80 if the rows go up along the line
+    ZA_AUTO2 loggrad                    ; local: the gradient's log, an end too near (lg)
+
+    TAY
+    AND #&80:STA line_below
+    LDA walk_c0:STA line_x0:STA line_x1 ; no columns, until it has some
+    TYA:AND #&7F:BNE log                ; the log's high byte: 17 on, or 0 at the eye's height
+
+    \\ at the eye's height: flat, on the middle row
+
+    LDA walk_c1:STA line_x1
+    LDA #LO(LINE_MIDDLE):STA line_y
+    LDA #HI(LINE_MIDDLE):STA line_y+1:STA line_endy
+    LDA #0:STA line_grad:STA line_grad+1
+    RTS
+
+    \\ the ends' offsets from the middle row, u8.8: 2^(the height's log less the depth's). An end
+    \\ whose offset's log reaches 13 * 256, 32 rows, is too near: past the screen's edge
+
+.log
+    TAY
+    TXA:SEC:SBC logdepth0:STA logoffset0
+    TYA:SBC logdepth0+1:STA logoffset0+1
+    TXA:SEC:SBC logdepth1:STA logoffset1
+    TYA:SBC logdepth1+1:STA logoffset1+1
+    CLC
+    LDA logoffset0+1:BMI far0
+    CMP #EDGE_LOG
+.far0
+    ROR near                            ; bit 7: the start's too near
+    CLC
+    LDA logoffset1+1:BMI far1
+    CMP #EDGE_LOG
+.far1
+    ROR near                            ; bit 7: the end's, and bit 6 the start's
+    BIT near:BPL offsets
+    BVC offsets
+    RTS                                 ; both too near: none
+
+    \\ an end on the screen: its offset's under 32 rows, or 0 under 0. One too near can saturate
+
+.offsets
+    BIT near:BVC start_on
+    LDX logoffset0:LDA logoffset0+1
+    JSR exp2_sat
+    JMP start_offset
+.start_on
+    LDX logoffset0:LDY logoffset0+1:BPL start_exp
+    LDA #0:TAY
+    BEQ start_offset                    ; (always)
+    ZA_UNREACHABLE
+.start_exp
+    EXP2_16 EDGE_LOG
+.start_offset
+    STA offset0:STY offset0+1
+    BIT near:BPL end_on
+    LDX logoffset1:LDA logoffset1+1
+    JSR exp2_sat
+    JMP end_offset
+.end_on
+    LDX logoffset1:LDY logoffset1+1:BPL end_exp
+    LDA #0:TAY
+    BEQ end_offset                      ; (always)
+    ZA_UNREACHABLE
+.end_exp
+    EXP2_16 EDGE_LOG
+.end_offset
+    STA offset1:STY offset1+1
+
+    \\ the rows run away from the middle as the offset grows, down below the eye and up above it:
+    \\ the offsets' subtract's borrow is the gradient's sign
+
+    SEC
+    LDA offset1:SBC offset0:STA rise
+    LDA offset1+1:SBC offset0+1:STA rise+1
+    PHP                                 ; C: the end's offset at or past the start's
+    LDA #0:ROR A
+    EOR line_below:STA sign             ; below the eye, a growing offset goes down
+    PLP:BCS gradient
+    LDA rise:EOR #&FF:ADC #1:STA rise   ; (C clear) the start's offset less the end's
+    LDA rise+1:EOR #&FF:ADC #0:STA rise+1
+
+    \\ both ends on the screen: each offset is under 32 rows, and so is their difference, a byte in
+    \\ eighths of a row, rounded, which takes a byte's log; 5 * 256 takes eighths back to 256ths
+
+.gradient
+    BIT near:BMI near_end
+    BVC both
+.near_end
+    JMP nearend
+.both
+    CLC
+    LDA rise:ADC #16:STA rise           ; + a sixteenth: rounded
+    LDA rise+1:ADC #0                   ; the high byte, up to 32
+    CMP #HI(EDGE_OFFSET):BCS most       ; 32 rows on: 256 eighths, kept to 255
+    ASL rise:ROL A
+    ASL rise:ROL A
+    ASL rise:ROL A                      ; the eighths: the high byte, x 8
+    TAX:BNE eighths
+    TAY                                 ; under a sixteenth all along: flat
+    BEQ grad                            ; (always)
+    ZA_UNREACHABLE
+.most
+    LDX #255
+.eighths
+    LOG2_8                              ; A: the fraction, Y: the whole part
+    SEC:SBC logcolumns:TAX
+    TYA:SBC logcolumns+1
+    CLC:ADC #5
+    JSR exp2_sat                        ; under 32 rows a column: it never saturates
+.grad
+    STA line_grad:STY line_grad+1
+    ORA line_grad+1:BEQ graded          ; 0: no sign (pt_g_make)
+    TYA:ORA sign:STA line_grad+1
+.graded
+
+    \\ both ends on the screen: the line has all the side's columns
+
+    BIT near:BMI cut
+    BVS cut
+    LDA walk_c1:STA line_x1
+    OFFSET_ROW offset0
+    STX line_y:STA line_y+1
+    OFFSET_ROW offset1
+    STA line_endy
+    RTS
+
+    \\ one end too near: the far end's columns towards where the line crosses the screen's edge,
+    \\ ceil(the distance) of them counting its own (CMP #1 on the low byte, ADC #0 into the high).
+    \\ The far end's distance from the edge is under 32 rows, a byte in eighths of a row, rounded
+    \\ (at least one), with a byte's log: 5 * 256 back to 256ths, and 8 * 256 for the count's
+    \\ fraction, less the gradient's log. The last column counted is still on the screen
+
+    ZA_AUTO1 count                      ; local: the columns counted (cnt)
+    ZA_AUTO1 togo                       ; local: the far end's distance from the edge's low byte
+    ZA_AUTO1 back                       ; local: the columns back from the end, the start too near
+
+.cut
+    SEC:LDA walk_c1:SBC walk_c0
+    STA count                           ; at most all the side's columns (dc)
+    BIT near:BVS startnear
+    SEC
+    LDA #LO(EDGE_OFFSET+16):SBC offset0:STA togo
+    LDA #HI(EDGE_OFFSET+16):SBC offset0+1
+    JMP distance
+.startnear
+    SEC
+    LDA #LO(EDGE_OFFSET+16):SBC offset1:STA togo
+    LDA #HI(EDGE_OFFSET+16):SBC offset1+1
+.distance
+    CMP #HI(EDGE_OFFSET):BCS farthest   ; 32 rows on: 256 eighths, kept to 255
+    ASL togo:ROL A
+    ASL togo:ROL A
+    ASL togo:ROL A                      ; the eighths: the high byte, x 8
+    TAX
+    BNE counting                        ; (always: at least one)
+    ZA_UNREACHABLE
+.farthest
+    LDX #255
+.counting
+    LOG2_8                              ; A: the fraction, Y: the whole part
+    SEC:SBC loggrad:TAX
+    TYA:SBC loggrad+1
+    CLC:ADC #13
+    JSR exp2_sat                        ; the columns, u8.8
+    CPY count:BCS counted               ; all the side's
+    CMP #1                              ; C: a fraction
+    TYA:ADC #0:STA count
+.counted
+    LDA count:BNE some
+    RTS                                 ; none
+.some
+    BIT near:BVS backwards
+
+    \\ the end too near: from the start, cnt columns, and the row at the last
+
+    OFFSET_ROW offset0
+    STX line_y:STA line_y+1
+    STX row_move.row:STA row_move.row+1
+    CLC:LDA walk_c0:ADC count:STA line_x1
+    LDX count:DEX:TXA
+    SEC                                 ; forwards
+    JSR row_move
+    LDA row_move.row+1:STA line_endy
+    RTS
+
+    \\ the start too near: back from the end, cnt - 1 columns, from the row g (cnt - 1) nearer the
+    \\ screen's edge; just the end's own column is none
+
+.backwards
+    LDX count:DEX:BEQ none
+    STX back
+    OFFSET_ROW offset1
+    STA line_endy
+    STX row_move.row:STA row_move.row+1
+    SEC:LDA walk_c1:SBC back:STA line_x0
+    LDA walk_c1:STA line_x1
+    LDA back
+    CLC                                 ; back
+    JSR row_move
+    LDA row_move.row:STA line_y
+    LDA row_move.row+1:STA line_y+1
+.none
+    RTS
+
+    \\ an end too near: its offset's 32 rows or more, hundreds even, and the clip finds where the
+    \\ line crosses the screen's edge from the gradient: from the difference in 16 bits, and past
+    \\ 256 rows, where the offset saturates, in whole rows (it's then 224 of them at least)
+
+    ZA_AUTO2 rows0                      ; local: the start's offset in whole rows (w0)
+    ZA_AUTO2 apart                      ; local: the ends' offsets' difference in them (dw)
+
+.nearend
+    LDA offset0:AND offset0+1:CMP #&FF:BEQ saturated
+    LDA offset1:AND offset1+1:CMP #&FF:BEQ saturated
+    LDA rise:LDX rise+1
+    LOG2_16 16                          ; A: the fraction, X: the whole part
+    SEC:SBC logcolumns:STA loggrad
+    TXA:SBC logcolumns+1:STA loggrad+1
+    JMP capped
+.saturated
+    LDX logoffset0:LDA logoffset0+1
+    SEC:SBC #8                          ; less 8 * 256: in whole rows
+    JSR exp2_sat
+    STA rows0:STY rows0+1
+    LDX logoffset1:LDA logoffset1+1
+    SEC:SBC #8
+    JSR exp2_sat
+    SEC:SBC rows0:STA apart
+    TYA:SBC rows0+1:STA apart+1
+    BCS ordered
+    LDA apart:EOR #&FF:ADC #1:STA apart ; (C clear) the start's less the end's
+    LDA apart+1:EOR #&FF:ADC #0:STA apart+1
+.ordered
+    LDA apart:LDX apart+1
+    LOG2_16 16                          ; A: the fraction, X: the whole part
+    SEC:SBC logcolumns:STA loggrad
+    TXA:SBC logcolumns+1
+    CLC:ADC #8:STA loggrad+1            ; 8 * 256: whole rows back to 256ths
+.capped
+    LDX loggrad:LDA loggrad+1
+    JSR exp2_sat
+    CPY #&80:BCC near_grad
+    LDA #&FF:LDY #&7F                   ; kept to &7FFF, under the sign's bit
+.near_grad
+    JMP grad
+}
+
+\\ 2^(l / 256) (render.c's exp2_sat): 0 under 0, and &FFFF from 16 * 256 on.
+\\
+\\ Inputs:
+\\     X: l's low byte
+\\     A: its high byte, signed
+\\
+\\ Outputs:
+\\     A: the low byte
+\\     Y: the high byte
+\\     X: preserved
+
+.exp2_sat
+{
+    TAY:BMI none                        ; under 0
+    CPY #16:BCS full                    ; 16 * 256 on
+    EXP2_16 16
+    RTS
+.none
+    LDA #0:TAY
+    RTS
+.full
+    LDA #&FF:TAY
+    RTS
+}
+
+\\ A row moved along the line by some columns (row_move), forwards or back. The C checks it stays
+\\ on the screen, rows 0 to 64; this doesn't.
+\\
+\\ Inputs:
+\\     A: the columns
+\\     C: set to move forwards (rightwards), clear to move back
+\\     row: the row, u8.8
+\\     line_grad: the line's gradient
+\\
+\\ Outputs:
+\\     row: moved
+\\     A, X, Y: corrupted
+
+.row_move
+{
+    ZA_AUTO2 row                        ; in/out: the row
+    ZA_AUTO1 way                        ; local: bit 7 set to add
+    ZA_AUTO2 move                       ; local: the gradient times the columns
+
+    ROR way                             ; bit 7: forwards
+    MULTIPLIER                          ; by the columns
+    LDA line_grad+1:EOR way:STA way     ; forwards on a falling line, or back on a rising one: add
+    LDA line_grad+1:AND #&7F:TAY
+    MULTIPLY                            ; X: the whole part's product's low byte
+    STX move+1
+    LDY line_grad
+    MULTIPLY                            ; X, A: the fraction's product
+    STX move
+    CLC:ADC move+1:STA move+1           ; 16 bits, as the row stays on the screen
+    BIT way:BPL subtract
+    CLC
+    LDA row:ADC move:STA row
+    LDA row+1:ADC move+1:STA row+1
+    RTS
+.subtract
+    SEC
+    LDA row:SBC move:STA row
+    LDA row+1:SBC move+1:STA row+1
     RTS
 }
 

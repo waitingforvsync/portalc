@@ -266,3 +266,120 @@ MACRO LOG_SINE
 .second
     TAX
 ENDMACRO
+
+\\ 2^(l / 256), as pt_exp2, for l under bits * 256: below 8 * 256, EXP2_8's byte, or 256; from
+\\ there, 1.f shifted up exactly, k = n - 8 times, the bound picking how.
+\\
+\\ Inputs:
+\\     bits: the result's bound, 2^9 to 2^16
+\\     X: l's low byte
+\\     Y: its high byte, n, under bits
+\\
+\\ Outputs:
+\\     A: the low byte
+\\     Y: the high byte
+\\     X: preserved
+
+MACRO EXP2_16 bits
+    ASSERT bits >= 9 AND bits <= 16, "EXP2_16: a result under 2^9 to 2^16 (a byte's is EXP2_8's)"
+    ZA_AUTO1 high                       ; local: 1.f's high byte, shifted up
+
+    CPY #8:BCS big
+    EXP2_8                              ; A: the byte, C: 256 (with A 0)
+    LDY #0
+    BCC done
+    INY
+    BNE done                            ; (always)
+    ZA_UNREACHABLE
+.big
+    IF bits == 9
+        LDA expf,X:LDY #1               ; n = 8: no shift
+    ELIF bits <= 13
+
+        \\ a compare for each k, from the most: then a pair of shifts for each
+
+        LDA #1:STA high                 ; 1.f's 1
+        LDA expf,X
+        IF bits == 13
+            CPY #12:BCS four
+        ENDIF
+        IF bits >= 12
+            CPY #11:BCS three
+        ENDIF
+        IF bits >= 11
+            CPY #10:BCS two
+        ENDIF
+        CPY #9:BCS one
+        BCC shifted                     ; (always) k = 0: none
+        ZA_UNREACHABLE
+        IF bits == 13
+.four
+            ASL A:ROL high
+        ENDIF
+        IF bits >= 12
+.three
+            ASL A:ROL high
+        ENDIF
+        IF bits >= 11
+.two
+            ASL A:ROL high
+        ENDIF
+.one
+        ASL A:ROL high
+.shifted
+        LDY high
+    ELSE
+
+        \\ into a run of the pairs of shifts at the k-th from its end, self-modified
+
+        ZA_AUTO1 pairs                  ; local: the pairs to skip, bits - 1 - n
+
+        TYA:EOR #&FF:ADC #bits-1        ; (C set)
+        STA pairs
+        ASL A:ADC pairs                 ; 3 bytes a pair (C clear: under 8, doubled)
+        STA skip+1
+        LDA #1:STA high                 ; 1.f's 1
+        LDA expf,X
+.skip
+        BCC run                         ; (always: C clear) self-modified
+.run
+        FOR i = 1..bits-9
+            ASL A:ROL high
+        NEXT
+        LDY high
+    ENDIF
+.done
+ENDMACRO
+
+\\ Ready the multiply by a (pt_mulu8's quarter squares): the pointers at a in sq1, and at 255 - a
+\\ in sq2, so (ptr),Y reads sq1[a + Y] and sq2[255 - a + Y].
+\\
+\\ Inputs:
+\\     A: a
+\\
+\\ Outputs:
+\\     sq1loptr to sq2hiptr: at a
+\\     A: corrupted
+
+MACRO MULTIPLIER
+    STA sq1loptr:STA sq1hiptr
+    EOR #&FF
+    STA sq2loptr:STA sq2hiptr
+ENDMACRO
+
+\\ a * Y (pt_mulu8): (a + Y)^2 / 4 - (a - Y)^2 / 4, for the a MULTIPLIER readied.
+\\
+\\ Inputs:
+\\     Y: the other byte
+\\     sq1loptr to sq2hiptr: at a
+\\
+\\ Outputs:
+\\     X: the product's low byte
+\\     A: its high byte
+\\     Y: preserved
+
+MACRO MULTIPLY
+    LDA (sq1loptr),Y:SEC:SBC (sq2loptr),Y
+    TAX
+    LDA (sq1hiptr),Y:SBC (sq2hiptr),Y
+ENDMACRO

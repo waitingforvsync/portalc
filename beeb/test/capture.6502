@@ -1,5 +1,5 @@
 \\ test/capture.6502 - make test's check of the capture: its setup, root walk and the eye's cell's
-\\ sides from places in each cell, and HEIGHT_OF, for host/test_build.py to compare with the C's.
+\\ sides from places in each cell, made-up lines, and HEIGHT_OF, for host/test_build.py.
 
 \\ The camera's places, cell by cell, as the C's tool takes them: the centroid (the mean of its
 \\ ring's vertices, truncated), then 7/8 of the way from it to each vertex in turn, near the
@@ -33,16 +33,20 @@ place_cell = place_cells(1)
 PLACES = LEN(place_cell)
 ASSERT PLACES <= 256, "test: the places are a byte's"
 
+LINES_HEIGHT = 17*256+31                ; the made-up lines' height's log (captureref's)
+
 SECTION TestResults
 .t_capture1 SKIP PLACES                 ; the capture's Fletcher sums, by the camera's place
 .t_capture2 SKIP PLACES
 .t_height1  SKIP &100                   ; HEIGHT_OF's, by the eye's height
 .t_height2  SKIP &100
+.t_lines1   SKIP &100                   ; the made-up lines', by the start's place on the grid
+.t_lines2   SKIP &100
 ENDSECTION
 
 \\ From each place, at every angle: the capture's setup and root walk, then the eye's cell walked
 \\ as the walk walks it. Too many answers to keep, so each place's go into a pair of sums; then
-\\ every height from every eye height.
+\\ every height from every eye height, and the made-up lines.
 \\
 \\ Inputs:
 \\     none
@@ -50,6 +54,7 @@ ENDSECTION
 \\ Outputs:
 \\     t_capture1, t_capture2: the capture's sums, by the camera's place
 \\     t_height1, t_height2: HEIGHT_OF's, by the eye's height
+\\     t_lines1, t_lines2: the made-up lines', by the start's place on the grid
 
 .test_capture
 {
@@ -94,8 +99,8 @@ ENDSECTION
     BNE ends
 
     \\ the eye's cell, a side at a time until one ends at or past the portal's right column: each
-    \\ side, its ends' screen angles and columns, and its ends as its lines see them if it has
-    \\ columns
+    \\ side, its ends' screen angles and columns, and if it has columns its ends as its lines see
+    \\ them and its lines at the cell's ceiling and floor and the eye's height
 
 .step
     LDX walk_vi
@@ -103,11 +108,24 @@ ENDSECTION
     FOR v = {walk_u0, walk_u0+1, walk_u1, walk_u1+1, walk_c0, walk_c1}
         LDA v:FLETCHER sum1, sum2
     NEXT
-    LDA walk_c0:CMP walk_c1:BCS walked  ; no columns
+    LDA walk_c0:CMP walk_c1:BCC columns
+    JMP walked                          ; no columns
+.columns
     JSR edge_ends
     FOR v = {logdepth0, logdepth0+1, logdepth1, logdepth1+1, logcolumns, logcolumns+1}
         LDA v:FLETCHER sum1, sum2
     NEXT
+    LDY walk_vi
+    LDX visit_hclo,Y:LDA visit_hchi,Y
+    JSR make_line
+    LINE_SUMS sum1, sum2
+    LDY walk_vi
+    LDX visit_hflo,Y:LDA visit_hfhi,Y
+    JSR make_line
+    LINE_SUMS sum1, sum2
+    LDX #0:LDA #&80                     ; the eye's height: below, 0
+    JSR make_line
+    LINE_SUMS sum1, sum2
 .walked
     LDX walk_vi
     LDA walk_c1:CMP visit_xr,X
@@ -152,6 +170,47 @@ ENDSECTION
     LDA sum2:STA t_height2,X
     INC eye_z
     BNE eye
+
+    \\ made-up lines, for the paths the walk never takes, as captureref makes them: the ends'
+    \\ depths' logs on a grid from -512 in steps of 32, the start's by row and the end's by column,
+    \\ at a height whose log is 31 on from a multiple of 32, so the grid meets 13 * 256 - 1, the
+    \\ last offset on the screen. The column also picks the side's columns, 1 to 128, and whether
+    \\ the height's below the eye
+
+    ZA_AUTO1 row                        ; local: the start's place on the grid
+    ZA_AUTO1 column                     ; local: the end's
+
+    LDA #LO(-512):STA logdepth0
+    LDA #HI(-512):STA logdepth0+1
+    LDA #0:STA row:STA walk_c0
+.lines
+    LDA #LO(-512):STA logdepth1
+    LDA #HI(-512):STA logdepth1+1
+    LDA #0:STA column:STA sum1:STA sum2
+.line
+    LDA column:LSR A:TAX:INX:STX walk_c1
+    LOG2_8                              ; A: the fraction, Y: the whole part
+    STA logcolumns:STY logcolumns+1
+    LDA column:LSR A                    ; C: below
+    LDA #0:ROR A
+    ORA #HI(LINES_HEIGHT):LDX #LO(LINES_HEIGHT)
+    JSR make_line
+    LINE_SUMS sum1, sum2
+    CLC:LDA logdepth1:ADC #32:STA logdepth1
+    LDA logdepth1+1:ADC #0:STA logdepth1+1
+    INC column
+    BEQ row_done
+    JMP line
+.row_done
+    LDX row
+    LDA sum1:STA t_lines1,X
+    LDA sum2:STA t_lines2,X
+    CLC:LDA logdepth0:ADC #32:STA logdepth0
+    LDA logdepth0+1:ADC #0:STA logdepth0+1
+    INC row
+    BEQ lined
+    JMP lines
+.lined
     RTS
 }
 

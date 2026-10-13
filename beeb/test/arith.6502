@@ -15,8 +15,8 @@ SECTION TestResults
 .t_log8w    SKIP &100                   ; and whole part
 .t_log16s1  SKIP &200                   ; LOG2_16's Fletcher sums: bound b's by x's high byte,
 .t_log16s2  SKIP &200                   ; from 2^(b - 8) - 2
-.t_exp      SKIP &800                   ; EXP2_8's byte, by l
-.t_expc     SKIP &800                   ; and its carry, 0 or 1
+.t_exp1     SKIP 8                      ; EXP2_8's Fletcher sums, by l's high byte
+.t_exp2     SKIP 8
 .t_pnear1   SKIP &100                   ; POLAR's Fletcher sums near, by y's index
 .t_pnear2   SKIP &100
 .t_pfar1    SKIP &100                   ; and far
@@ -59,23 +59,27 @@ ENDSECTION
         TEST_LOG2_16 b
     NEXT
 
-    \\ EXP2_8, a high byte at a time, in Y, which it keeps: the stores step on a page each
+    \\ EXP2_8, a high byte at a time, in Y, which it keeps: each one's answers into a pair of sums,
+    \\ the byte, then the carry
+
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
 
     LDY #0
-    LDA #HI(t_exp):STA store+2
-    LDA #HI(t_expc):STA storec+2
 .erow
+    LDA #0:STA sum1:STA sum2
     LDX #0
 .ecol
     EXP2_8
-.store
-    STA t_exp,X
+    PHP                                 ; C: 256
+    FLETCHER sum1, sum2
+    PLP
     LDA #0:ROL A
-.storec
-    STA t_expc,X
+    FLETCHER sum1, sum2
     INX
     BNE ecol
-    INC store+2:INC storec+2
+    LDA sum1:STA t_exp1,Y
+    LDA sum2:STA t_exp2,Y
     INY:CPY #8
     BNE erow
 

@@ -10,6 +10,8 @@
 #include "render.h"
 #include "vcache.h"
 
+#define LINES_HEIGHT (17 * 256 + 31)    // the made-up lines' height's log
+
 static pt_map m;
 static pt_vcache vc;
 static pt_render r;
@@ -64,7 +66,8 @@ int main(void)
 
     // from each place, at every angle: the frame's setup and root walk, then the eye's cell
     // walked as the walk walks it, from the root side until a side ends at or past the portal's
-    // right column, with the ends of each side that has columns: as test/capture.6502 sums them
+    // right column, with the ends of each side that has columns and its lines at the cell's
+    // ceiling and floor and the eye's height: as test/capture.6502 sums them
     static place at[PT_MAX_CELLS + PT_MAX_SIDES];
     unsigned n = places(at);
     unsigned last = 0;    // frames whose walk reaches the eye's cell's last side, a turn on
@@ -89,6 +92,13 @@ int main(void)
                 if (w.c0 < w.c1) {
                     pt_ends e = pt_render_ends(&r, &w);
                     printf(",%d,%d,%d", e.logdepth0, e.logdepth1, e.logcolumns);
+                    pt_height hs[3] = {vs->hc, vs->hf, {.below = 1, .l = 0}};
+                    for (unsigned k = 0; k < 3; k++) {
+                        pt_line L = pt_render_line(&w, &e, hs[k]);
+                        printf(",%u,%u,%u", L.x0, L.x1, L.below);
+                        if (L.x0 < L.x1)
+                            printf(",%u,%u,%u", L.y, L.g, L.rl);
+                    }
                 }
                 turned |= w.u1 >= (int16_t)w.wrap;
                 if (w.c1 >= vs->xr)
@@ -102,8 +112,30 @@ int main(void)
         }
     }
     printf("],\n  \"places\": %u,\n", n);
+
     fprintf(stderr, "captureref: %u places, %u of %u frames reach the eye's cell's last side\n", n,
             last, n * 256);
+
+    // made-up lines, for the paths the walk never takes: the ends' depths' logs on a grid from
+    // -512 in steps of 32, the start's by row and the end's by column, at a height whose log is 31
+    // on from a multiple of 32, so the grid meets 13 * 256 - 1, the last offset on the screen; the
+    // column also picks the side's columns, 1 to 128, and whether the height's below the eye
+    printf("  \"lines\": [");
+    first = 1;
+    for (unsigned i = 0; i < 256; i++)
+        for (unsigned j = 0; j < 256; j++) {
+            pt_walk w = {.c0 = 0, .c1 = (uint8_t)(1 + (j >> 1))};
+            pt_ends e = {.logdepth0 = (int16_t)(-512 + 32 * (int)i),
+                         .logdepth1 = (int16_t)(-512 + 32 * (int)j),
+                         .logcolumns = (int16_t)pt_log2_8(w.c1)};
+            pt_height h = {.below = (uint8_t)(j & 1), .l = LINES_HEIGHT};
+            pt_line L = pt_render_line(&w, &e, h);
+            comma(&first);
+            printf("%u,%u,%u", L.x0, L.x1, L.below);
+            if (L.x0 < L.x1)
+                printf(",%u,%u,%u", L.y, L.g, L.rl);
+        }
+    printf("],\n");
 
     // every height from every eye height: whether it's below, and the log
     printf("  \"height\": [");

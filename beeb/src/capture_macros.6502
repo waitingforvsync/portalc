@@ -102,3 +102,27 @@ MACRO SCREEN_ANGLE_TO_COLUMN angle
     LDA #0
 .done
 ENDMACRO
+
+\\ The row an offset from the middle row is (make_line's): down from it below the eye, up from it
+\\ above, as the line is.
+\\
+\\ Inputs:
+\\     offset: the offset, u8.8, on the screen: under 32 rows
+\\     line_below: the line's side
+\\
+\\ Outputs:
+\\     X: the row's low byte, A: its high (u8.8, the rounding half in)
+
+MACRO OFFSET_ROW offset
+    BIT line_below:BMI down
+    SEC
+    LDA #LO(LINE_MIDDLE):SBC offset:TAX
+    LDA #HI(LINE_MIDDLE):SBC offset+1
+    BCS done                            ; (always: the offset's under the middle's)
+    ZA_UNREACHABLE
+.down
+    CLC
+    LDA #LO(LINE_MIDDLE):ADC offset:TAX
+    LDA #HI(LINE_MIDDLE):ADC offset+1
+.done
+ENDMACRO

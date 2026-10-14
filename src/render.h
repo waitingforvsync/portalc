@@ -249,4 +249,8 @@ typedef struct pt_line {
 // colour, for the tools' checks.
 pt_line pt_render_line(const pt_walk *w, const pt_ends *e, pt_height h);
 
+// Columns [x0, x1) of line L plotted into T from its row y at x0 (plot_run):
+// recorded, and toggle_end brought down, for the tools' checks.
+void pt_render_plot_run(pt_render *r, const pt_line *L, uint8_t x0, uint8_t x1, uint16_t y);
+
 #endif

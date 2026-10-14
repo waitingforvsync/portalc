@@ -1,5 +1,5 @@
 \\ test/capture_portal.6502 - make test_capture's PORTAL: the capture's check, with the engine it
-\\ needs: the map, the vertex cache and the capture.
+\\ needs: the map, the vertex cache, the capture and its plotters.
 
 INCLUDE "../src/memory.6502"
 INCLUDE "../src/constants.6502"
@@ -9,6 +9,7 @@ INCLUDE "../src/tables_macros.6502"
 INCLUDE "../src/map_macros.6502"
 INCLUDE "../src/vcache_macros.6502"
 INCLUDE "../src/capture_macros.6502"
+INCLUDE "../src/plot_macros.6502"
 INCLUDE "../src/entry_macros.6502"
 INCLUDE "test_macros.6502"
 INCLUDE "capture_macros.6502"
@@ -23,6 +24,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         INCLUDE "../src/vcache.6502"
         INCLUDE "../src/camera.6502"
         INCLUDE "../src/capture.6502"
+        INCLUDE "../src/plot.6502"
         INCLUDE "test.6502"
         INCLUDE "capture.6502"
     ENDSECTION

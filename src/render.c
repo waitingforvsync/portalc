@@ -307,6 +307,11 @@ static void plot_run(pt_render *r, const pt_line *L, uint8_t x0, uint8_t x1, uin
         pt_plot_steep(r->tb, &p, pat);
 }
 
+void pt_render_plot_run(pt_render *r, const pt_line *L, uint8_t x0, uint8_t x1, uint16_t y)
+{
+    plot_run(r, L, x0, x1, y);
+}
+
 
 // ---- the scan ----
 

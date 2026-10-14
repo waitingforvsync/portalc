@@ -1,0 +1,214 @@
+\\ plot.6502 - the plotters (plot.c's, and render.c's plot_run and record): runs of lines toggled
+\\ into T, recorded for the unplot, and each byte column's last toggled row kept for the fill.
+
+\\ A run to plot, and its colour; its gradient is its line's, line_grad. The plotters' cursor.
+
+ZA_AUTO1 run_x0                         ; its columns, [x0, x1)
+ZA_AUTO1 run_x1
+ZA_AUTO2 run_y                          ; its row at x0, u8.8, the rounding half in
+ZA_AUTO1 pattern_even                   ; the colour: the even scanlines' pattern
+ZA_AUTO1 pattern_odd                    ; and the odd's
+ZA_AUTO2 cursor                         ; a character block in T (pt_mode5_cur's, with Y)
+ZA_AUTO1 num_recs                       ; runs recorded for the unplotter
+
+\\ The runs plotted, as the unplotter wants them, and each byte column's last toggled row + 1:
+\\ where the fill can stop.
+
+SECTION Frame
+    FITPAGE MAX_RECS
+.rec_x0     SKIP MAX_RECS               ; the columns
+    FITPAGE MAX_RECS
+.rec_x1     SKIP MAX_RECS
+    FITPAGE MAX_RECS
+.rec_ylo    SKIP MAX_RECS               ; the row at x0
+    FITPAGE MAX_RECS
+.rec_yhi    SKIP MAX_RECS
+    FITPAGE MAX_RECS
+.rec_gradlo SKIP MAX_RECS               ; the gradient
+    FITPAGE MAX_RECS
+.rec_gradhi SKIP MAX_RECS
+    FITPAGE SCREEN_WIDTH/4
+.toggle_end SKIP SCREEN_WIDTH/4
+ENDSECTION
+
+\\ The pixels from one to its byte's right end, and from its left end to one; each one's bits.
+
+    FITPAGE 4
+.mask_from  EQUB &FF, &77, &33, &11
+    FITPAGE 4
+.mask_to    EQUB &88, &CC, &EE, &FF
+    FITPAGE 4
+.mode5_pixel EQUB &88, &44, &22, &11
+
+\\ By either of a row's scanlines: the next row's even one, 0 past the block's end; and the row
+\\ above's, negative above its top.
+
+    FITPAGE 8
+.mode5_down EQUB 2, 2, 4, 4, 6, 6, 0, 0
+    FITPAGE 8
+.mode5_up   EQUB &FF, &FF, 0, 0, 2, 2, 4, 4
+
+\\ Plot columns [x0, x1) of a line, wholly visible there, from its row at x0 (plot_run): a byte at
+\\ a time where it's shallow, a pixel a column where it's steep. Recorded first (record).
+\\
+\\ Inputs:
+\\     run_x0, run_x1, run_y: the run
+\\     line_grad: its gradient
+\\     pattern_even, pattern_odd: its colour, 0 for a bound's line, which toggles nothing
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     num_recs and the records: the run's added
+\\     toggle_end: on past each of its byte columns' lowest row
+\\     run_y: corrupted
+\\     A, X, Y: corrupted
+
+.plot_run
+{
+    LDX num_recs
+    LDA run_x0:STA rec_x0,X
+    LDA run_x1:STA rec_x1,X
+    LDA run_y:STA rec_ylo,X
+    LDA run_y+1:STA rec_yhi,X
+    LDA line_grad:STA rec_gradlo,X
+    LDA line_grad+1:STA rec_gradhi,X
+    INX:STX num_recs
+    AND #&7F:BNE steep                  ; a row a column or more
+    LDA line_grad:BNE plot_shallow
+
+    \\ flat: its row each byte column's lowest, then its bytes along it
+
+    ZA_AUTO1 last                       ; local: the last byte column
+
+    LDA run_x1:SEC:SBC #1:LSR A:LSR A:STA last
+    LDA run_x0:LSR A:LSR A:TAX
+.ends
+    LDA run_y+1:NOTE_TOGGLE
+    CPX last:INX:BCC ends               ; the last noted
+    LDX run_y+1
+    JMP plot_flat
+.steep
+    JMP plot_steep
+}
+
+\\ A shallow run (pt_plot_shallow), under a row a column, not flat: falling or rising. Its row and
+\\ fraction are counted in run_y as it goes.
+\\
+\\ Inputs:
+\\     run_x0, run_x1, run_y: the run
+\\     line_grad: its gradient
+\\     pattern_even, pattern_odd: its colour
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     toggle_end: on past each of its byte columns' lowest row
+\\     run_y: corrupted
+\\     A, X, Y: corrupted
+
+.plot_shallow
+{
+    ZA_AUTO1 end                        ; local: x1 DIV 4, the byte column past the whole bytes
+
+    LDX run_y+1
+    LDA run_x0:MODE5_AT
+    LDA run_x0:LSR A:LSR A:TAX          ; the byte column
+    LDA run_x1:LSR A:LSR A:STA end
+    BIT line_grad+1:BPL falling
+    JMP rising
+.falling
+    SHALLOW TRUE, line_grad, run_y, run_y+1, end
+.rising
+    SHALLOW FALSE, line_grad, run_y, run_y+1, end
+}
+
+\\ A steep run (pt_plot_steep), a row a column or more: falling or rising. Its row and fraction
+\\ are counted in run_y as it goes.
+\\
+\\ Inputs:
+\\     run_x0, run_x1, run_y: the run
+\\     line_grad: its gradient
+\\     pattern_even, pattern_odd: its colour
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     toggle_end: on past each of its byte columns' lowest row
+\\     run_y: corrupted
+\\     A, X, Y: corrupted
+
+.plot_steep
+{
+    ZA_AUTO1 grad_whole                 ; local: the gradient's whole rows a column
+    ZA_AUTO1 count                      ; local: the columns to go
+    ZA_AUTO1 mask                       ; local: the column's pixel's bits
+
+    LDA line_grad+1:AND #&7F:STA grad_whole
+    LDA run_x1:SEC:SBC run_x0:STA count
+    LDA run_x0:AND #3:TAY
+    LDA mode5_pixel,Y:STA mask
+    LDX run_y+1
+    LDA run_x0:MODE5_AT
+    LDA run_x0:LSR A:LSR A:TAX          ; the byte column
+    CLC
+    BIT line_grad+1:BPL falling
+    JMP rising
+.falling
+    STEEP TRUE, grad_whole, line_grad, run_y, run_y+1, count, mask
+.rising
+    STEEP FALSE, grad_whole, line_grad, run_y, run_y+1, count, mask
+}
+
+\\ A flat run on one row (pt_plot_flat): its end bytes masked, whole bytes between. Y is the
+\\ offset in the row's page, so a byte on is 8 more.
+\\
+\\ Inputs:
+\\     run_x0, run_x1: its columns, [x0, x1)
+\\     X: its row, 0 to 64
+\\     pattern_even, pattern_odd: its colour
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     cursor: its row's page
+\\     A, X, Y: corrupted
+
+.plot_flat
+{
+    ZA_AUTO1 scanline                   ; local: the row's even scanline in its blocks
+
+    LDA trowhi,X:STA cursor+1
+    LDA #0:STA cursor
+    TXA:AND #3:ASL A:STA scanline       ; (row AND 3) * 2, and C clear
+    LDA run_x0:AND #3:TAX               ; the first column's pixel
+    LDY run_x1:DEY                      ; the last column
+    TYA:EOR run_x0:AND #&FC:BNE wide    ; in another byte
+
+    \\ one byte: the first column's pixels to the last's
+
+    TYA:AND #3:TAY
+    LDA mask_from,X:AND mask_to,Y:TAX
+    LDA run_x0:AND #&FC:ASL A:ORA scanline:TAY
+    MODE5_EOR_X
+    RTS
+
+    \\ wider: the first byte from the first column, whole bytes, then the last byte to the last
+
+    ZA_AUTO1 last                       ; local: the last byte's offset in the page
+    ZA_AUTO1 last_mask                  ; local: its pixels
+
+.wide
+    TYA:AND #&FC:ASL A:ORA scanline:STA last
+    TYA:AND #3:TAY
+    LDA mask_to,Y:STA last_mask
+    LDA mask_from,X:TAX
+    LDA run_x0:AND #&FC:ASL A:ORA scanline:TAY
+    MODE5_EOR_X                         ; (C still clear)
+    TYA:ADC #7:TAY                      ; the next byte's even scanline
+    CPY last:BEQ end
+.whole
+    MODE5_EOR #&FF
+    TYA:ADC #7:TAY
+    CPY last:BNE whole                  ; (C clear while under)
+.end
+    LDX last_mask
+    MODE5_EOR_X
+    RTS
+}

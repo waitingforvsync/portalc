@@ -27,11 +27,26 @@ in `src/`, which models it. Read this before writing any.
   corrupts goes under `Outputs:` where it matters, most of all for a macro.
   How it works goes in its trailing comments, if anywhere. Then a blank
   line, then its label.
-- Declare each `ZA_AUTO` next to where it's used: after the open brace for
-  one the whole routine uses, after a part's `\\` comment for one only that
-  part uses. Every part gets its own, named for what it holds there: never
-  one variable reused for unrelated jobs. Baron shares the bytes wherever
-  the lives don't overlap.
+- Declare each `ZA_AUTO` next to where it's used, in the smallest scope it
+  can have: after the open brace for one the whole routine uses, after a
+  part's `\\` comment for one only that part uses. Every part gets its own,
+  named for what it holds there. Baron shares the bytes wherever the lives
+  don't overlap.
+- Be pragmatic about inputs, though: one that's a one-shot argument, which
+  nothing wants after the call, can be worked on in place, and is listed as
+  corrupted under `Outputs:` (a shallow run counts its row and fraction in
+  `run_y`).
+- A routine's inputs and outputs can be declared in its own scope, and the
+  caller reaches them as `routine.var` (`row_move.row`). Baron's zero-page
+  guide encourages it: the caller needn't know where the value lives, and
+  a result can be handed straight to the next routine.
+- A macro never reaches into its caller's scope. A `ZA_AUTO` only the
+  macro uses is declared in it, by the same rule (`SHALLOW`'s `fraction`
+  at its top, `grad2` after the part that uses it), and each expansion
+  gets its own, sharing bytes where their lives don't overlap. One the
+  caller sets or reads too is the caller's, passed in as an argument
+  (`SHALLOW down, grad, row, count, start, end`), and so on down to the
+  macros it calls. File-scope state (`cursor`, `run_y`) is used by name.
 - `ZA_AUTO`s, then a blank line, then the code. A `ZA_AUTO` can have a
   trailing comment: in, out or local, and what it is.
 - A routine's parts are separated by a blank line, a `\\` comment saying
@@ -149,6 +164,11 @@ The rest:
   element 0, unused, and is read as it is. One numbered from 0 (vc_slot, by
   vertex) is looped over upwards, or down to 0.
 - Hot-path code like multiplies goes inline, as a `MACRO`.
+- A macro that takes a bound (`LOG2_16 bits`, `EXP2_16 bits`) gets the
+  tightest one the value can reach, worked out at the call: the bound picks
+  the expansion, and a loose one costs compares and bytes. `make_line`'s
+  ends on the screen are `EXP2_16 EDGE_LOG`, 13; 16 only where the value
+  can reach &FFFF. Say why in a trailing comment where it isn't plain.
 - A file's macros go in a file of their own beside it, `vcache_macros.6502`
   for `vcache.6502`, which `portal.6502` includes first, before any code,
   so no macro waits on the order of the includes. The checks' are in
@@ -186,14 +206,19 @@ The rest:
   `portalc_tables`; `make test_arith`, the macros against
   `portalc_arithref`; `make test_vcache`, the vertex cache against
   `portalc_vcacheref`; `make test_capture`, the capture against
-  `portalc_captureref`.
+  `portalc_captureref`; `make test_plot`, the plotters against
+  `portalc_plotref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
   needs: the loader runs it and stops, leaving its answers in HAZEL, &C000
   to &DFFF (`test/test.6502`), for `host/test_build.py` to compare. A new
   check is a new program and a name in the Makefile's `CHECKS`. Break it
-  once on purpose, to see the check fail.
+  once on purpose, to see the check fail: each path, and a macro expanded
+  more than one way (falling and rising) in each way, through an `IF` on
+  its parameter. A break that writes outside its buffer can crash the check
+  ("never finished"), which is a fail too, but one that shows a difference
+  says where.
 - Sums are Fletcher's, mod 255 (`FLETCHER`, a carry out added back in).
   Mod 256, a byte that's the same in every frame of a row of 256 adds
   nothing, so an error in it can't show.

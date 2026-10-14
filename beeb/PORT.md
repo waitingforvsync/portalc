@@ -81,7 +81,11 @@ ambitions.
 | `walk`, `descend`, `enter` | — | not started |
 | `process_edge`, `edge_line` | — | not started |
 | `scan_of`, `scan` and the column functions, `close_columns`, `flat_top` | — | not started |
-| `record`, `plot_run`, plot.c's `pt_plot_` | — | not started |
+| `plot_run`, with `record` | `plot_run` (plot.6502) | done: 9,600 made-up runs at 75 gradients, each run's record and `toggle_end`, and T after each gradient's, `portalc_plotref` |
+| `pt_plot_shallow`, `pt_plot_steep` | `plot_shallow`, `plot_steep`, through `SHALLOW` and `STEEP` (plot_macros.6502), each expanded falling and rising | done, in `plot_run`'s check |
+| `pt_plot_flat` | `plot_flat` | done: every x0 < x1 |
+| mode5.h's cursor | `MODE5_AT`, `MODE5_EOR` (and `MODE5_EOR_X`, the mask in X), `MODE5_DOWN`, `MODE5_UP`, `MODE5_NEXT` | done, in the plotters' checks |
+| `pt_mode5_plot` | — | not ported: only `close_columns` uses it (step 4), and it never ran in the sweep |
 | `inst_new`, `inst_clip`, `inst_hide` | — | not started (sprites) |
 
 ### After the capture
@@ -90,7 +94,7 @@ ambitions.
 |---|---|---|
 | `pt_mode5_fill` (mode5.c) | `fill` (fill.6502) | stub |
 | `pt_sprite_plot` (sprite.c) | `sprites` (sprites.6502) | stub |
-| `unplot` (render.c), plot.c's `pt_unplot_` | `unplot` (unplot.6502) | stub |
+| `unplot` (render.c), plot.c's `pt_unplot_` | `unplot` (unplot.6502) | stub. The records it reads are made |
 
 ## Names
 
@@ -129,6 +133,21 @@ or two bytes of zero page.
 | `pt_line.g`, `.rl` | `line_grad`, `line_endy` |
 | `pt_line.ce`, `.co` | — (the caller sets the colour) |
 | `PT_EDGE_OFF`, `PT_EDGE_L` | `EDGE_OFFSET`, `EDGE_LOG` (13, the log's high byte) |
+
+### Plotting
+
+| C | 6502 |
+|---|---|
+| `pt_run.x0`, `.x1`, `.y0` and `.yf` | `run_x0`, `run_x1`, `run_y` (the row in the high byte) |
+| `pt_run.g` | `line_grad`: a run's gradient is always its line's |
+| `pt_pattern.e`, `.o` | `pattern_even`, `pattern_odd` |
+| `pt_mode5_cur` | `cursor` (the block), with Y |
+| `pt_mode5_at`, `_eor`, `_down`, `_up`, `_next` | `MODE5_AT`, `MODE5_EOR`, `MODE5_DOWN`, `MODE5_UP`, `MODE5_NEXT` |
+| `pt_rec.x0`, `.x1`, `.y`, `.g` | `rec_x0`, `rec_x1`, `rec_ylo`/`rec_yhi`, `rec_gradlo`/`rec_gradhi` |
+| record's `toggle_end` update | `NOTE_TOGGLE` (A the row, X the byte column) |
+| the plotters' `gm` | `grad`; and `grad2`, `grad3`, `grad4`, `grad_less1` |
+| `pt_plot_steep`'s `gi`, `gf` | `grad_whole`; `gf` is `line_grad`'s low byte itself (`STEEP`'s `grad_fraction`) |
+| `f` | `fraction` (rising, 255 less it): `run_y` itself |
 
 ### The vertex cache
 
@@ -169,7 +188,8 @@ They have the same names as `pt_arith_tables`, except:
 ### Constants
 
 `PT_` comes off: `PT_SCREEN_WIDTH` is `SCREEN_WIDTH`, `PT_CAM_HEIGHT` is
-`CAM_HEIGHT`, `PT_IN_FWD` is `IN_FWD`, `PT_MAX_VCACHE` is `MAX_VCACHE`.
+`CAM_HEIGHT`, `PT_IN_FWD` is `IN_FWD`, `PT_MAX_VCACHE` is `MAX_VCACHE`,
+`PT_MAX_RECS` is `MAX_RECS`.
 They're all in constants.6502. `POST_NEAR` and `POST_SCALE` name numbers the
 C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 
@@ -204,13 +224,35 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - **`edge_ends` adds log sines negated** (`LOG_SINE` points at `lsec16`), so
   where the C halves a sum of two log sines, rounding down, the 6502 halves
   their negations' sum + 1.
+- **The plotters work out `toggle_end`, not `record`.** They pass every byte
+  column's lowest row anyway: a falling run's at the byte's last column, a
+  rising run's at its first. They count the row as they move, and
+  `NOTE_TOGGLE` it. So `plot_run` only stores the record, and a colourless
+  run (a bound's line) goes through its plotter EORing nothing, where the C
+  records it and plots nothing. `plot_flat` itself notes nothing, as the C's
+  hidden runs record nothing; `plot_run` notes a visible flat run's columns.
+- **Rising runs keep 255 less the fraction**, so a step's borrow up is a
+  carry, and the two ways share their adds.
+- **Shallow whole bytes don't all take the tree.** Under a gradient of 64 a
+  byte's four steps carry once at most: one add of 4g gives the fraction,
+  and if it carried, compares with g, 2g and 3g give the step that did. From
+  64 the tree runs, and a step after a carry adds g - 1, the carry known.
+- **`plot_flat` keeps Y as the offset in the row's page**, the cursor's low
+  byte 0, so a byte on is `TYA:ADC #7:TAY` from the odd scanline.
+- **`record` doesn't check for too many records.** The C panics past
+  `MAX_RECS`.
+- **`plot_run` corrupts `run_y`.** A shallow or steep run counts its
+  fraction and row in it as it goes (rising, 255 less the fraction), rather
+  than copy them. Nothing reads it after; the record is taken first.
+- **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
+  capture only resets them.
 
 ## Next
 
 - The walk proper, a step at a time, each checked against the C:
   1. ~~The ends of a side: `edge_ends`, and `side_next`.~~ Done.
   2. ~~Lines: `make_line`, which needs a 16-bit exp and a multiply.~~ Done.
-  3. The plotters into T, and `record` with `toggle_end`.
+  3. ~~The plotters into T, and `record` with `toggle_end`.~~ Done.
   4. The clips: `scan`, `clip_plain`, `clip_floor`, `clip_ceil`,
      `close_columns`.
   5. The walk: `walk`, `process_edge`, `enter`, `descend`, the kept lines.
@@ -222,3 +264,6 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - Later: sprites, then moving, collision and `pt_vcache_locate`.
 - To revisit: wiping all of `Persist` in one go in `map_init` (15 bytes
   against 23), which would mean nothing in `Persist` is set before it runs.
+- To revisit: the plotters' inputs (`run_x0`, `run_x1`, `run_y`) are file
+  scope. Declared in a routine's own scope instead (`plot_run.x0`), as
+  Baron's guide encourages, once the scan shows who calls what.

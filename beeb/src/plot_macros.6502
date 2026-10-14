@@ -1,0 +1,559 @@
+\\ plot_macros.6502 - the plotters' macros: mode5.h's cursor into T, and the parts of the shallow
+\\ and steep runs, which work on plot_shallow's and plot_steep's locals.
+
+\\ The cursor at a row's pixel column (pt_mode5_at): its character block in T, and the row's even
+\\ scanline in it.
+\\
+\\ Inputs:
+\\     A: the pixel column, 0 to 127
+\\     X: the row, 0 to 64 (64: the junk row's first)
+\\
+\\ Outputs:
+\\     cursor: the block
+\\     Y: the row's even scanline
+\\     A: corrupted
+\\     C: clear
+
+MACRO MODE5_AT
+    AND #&FC:ASL A:STA cursor           ; the byte column's block: column DIV 4 * 8
+    LDA trowhi,X:STA cursor+1
+    TXA:AND #3:ASL A:TAY                ; (row AND 3) * 2
+ENDMACRO
+
+\\ EOR the colour's patterns into the row at the cursor, under a mask (pt_mode5_eor): the even
+\\ pattern into its even scanline, the odd into its odd.
+\\
+\\ Inputs:
+\\     mask: the pixels, a constant (#) or in zero page
+\\     cursor, Y: the row's even scanline
+\\     pattern_even, pattern_odd: the colour
+\\
+\\ Outputs:
+\\     Y: the row's odd scanline
+\\     A: corrupted
+\\     C: preserved
+
+MACRO MODE5_EOR "#" mask
+    IF mask == &FF
+        LDA pattern_even:EOR (cursor),Y:STA (cursor),Y
+        INY
+        LDA pattern_odd:EOR (cursor),Y:STA (cursor),Y
+    ELSE
+        LDA pattern_even:AND #mask:EOR (cursor),Y:STA (cursor),Y
+        INY
+        LDA pattern_odd:AND #mask:EOR (cursor),Y:STA (cursor),Y
+    ENDIF
+ENDMACRO
+
+MACRO MODE5_EOR mask
+    LDA pattern_even:AND mask:EOR (cursor),Y:STA (cursor),Y
+    INY
+    LDA pattern_odd:AND mask:EOR (cursor),Y:STA (cursor),Y
+ENDMACRO
+
+\\ MODE5_EOR with the mask in X.
+\\
+\\ Inputs:
+\\     X: the pixels
+\\     cursor, Y: the row's even scanline
+\\     pattern_even, pattern_odd: the colour
+\\
+\\ Outputs:
+\\     Y: the row's odd scanline
+\\     A: corrupted
+\\     X, C: preserved
+
+MACRO MODE5_EOR_X
+    TXA:AND pattern_even:EOR (cursor),Y:STA (cursor),Y
+    INY
+    TXA:AND pattern_odd:EOR (cursor),Y:STA (cursor),Y
+ENDMACRO
+
+\\ Down a row (pt_mode5_down): the next row's even scanline, and past the block's last row, the
+\\ top of the block below, a character row (a page) on.
+\\
+\\ Inputs:
+\\     cursor, Y: either of the row's scanlines
+\\
+\\ Outputs:
+\\     cursor, Y: the next row's even scanline
+\\     A: corrupted
+\\     C: preserved
+
+MACRO MODE5_DOWN
+    LDA mode5_down,Y:TAY:BNE done       ; 0: past the block's end
+    INC cursor+1
+.done
+ENDMACRO
+
+\\ Up a row (pt_mode5_up): the row above's even scanline, and above the block's first row, the
+\\ bottom of the block above.
+\\
+\\ Inputs:
+\\     cursor, Y: either of the row's scanlines
+\\
+\\ Outputs:
+\\     cursor, Y: the row above's even scanline
+\\     A: corrupted
+\\     C: preserved
+
+MACRO MODE5_UP
+    LDA mode5_up,Y:TAY:BPL done         ; negative: above the block's top
+    LDY #6:DEC cursor+1
+.done
+ENDMACRO
+
+\\ Right a byte column (pt_mode5_next): the next block along the character row.
+\\
+\\ Inputs:
+\\     cursor: the block
+\\     C: clear
+\\
+\\ Outputs:
+\\     cursor: the next block
+\\     A: corrupted
+\\     C: clear, but set past the row's last block
+
+MACRO MODE5_NEXT
+    LDA cursor:ADC #8:STA cursor
+ENDMACRO
+
+\\ Note a toggle at a row in a byte column, for the fill (record's): its toggle_end moved on past
+\\ the row, if it's not past it already.
+\\
+\\ Inputs:
+\\     A: the row
+\\     X: the byte column
+\\
+\\ Outputs:
+\\     toggle_end,X: the row + 1 at least
+\\     A: corrupted
+\\     C: clear
+
+MACRO NOTE_TOGGLE
+    CMP toggle_end,X:BCC done           ; above where the fill stops already
+    ADC #0:STA toggle_end,X             ; (C set) the row + 1
+.done
+ENDMACRO
+
+\\ On to one of four places by a pixel's place in its byte.
+\\
+\\ Inputs:
+\\     A: the place, 0 to 3
+\\     place0 to place3: where each goes
+\\
+\\ Outputs:
+\\     A: corrupted
+\\     C: clear
+
+MACRO BRANCH_BY_PIXEL place0, place1, place2, place3
+    LSR A:BCS odd                       ; bit 0
+    BNE place2                          ; then bit 1
+    BEQ place0                          ; (always)
+    ZA_UNREACHABLE
+.odd
+    CLC                                 ; (Z kept)
+    BEQ place1
+    BNE place3                          ; (always)
+    ZA_UNREACHABLE
+ENDMACRO
+
+\\ A shallow run's row a row on, the way it goes, its row's count kept.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     row: the row's count
+\\     cursor, Y: either of the row's scanlines
+\\
+\\ Outputs:
+\\     cursor, Y: the next row's even scanline
+\\     row: on by one
+\\     A: corrupted
+\\     C: preserved
+
+MACRO ROW_ON down, row
+    IF down
+        MODE5_DOWN:INC row
+    ELSE
+        MODE5_UP:DEC row
+    ENDIF
+ENDMACRO
+
+\\ A shallow run's step to the next column, after its pixel (carry_down, borrow_up): the fraction
+\\ on, and on its carry, off to a row on (SHALLOW_CARRY).
+\\
+\\ Inputs:
+\\     fraction: the row's fraction
+\\     grad: the gradient
+\\     carry: where a carry goes
+\\     cursor, Y: the pixel's row's odd scanline
+\\     C: clear
+\\
+\\ Outputs:
+\\     cursor, Y: the next column's row's even scanline, if no carry
+\\     fraction: the next column's
+\\     A: corrupted
+\\     C: clear, if no carry
+
+MACRO SHALLOW_STEP fraction, grad, carry
+    LDA fraction:ADC grad:STA fraction
+    BCS carry
+    DEY                                 ; back to the row's even scanline
+ENDMACRO
+
+\\ A shallow run's step's carry, out of the way of the pixels: a row on, then back to the next.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     row: the row's count
+\\     next: the next pixel
+\\     cursor, Y: the pixel's row's odd scanline
+\\
+\\ Outputs:
+\\     cursor, Y: the next row's even scanline
+\\     row: on by one
+\\     A: corrupted
+\\     C: clear
+
+MACRO SHALLOW_CARRY down, row, next
+    ROW_ON down, row
+    CLC
+    JMP next
+ENDMACRO
+
+\\ A shallow run one way (pt_plot_shallow's): whole bytes four pixels at a time, the bytes at its
+\\ ends a pixel at a time, each byte column's lowest row noted for the fill.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     grad: the gradient
+\\     fraction: the row's fraction at x0
+\\     row: the row at x0
+\\     end: x1 DIV 4, the byte column past the whole bytes
+\\     run_x0, run_x1: the run's columns
+\\     cursor, Y: x0's row's even scanline
+\\     X: x0's byte column
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     toggle_end: on past each byte column's lowest row
+\\     fraction, row: corrupted, the fraction's and the row's counts as they went
+\\     A, X, Y: corrupted
+
+MACRO SHALLOW down, grad, fraction, row, end
+    ZA_AUTO1 count                      ; local: the columns to go, in the run's last byte
+
+    IF NOT(down)
+        LDA fraction:EOR #&FF           ; 255 - f: each step's borrow up as a carry
+        STA fraction
+    ENDIF
+
+    \\ the first byte's pixels to its end, if the run starts inside it and goes on past it
+
+    LDA run_x0:AND #3:BEQ bytes         ; on a byte's start: none (inside it: the tail's)
+    CPX end:BEQ to_single               ; inside the byte (C clear on: X is under end)
+    IF NOT(down)
+        LDA row:NOTE_TOGGLE             ; a rising byte's lowest row: its first column's
+        LDA run_x0:AND #3
+    ENDIF
+    BRANCH_BY_PIXEL head1, head1, head2, head3
+.to_single
+    JMP single
+.head1
+    MODE5_EOR #&44
+    SHALLOW_STEP fraction, grad, head_carry1
+.head2
+    MODE5_EOR #&22
+    SHALLOW_STEP fraction, grad, head_carry2
+.head3
+    MODE5_EOR #&11
+    IF down
+        LDA row:NOTE_TOGGLE             ; a falling byte's lowest row: its last column's
+    ENDIF
+    SHALLOW_STEP fraction, grad, head_carry3
+.head_end
+    MODE5_NEXT
+    INX
+
+    \\ whole bytes. Under 64 a byte's four steps carry once at most, so one add of 4 grad finds
+    \\ the fraction, and if it carried, compares find which step did: 4 - the fraction DIV grad.
+    \\ From 64 a tree of steps picks the byte's rows, each step's carry known on its path, so a
+    \\ step after a carry adds grad - 1. The fourth step's carry says if the next byte is a row on
+
+    ZA_AUTO1 grad_less1                 ; local: grad - 1, a step after a carry (from 64)
+    ZA_AUTO1 grad2                      ; local: 2, 3 and 4 times it (under 64)
+    ZA_AUTO1 grad3
+    ZA_AUTO1 grad4
+
+.bytes
+    CPX end:BCC some                    ; (C clear) X: the byte column
+    JMP tail
+.head_carry1                            ; (the head's carries, in reach of it)
+    SHALLOW_CARRY down, row, head2
+.head_carry2
+    SHALLOW_CARRY down, row, head3
+.head_carry3
+    SHALLOW_CARRY down, row, head_end
+.some
+    LDA grad:CMP #64:BCS large
+    ASL A:STA grad2                     ; (C clear, and kept: 4 grad is under 256)
+    ADC grad:STA grad3
+    ADC grad:STA grad4
+
+    \\ under 64: four on one row, unless the add of 4 grad carried
+
+.small
+    IF NOT(down)
+        LDA row:NOTE_TOGGLE             ; a rising byte's lowest row: its first column's
+    ENDIF
+    LDA fraction:ADC grad4:STA fraction ; four steps on
+    BCS mixed                           ; one carried
+    MODE5_EOR #&FF                      ; four on one row, and the next byte's
+.small_same
+    IF down
+        LDA row:NOTE_TOGGLE             ; a falling byte's lowest row: its last column's
+    ENDIF
+    DEY                                 ; back to the row's even scanline
+.small_next
+    MODE5_NEXT
+    INX:CPX end:BCC small
+    JMP tail
+.large
+    SBC #1:STA grad_less1               ; (C set) grad - 1
+    CLC
+    JMP big
+.mixed                                  ; A: the fraction four steps on, C set
+    CMP grad2:BCS early                 ; at step 1 or 2
+    CMP grad:BCC step4
+    MODE5_EOR #&EE                      ; at step 3
+    ROW_ON down, row:MODE5_EOR #&11
+    IF NOT(down) : CLC : ENDIF          ; (falling, the note clears it)
+    JMP small_same
+.step4                                  ; four on one row, the next byte's a row on
+    MODE5_EOR #&FF
+    IF down
+        LDA row:NOTE_TOGGLE             ; (C clear)
+        ROW_ON down, row
+        BCC small_next                  ; (always)
+    ELSE
+        ROW_ON down, row
+        CLC:BCC small_next              ; (always)
+    ENDIF
+    ZA_UNREACHABLE
+.early
+    CMP grad3:BCC step2
+    MODE5_EOR #&88                      ; at step 1
+    ROW_ON down, row:MODE5_EOR #&77
+    IF NOT(down) : CLC : ENDIF
+    JMP small_same
+.step2
+    MODE5_EOR #&CC:ROW_ON down, row:MODE5_EOR #&33
+    JMP small_same
+
+    \\ 64 on: the tree, from the top. Each node is named by the carries above it. The loop's end,
+    \\ and node001, which falls into it, sit before the top, so node1 and node01 are in reach
+
+.node001                                ; C set
+    ADC grad_less1:STA fraction         ; step 4
+    MODE5_EOR #&EE:ROW_ON down, row:MODE5_EOR #&11
+.big_end                                ; C: the fourth step's carry
+    BCS big_on
+    IF down
+        LDA row:NOTE_TOGGLE
+    ENDIF
+    DEY
+.big_next
+    MODE5_NEXT
+    INX:CPX end:BCS big_tail
+.big
+    IF NOT(down)
+        LDA row:NOTE_TOGGLE
+    ENDIF
+    LDA fraction
+    ADC grad:BCS node1                  ; step 1
+    ADC grad:BCS node01                 ; step 2
+    ADC grad:BCS node001                ; step 3
+    ADC grad:STA fraction               ; step 4, which carries: 4 grad is 256 or more
+    MODE5_EOR #&FF                      ; 000: four on one row
+.big_on                                 ; the next byte a row on
+    IF down
+        LDA row:NOTE_TOGGLE             ; (C clear)
+        ROW_ON down, row
+    ELSE
+        ROW_ON down, row
+        CLC
+    ENDIF
+    BCC big_next                        ; (always)
+    ZA_UNREACHABLE
+.big_tail
+    JMP tail
+.node1
+    ADC grad_less1:BCS to11
+    ADC grad:BCS to101
+    ADC grad:STA fraction               ; 100
+    MODE5_EOR #&88:ROW_ON down, row:MODE5_EOR #&77
+    JMP big_end
+.node01
+    ADC grad_less1:BCS node011
+    ADC grad:STA fraction               ; 010
+    MODE5_EOR #&CC:ROW_ON down, row:MODE5_EOR #&33
+    JMP big_end
+.to101
+    JMP node101
+.to11
+    JMP node11
+.node011
+    ADC grad_less1:STA fraction
+    MODE5_EOR #&CC:ROW_ON down, row:MODE5_EOR #&22:ROW_ON down, row:MODE5_EOR #&11
+    JMP big_end
+.node101
+    ADC grad_less1:STA fraction
+    MODE5_EOR #&88:ROW_ON down, row:MODE5_EOR #&66:ROW_ON down, row:MODE5_EOR #&11
+    JMP big_end
+.node11
+    ADC grad_less1:BCS node111
+    ADC grad:STA fraction               ; 110
+    MODE5_EOR #&88:ROW_ON down, row:MODE5_EOR #&44:ROW_ON down, row:MODE5_EOR #&33
+    JMP big_end
+.node111
+    ADC grad_less1:STA fraction
+    MODE5_EOR #&88:ROW_ON down, row:MODE5_EOR #&44:ROW_ON down, row:MODE5_EOR #&22
+    ROW_ON down, row:MODE5_EOR #&11
+    JMP big_end
+.done                                   ; (the tail's, with no pixels)
+    RTS
+
+    \\ a run inside one byte, from past its start: its pixels from its first, then done
+
+.single                                 ; C set: X is end
+    LDA run_x1:SBC run_x0:STA count     ; its columns
+    IF NOT(down)
+        LDA row:NOTE_TOGGLE             ; a rising byte's lowest row: its first column's
+    ENDIF
+    LDA run_x0:AND #3
+    BRANCH_BY_PIXEL pixel1, pixel1, pixel2, pixel3
+
+    \\ the last byte's pixels from its start, if the run ends inside it, on into the pixels. A run
+    \\ inside one byte from its start comes here too, with no whole bytes before
+
+.tail
+    LDA run_x1:AND #3:BEQ done
+    STA count
+    IF down
+        CLC
+    ELSE
+        LDA row:NOTE_TOGGLE             ; (C clear)
+    ENDIF
+.pixel0
+    MODE5_EOR #&88
+    DEC count:BEQ last
+    SHALLOW_STEP fraction, grad, carry0
+.pixel1
+    MODE5_EOR #&44
+    DEC count:BEQ last
+    SHALLOW_STEP fraction, grad, carry1
+.pixel2
+    MODE5_EOR #&22
+    DEC count:BEQ last
+    SHALLOW_STEP fraction, grad, carry2
+.pixel3
+    MODE5_EOR #&11
+.last
+    IF down
+        LDA row:NOTE_TOGGLE             ; a falling byte's lowest row: its last column's
+    ENDIF
+    RTS
+.carry0
+    SHALLOW_CARRY down, row, pixel1
+.carry1
+    SHALLOW_CARRY down, row, pixel2
+.carry2
+    SHALLOW_CARRY down, row, pixel3
+ENDMACRO
+
+\\ A steep run's step to the next column, after its pixel: the gradient's whole rows on, and one
+\\ more for the fraction's carry, a row at a time.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     grad_whole, grad_fraction: the gradient's whole rows and fraction
+\\     fraction: the row's fraction
+\\     row: the row's count
+\\     moves: workspace for the rows to move
+\\     cursor, Y: the pixel's row's odd scanline
+\\     C: clear
+\\
+\\ Outputs:
+\\     cursor, Y: the next column's row's even scanline
+\\     fraction, row: the next column's
+\\     A: corrupted
+\\     C: clear
+
+MACRO STEEP_STEP down, grad_whole, grad_fraction, fraction, row, moves
+    LDA fraction:ADC grad_fraction:STA fraction
+    LDA grad_whole:ADC #0:STA moves     ; the rows on: 1 to 128, C clear
+    IF down
+        ADC row:STA row                 ; (C clear after: rows stay bytes)
+    .rows
+        MODE5_DOWN
+        DEC moves:BNE rows
+    ELSE
+        EOR #&FF:SEC:ADC row:STA row    ; row - moves
+        CLC
+    .rows
+        MODE5_UP
+        DEC moves:BNE rows
+    ENDIF
+ENDMACRO
+
+\\ A steep run one way (pt_plot_steep's): a pixel a column, each byte column's lowest row noted
+\\ for the fill.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     grad_whole, grad_fraction: the gradient's whole rows and fraction
+\\     fraction: the row's fraction at x0
+\\     row: the row at x0
+\\     count: the run's columns
+\\     mask: x0's pixel's bits
+\\     cursor, Y: x0's row's even scanline
+\\     X: x0's byte column
+\\     C: clear
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     toggle_end: on past each byte column's lowest row
+\\     fraction, row: corrupted, the fraction's and the row's counts as they went
+\\     A, X, Y: corrupted
+
+MACRO STEEP down, grad_whole, grad_fraction, fraction, row, count, mask
+    ZA_AUTO1 moves                      ; local: the rows to move to the next column's
+
+    IF NOT(down)
+        LDA fraction:EOR #&FF           ; 255 - f: the borrows up as carries
+        STA fraction
+        LDA row:NOTE_TOGGLE             ; a rising byte's lowest row: its first column's
+    ENDIF
+.column
+    MODE5_EOR mask
+    DEC count:BEQ last
+    IF down
+        LDA mask:LSR A:BCC step         ; (C clear) not the byte's last column
+        LDA row:NOTE_TOGGLE             ; a falling byte's lowest row: its last column's
+    .step
+    ENDIF
+    STEEP_STEP down, grad_whole, grad_fraction, fraction, row, moves
+    LSR mask:BCC column                 ; the next pixel along
+    LDA #&88:STA mask
+    LDA cursor:ADC #7:STA cursor        ; (C set) the next block: + 8
+    INX
+    IF NOT(down)
+        LDA row:NOTE_TOGGLE
+    ENDIF
+    JMP column                          ; (C clear)
+.last
+    IF down
+        LDA row:NOTE_TOGGLE
+    ENDIF
+    RTS
+ENDMACRO

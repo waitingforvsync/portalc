@@ -15,7 +15,6 @@ ZA_AUTO2 viewleft                       ; the view's left edge, 10 bits: screen 
 ZA_AUTO1 eye_z                          ; the eye's height, in the map's 8-unit z steps
 ZA_AUTO1 num_visits                     ; visits made, the null one included
 ZA_AUTO1 num_kept                       ; kept lines' entries taken, the null one included
-ZA_AUTO1 num_recs                       ; runs recorded for the unplotter
 ZA_AUTO1 walk_vi                        ; the walk's visit
 ZA_AUTO1 walk_x                         ; where its next edge's span starts
 ZA_AUTO1 walk_tmax                      ; the bounds' extents over its portal: the lowest top row
@@ -69,13 +68,6 @@ SECTION Capture
 .visit_hflo SKIP MAX_VISITS+1           ; the floor's
     FITPAGE MAX_VISITS+1
 .visit_hfhi SKIP MAX_VISITS+1
-ENDSECTION
-
-\\ Each byte column's last toggled row + 1: where the fill can stop.
-
-SECTION Frame
-    FITPAGE SCREEN_WIDTH/4
-.toggle_end SKIP SCREEN_WIDTH/4
 ENDSECTION
 
 \\ Capture the frame: ready its counts and the visit cache, then walk from the camera's cell. Only

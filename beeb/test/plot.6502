@@ -1,0 +1,245 @@
+\\ test/plot.6502 - make test's check of the plotters: made-up runs at gradients either side of
+\\ each way's limits, and flat runs, summed with T after them, for host/test_build.py.
+
+\\ The gradients' magnitudes, as plotref's: flat; shallow, either side of 64 (one carry a byte at
+\\ most, or the tree), 128 and 255; steep, either side of 256, on to the steepest. Each falling,
+\\ then (bar flat) rising. A run is cut to a fall of 64 rows: 16384 DIV the magnitude + 1 columns.
+
+plot_mags = {0, 1, 2, 3, 7, 16, 31, 32, 37, 63, 64, 65, 85, 127, 128, 129, 170, 200, 255, 256,
+             257, 300, 384, 511, 512, 640, 1000, 1023, 1024, 1500, 2048, 3000, 4096, 6000, 8192,
+             12000, 16384, &7FFF}
+plot_grads = CONCAT(plot_mags, plot_mags[1..<LEN(plot_mags)] OR &8000)
+GRADS = LEN(plot_grads)
+FUNCTION cap(x) = x - (x > 128)*(x - 128)
+plot_most = cap(16384 DIV (plot_mags + (plot_mags == 0)) + 1)
+plot_lengths = {1, 2, 3, 4, 5, 6, 7, 8, 11, 16, 23, 32, 47, 64, 97, 128}
+RUNS = 128                              ; runs at each gradient
+ROW_LAST = SCREEN_HEIGHT*256+255        ; the junk row's last 256th, u8.8
+
+SECTION TestResults
+.t_runs1    SKIP GRADS                  ; plot_run's sums, by gradient: each run's count, record
+.t_runs2    SKIP GRADS                  ; and toggle_end
+.t_plot1    SKIP GRADS                  ; T's after them
+.t_plot2    SKIP GRADS
+.t_flat1    SKIP SCREEN_WIDTH/4         ; T's after each four start columns' flat runs
+.t_flat2    SKIP SCREEN_WIDTH/4
+ENDSECTION
+
+\\ At each gradient, made-up runs into an empty T: from each column in turn, a length from the
+\\ list cut to the screen and to a fall of 64 rows, a row and fraction made up then kept to the
+\\ screen, a colour made up but every 32nd none, and toggle_end made up. Then flat runs from every
+\\ column to every end, their rows and colours made up. Each made-up value is stepped on before
+\\ it's used, as plotref steps it.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_runs1, t_runs2, t_plot1, t_plot2: the runs' sums and T's, by gradient
+\\     t_flat1, t_flat2: T's after each four start columns' flat runs
+
+.test_plot
+{
+    ZA_AUTO1 fraction                   ; local: the made-up values: a row's fraction
+    ZA_AUTO1 row                        ; local: a row, 0 to 64
+    ZA_AUTO1 base                       ; local: toggle_end's
+    ZA_AUTO1 even                       ; local: a colour
+    ZA_AUTO1 odd
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA fraction:STA row:STA base
+    LDA #&5A:STA even
+    LDA #&C3:STA odd
+
+    \\ the runs
+
+    ZA_AUTO1 grad                       ; local: the gradient's place in the list
+    ZA_AUTO1 run                        ; local: the run at it
+    ZA_AUTO1 length                     ; local: its columns
+    ZA_AUTO2 span                       ; local: its fall: (length - 1) * the magnitude
+
+    LDA #0:STA grad
+.gradient
+    JSR clear_t
+    LDA #0:STA sum1:STA sum2:STA run
+    LDX grad
+    LDA t_gradlo,X:STA line_grad
+    LDA t_gradhi,X:STA line_grad+1
+.each_run
+    CLC:LDA fraction:ADC #37:STA fraction
+    CLC:LDA row:ADC #5
+    CMP #65:BCC row_on
+    SBC #65                             ; (C set)
+.row_on
+    STA row
+    CLC:LDA base:ADC #13:STA base
+    LDA run:AND #31:CMP #31:BNE coloured
+    LDA #0:STA pattern_even:STA pattern_odd
+    BEQ columns                         ; (always)
+    ZA_UNREACHABLE
+.coloured
+    CLC:LDA even:ADC #29:STA even:STA pattern_even
+    CLC:LDA odd:ADC #53:STA odd:STA pattern_odd
+.columns
+    LDA run:AND #127:STA run_x0
+    LDA run:AND #15:TAX:LDA t_lengths,X
+    LDX grad:CMP t_most,X:BCC cut
+    LDA t_most,X
+.cut
+    STA length
+    LDA #SCREEN_WIDTH:SEC:SBC run_x0
+    CMP length:BCS kept
+    STA length
+.kept
+    LDA run_x0:CLC:ADC length:STA run_x1
+    LDA length:SEC:SBC #1
+    MULTIPLIER
+    LDY line_grad
+    MULTIPLY                            ; X: the low byte, A: the high
+    STX span:STA span+1
+    LDA line_grad+1:AND #&7F:TAY
+    MULTIPLY                            ; X: the low byte, a byte's
+    TXA:CLC:ADC span+1:STA span+1
+    LDA fraction:STA run_y
+    LDA row:STA run_y+1
+    BIT line_grad+1:BMI rising
+    SEC:LDA #LO(ROW_LAST):SBC span:TAX  ; falling: kept above the last row less its fall
+    LDA #HI(ROW_LAST):SBC span+1
+    CMP run_y+1:BCC low
+    BNE rowed
+    CPX run_y:BCS rowed
+.low
+    STX run_y:STA run_y+1
+    JMP rowed
+.rising                                 ; rising: kept below its fall
+    LDA run_y+1:CMP span+1:BCC high
+    BNE rowed
+    LDA run_y:CMP span:BCS rowed
+.high
+    LDA span:STA run_y
+    LDA span+1:STA run_y+1
+.rowed
+    LDA base:LDX #0
+.ends
+    TAY:AND #63:CLC:ADC #1:STA toggle_end,X
+    TYA:CLC:ADC #5
+    INX:CPX #SCREEN_WIDTH/4:BNE ends
+    LDA #0:STA num_recs
+    JSR plot_run
+    LDA num_recs:FLETCHER sum1, sum2
+    FOR t = {rec_x0, rec_x1, rec_ylo, rec_yhi, rec_gradlo, rec_gradhi}
+        LDA t:FLETCHER sum1, sum2       ; the record, the first
+    NEXT
+    LDX #0
+.sum_ends
+    LDA toggle_end,X:FLETCHER sum1, sum2
+    INX:CPX #SCREEN_WIDTH/4:BNE sum_ends
+    INC run
+    LDA run:CMP #RUNS:BEQ runs
+    JMP each_run
+.runs
+    LDX grad
+    LDA sum1:STA t_runs1,X
+    LDA sum2:STA t_runs2,X
+    JSR sum_t
+    LDX grad
+    LDA sum_t.sum1:STA t_plot1,X
+    LDA sum_t.sum2:STA t_plot2,X
+    INC grad
+    LDA grad:CMP #GRADS:BEQ flat
+    JMP gradient
+
+    \\ flat runs from each start column to every end
+
+.flat
+    LDA #0:STA run_x0
+.start
+    LDA run_x0:AND #3:BNE started
+    JSR clear_t
+.started
+    LDX run_x0:INX:STX run_x1
+.end
+    CLC:LDA row:ADC #7
+    CMP #65:BCC flat_row
+    SBC #65                             ; (C set)
+.flat_row
+    STA row
+    CLC:LDA even:ADC #29:STA even:STA pattern_even
+    CLC:LDA odd:ADC #53:STA odd:STA pattern_odd
+    LDX row
+    JSR plot_flat
+    INC run_x1
+    LDA run_x1:CMP #SCREEN_WIDTH+1:BCC end
+    LDA run_x0:AND #3:CMP #3:BNE next_start
+    JSR sum_t
+    LDA run_x0:LSR A:LSR A:TAX
+    LDA sum_t.sum1:STA t_flat1,X
+    LDA sum_t.sum2:STA t_flat2,X
+.next_start
+    INC run_x0
+    BPL start                           ; to 127
+    RTS
+}
+
+\\ Empty T, its junk rows too.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     T_JUNK_TOP to SCREEN_A: 0
+\\     A, X, Y: corrupted
+
+.clear_t
+{
+    LDA #HI(T_JUNK_TOP):STA page+2
+    LDA #0:TAY
+    LDX #HI(SCREEN_A-T_JUNK_TOP)        ; pages
+.page
+    STA T_JUNK_TOP,Y
+    INY
+    BNE page
+    INC page+2                          ; the operand's high byte
+    DEX
+    BNE page
+    RTS
+}
+
+\\ T's sums, its junk rows too.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     sum1, sum2: the Fletcher sums of T_JUNK_TOP to SCREEN_A
+\\     A, X, Y: corrupted
+
+.sum_t
+{
+    ZA_AUTO1 sum1                       ; out: the sum of the bytes
+    ZA_AUTO1 sum2                       ; out: the sum of the sums
+
+    LDA #HI(T_JUNK_TOP):STA page+2
+    LDA #0:STA sum1:STA sum2:TAY
+    LDX #HI(SCREEN_A-T_JUNK_TOP)        ; pages
+.page
+    LDA T_JUNK_TOP,Y:FLETCHER sum1, sum2
+    INY
+    BNE page
+    INC page+2
+    DEX
+    BNE page
+    RTS
+}
+
+\\ The gradients, the runs' longest at each, and the lengths.
+
+    FITPAGE GRADS
+.t_gradlo   EQUB LO(plot_grads)
+    FITPAGE GRADS
+.t_gradhi   EQUB HI(plot_grads)
+    FITPAGE GRADS
+.t_most     EQUB CONCAT(plot_most, plot_most[1..<LEN(plot_mags)])
+    FITPAGE 16
+.t_lengths  EQUB plot_lengths

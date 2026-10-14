@@ -9,6 +9,7 @@ INCLUDE "src/tables_macros.6502"
 INCLUDE "src/map_macros.6502"
 INCLUDE "src/vcache_macros.6502"
 INCLUDE "src/capture_macros.6502"
+INCLUDE "src/plot_macros.6502"
 INCLUDE "src/entry_macros.6502"
 
 SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
@@ -22,6 +23,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         INCLUDE "src/camera.6502"
         INCLUDE "src/unplot.6502"
         INCLUDE "src/capture.6502"
+        INCLUDE "src/plot.6502"
         INCLUDE "src/fill.6502"
         INCLUDE "src/sprites.6502"
     ENDSECTION

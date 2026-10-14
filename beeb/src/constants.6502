@@ -7,6 +7,7 @@ MAX_CELLS = 32
 MAX_VISITS = 31                         ; render.h's PT_MAX_VISITS: with entry 0, 8 tables a page
 CAM_HEIGHT = 10                         ; the eye above its cell's floor, in z steps (render.h)
 MAX_VCACHE = 63                         ; vcache.h's PT_MAX_VCACHE: with entry 0, four tables a page
+MAX_RECS = 128                          ; render.h's PT_MAX_RECS: runs plotted in a frame
 IN_FWD = 1                              ; the input bits (camera.h's PT_IN_)
 IN_BACK = 2
 IN_LEFT = 4                             ; strafe

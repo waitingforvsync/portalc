@@ -9,8 +9,8 @@ import time
 import b2
 from test_tables import symbols
 
-USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache or capture; its build, its '
-         'symbols, and the C\'s answers)')
+USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture or plot; its build, '
+         'its symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -157,6 +157,28 @@ def capture_expected(c):
     ]
 
 
+def hex_sums(hexes):
+    """A pair of sums over each of a list of hex strings' bytes, as two byte strings."""
+    sums = [fletcher_bytes(bytes.fromhex(h)) for h in hexes]
+    return bytes(s[0] for s in sums), bytes(s[1] for s in sums)
+
+
+def plot_expected(c):
+    """The plotters' sums: by gradient, each run's count, record (the first) and toggle_end,
+    then T after them; and T after each four start columns' flat runs."""
+    runs1, runs2 = hex_sums(g['runs'] for g in c['runs'])
+    plot1, plot2 = hex_sums(g['t'] for g in c['runs'])
+    flat1, flat2 = hex_sums(c['flat'])
+    return [
+        ('plot_run s1', 't_runs1', 0, 0, runs1),
+        ('plot_run s2', 't_runs2', 0, 0, runs2),
+        ('plot_run T s1', 't_plot1', 0, 0, plot1),
+        ('plot_run T s2', 't_plot2', 0, 0, plot2),
+        ('plot_flat s1', 't_flat1', 0, 0, flat1),
+        ('plot_flat s2', 't_flat2', 0, 0, flat2),
+    ]
+
+
 def arith_expected(c):
     """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
     answer's input, the answers)."""
@@ -194,7 +216,8 @@ def arith_expected(c):
     ]
 
 
-EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected}
+EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
+            'plot': plot_expected}
 
 
 def main():

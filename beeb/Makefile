@@ -8,7 +8,8 @@
 #   make test_tables     the loader's tables, in PORTAL itself
 #   make test_arith      the arithmetic macros, in a program of their own
 #   make test_vcache     the vertex cache, likewise
-#   make test_capture    the capture, likewise: test/CHECK_portal.6502, built
+#   make test_capture    the capture, likewise
+#   make test_plot       the plotters, likewise: test/CHECK_portal.6502, built
 #                        with -D TEST=TRUE
 #   make map      remake src/mapdata.6502 from the C's demo scene
 #   make clean
@@ -28,7 +29,7 @@ B2_WIN = b2
 
 SRC = boot.6502 portal.6502
 DEPS = $(SRC) $(wildcard src/*.6502) $(wildcard test/*.6502)
-CHECKS = arith vcache capture
+CHECKS = arith vcache capture plot
 
 all: $(BUILD)/portal.ssd
 

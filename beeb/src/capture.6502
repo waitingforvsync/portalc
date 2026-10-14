@@ -16,7 +16,8 @@ ZA_AUTO1 eye_z                          ; the eye's height, in the map's 8-unit 
 ZA_AUTO1 num_visits                     ; visits made, the null one included
 ZA_AUTO1 num_kept                       ; kept lines' entries taken, the null one included
 ZA_AUTO1 walk_vi                        ; the walk's visit
-ZA_AUTO1 walk_x                         ; where its next edge's span starts
+ZA_AUTO1 span_x0                        ; its side's span of the portal, [x0, x1): x0 where the
+ZA_AUTO1 span_x1                        ; last span ended, and so the next one starts
 ZA_AUTO1 walk_tmax                      ; the bounds' extents over its portal: the lowest top row
 ZA_AUTO1 walk_bmin                      ; and the highest bottom row
 ZA_AUTO2 walk_split_angle               ; its window: screen angles at or past this are a turn less
@@ -96,9 +97,12 @@ ENDSECTION
     LDX camcell
     LDA cell_floorz,X:SEC:SBC #CAM_HEIGHT:STA eye_z
     LDA #1:STA num_visits:STA num_kept
-    LDX #SCREEN_WIDTH/4-1
+    LDX #SCREEN_WIDTH/16-1              ; a quarter of the byte columns
 .ends
     STA toggle_end,X
+    STA toggle_end+SCREEN_WIDTH/16,X
+    STA toggle_end+SCREEN_WIDTH/8,X
+    STA toggle_end+SCREEN_WIDTH*3/16,X
     DEX
     BPL ends
     LDA #0:STA num_recs
@@ -152,7 +156,7 @@ ENDSECTION
     \\ the root walk: from column 0, between the screen's edges, its window split at the side's
     \\ start, one on from its screen angle from viewleft + 1
 
-    LDA #0:STA walk_x:STA walk_tmax
+    LDA #0:STA span_x0:STA walk_tmax
     LDA #SCREEN_HEIGHT:STA walk_bmin
     CLC
     LDA startangle:ADC #1:STA walk_split_angle
@@ -235,12 +239,12 @@ ENDSECTION
     LDA walk_c1:STA walk_c0             ; then on into side_end, Y the side
 }
 
-\\ The walk's side's end, the next side's start (side_end): its screen angle, the start's plus its
-\\ turn round from it if that's at most a half turn, as for a side facing the eye; and its column.
+\\ The walk's side's end, the next side's start (side_end): its screen angle, where it is in the
+\\ window, or a turn on if that's half a turn or more left of the start; and its column.
 \\
 \\ Inputs:
 \\     Y: the side
-\\     walk_vi, walk_u0, walk_split_angle: the walk's visit, its side's start, and its split angle
+\\     walk_vi, walk_u0, walk_split_angle: the walk's visit, its side's start, its window's split
 \\     viewleft: the view's left edge
 \\
 \\ Outputs:
@@ -249,25 +253,18 @@ ENDSECTION
 
 .side_end
 {
-    ZA_AUTO2 turn                       ; local: the end's turn from the start, 10 bits
-
     LDX walk_vi
     LDA visit_cell,X:TAX
     RING_NEXT                           ; the next side: its start is the end
     LDX side_v,Y
     VERT_TO_SCREEN_ANGLE walk_u1
     STX walk_e1
-    SEC
-    LDA walk_u1:SBC walk_u0:STA turn
-    LDA walk_u1+1:SBC walk_u0+1:AND #3:STA turn+1
-    CMP #2:BCC near                     ; under a half turn
-    BNE far
-    LDA turn:BNE far                    ; over it
-.near
-    CLC
-    LDA walk_u0:ADC turn:STA walk_u1
-    LDA walk_u0+1:ADC turn+1:STA walk_u1+1
-.far
+    LDA walk_u0:CMP walk_u1
+    LDA walk_u0+1:SBC walk_u1+1         ; the start less the end's high byte, signed
+    BMI column                          ; the end's right of the start: where it is
+    CMP #2:BCC column                   ; under half a turn left of it: facing away
+    LDA walk_u1+1:ADC #3:STA walk_u1+1  ; (C set) a turn on: the eye's cell's last side
+.column
     SCREEN_ANGLE_TO_COLUMN walk_u1
     STA walk_c1
     RTS
@@ -416,20 +413,17 @@ ENDSECTION
     TAY
     TXA:SEC:SBC logdepth0:STA logoffset0
     TYA:SBC logdepth0+1:STA logoffset0+1
-    TXA:SEC:SBC logdepth1:STA logoffset1
-    TYA:SBC logdepth1+1:STA logoffset1+1
-    CLC
-    LDA logoffset0+1:BMI far0
+    CLC:BMI far0                        ; (CLC keeps N)
     CMP #EDGE_LOG
 .far0
     ROR near                            ; bit 7: the start's too near
-    CLC
-    LDA logoffset1+1:BMI far1
+    TXA:SEC:SBC logdepth1:STA logoffset1
+    TYA:SBC logdepth1+1:STA logoffset1+1
+    CLC:BMI far1
     CMP #EDGE_LOG
 .far1
-    ROR near                            ; bit 7: the end's, and bit 6 the start's
-    BIT near:BPL offsets
-    BVC offsets
+    ROR near:BPL offsets                ; bit 7: the end's, and bit 6 the start's
+    BIT near:BVC offsets
     RTS                                 ; both too near: none
 
     \\ an end on the screen: its offset's under 32 rows, or 0 under 0. One too near can saturate
@@ -465,15 +459,17 @@ ENDSECTION
     \\ the rows run away from the middle as the offset grows, down below the eye and up above it:
     \\ the offsets' subtract's borrow is the gradient's sign
 
-    SEC
-    LDA offset1:SBC offset0:STA rise
-    LDA offset1+1:SBC offset0+1:STA rise+1
-    PHP                                 ; C: the end's offset at or past the start's
-    LDA #0:ROR A
-    EOR line_below:STA sign             ; below the eye, a growing offset goes down
-    PLP:BCS gradient
-    LDA rise:EOR #&FF:ADC #1:STA rise   ; (C clear) the start's offset less the end's
-    LDA rise+1:EOR #&FF:ADC #0:STA rise+1
+    SEC:SBC offset0:STA rise
+    TYA:SBC offset0+1
+    BCS ahead                           ; the end's offset at or past the start's
+    TAX                                 ; the start's less the end's (C clear)
+    LDA rise:EOR #&FF:ADC #1:STA rise
+    TXA:EOR #&FF:ADC #0:STA rise+1
+    LDA line_below:STA sign             ; a shrinking offset goes up below the eye
+    JMP gradient
+.ahead
+    STA rise+1
+    LDA line_below:EOR #&80:STA sign    ; and a growing one above it
 
     \\ both ends on the screen: each offset is under 32 rows, and so is their difference, a byte in
     \\ eighths of a row, rounded, which takes a byte's log; 5 * 256 takes eighths back to 256ths

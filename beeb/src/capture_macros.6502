@@ -72,9 +72,10 @@ MACRO VERT_TO_SCREEN_ANGLE angle
     SEC
     LDA vc_anglo,X:SBC viewleft:STA angle
     LDA vc_anghi,X:SBC viewleft+1:AND #3:STA angle+1
-    LDA angle:CMP walk_split_angle
-    LDA angle+1:SBC walk_split_angle+1
-    BCC done                            ; under the split
+    CMP walk_split_angle+1:BCC done     ; under the split's high byte
+    BNE past
+    LDA angle:CMP walk_split_angle:BCC done ; under the split
+.past
     LDA angle+1:SBC #4:STA angle+1      ; at or past it: a turn less (C set)
 .done
 ENDMACRO

@@ -49,7 +49,7 @@ ENDSECTION
 
     \\ the walk, its visit, the eye's height, the counts, and where each byte column's fill stops
 
-    FOR v = {walk_vi, walk_x, walk_tmax, walk_bmin, walk_split_angle, walk_split_angle+1}
+    FOR v = {walk_vi, span_x0, walk_tmax, walk_bmin, walk_split_angle, walk_split_angle+1}
         LDA v:FLETCHER sum1, sum2
     NEXT
     FOR v = {walk_u0, walk_u0+1}

@@ -175,7 +175,9 @@ The rest:
   crossing. A table numbered from 1 (the vertex cache's entries) keeps its
   element 0, unused, and is read as it is. One numbered from 0 (vc_slot, by
   vertex) is looped over upwards, or down to 0.
-- Hot-path code like multiplies goes inline, as a `MACRO`.
+- Hot-path code like multiplies goes inline, as a `MACRO`. Its rare uses
+  share one routine that expands it, as `pattern_xy` does `PATTERN_XY`:
+  inline there, it costs bytes and saves almost nothing.
 - A macro that takes a bound (`LOG2_16 bits`, `EXP2_16 bits`) gets the
   tightest one the value can reach, worked out at the call: the bound picks
   the expansion, and a loose one costs compares and bytes. `make_line`'s

@@ -80,7 +80,7 @@ ambitions.
 | `exp2_sat`, `row_move` (`pt_mulg_u16`) | `exp2_sat`, `row_move` | done, in `make_line`'s check |
 | `frame`'s visit cache clear | `forget_visits` | done |
 | `walk`, `descend`, `enter` | `walk` (walk.6502), with `descend`'s cut-off inline; `enter` | done, in the walk's checks |
-| `process_edge`, `edge_line` | `process_edge`, `edge_line` | done, in the walk's checks: every path but a level ceiling that changes colour, which neither scene has |
+| `process_edge`, `edge_line` | `process_edge`, `edge_line`; this cell's lines through `ceiling_line` and `floor_line` (`ceiling_line_xy` and `floor_line_xy` colour them first) | done, in the walk's checks: every path but a level ceiling that changes colour, which neither scene has |
 | `clip_plain`, `clip_floor`, `clip_ceil` | the same (clip.6502) | done: 256 made-up lines from `make_line`, each clipped 16 times, every kind against every combination of the bounds' edges, `portalc_clipref` |
 | `scan_of`, `scan` | `SCAN_EDGES`, `SCAN` (clip_macros.6502) | done, in the clips' check |
 | `plain_col`, `floor_col`, `ceil_col` | `plain_columns`, `floor_columns`, `ceil_columns`; and a plain line's own columns in `plain_own`, through `PLAIN_OWN` | done, in the clips' check |
@@ -134,7 +134,7 @@ or two bytes of zero page.
 | `visits[i].hf` | `visit_hflo`, `visit_hfhi`, likewise |
 | `visits[i].split_angle` | `visit_split_anglelo`, `visit_split_anglehi` |
 | `visits[i].inst` | — (sprites) |
-| `pt_walk.vi`, `.x`, `.tmax`, `.bmin`, `.split_angle` | `walk_vi`, `walk_x`, `walk_tmax`, `walk_bmin`, `walk_split_angle` |
+| `pt_walk.vi`, `.x`, `.tmax`, `.bmin`, `.split_angle` | `walk_vi`, `span_x0`, `walk_tmax`, `walk_bmin`, `walk_split_angle` |
 | `pt_walk.u0`, `.u1`, `.c0`, `.c1` | `walk_u0`, `walk_u1`, `walk_c0`, `walk_c1` |
 | — | `walk_e0`, `walk_e1`: the ends' vertex cache entries |
 | `walk`'s `depth` | `walk_levels`: the walks that may still nest, counting down from `MAX_DEPTH` - 1 |
@@ -142,8 +142,8 @@ or two bytes of zero page.
 | `pt_edgelines.kept`, `.use`, `.have` | `edge_line.kept` (the entry * 4), `edge_line.use`, `edge_line.ends` (bit 7) |
 | `r->kept[k][slot]` (`pt_kept`) | `kept_x0`, `kept_x1`, `kept_ylo`, `kept_yhi`, `kept_gradlo`, `kept_gradhi`, `kept_endy`, by entry * 4 + slot |
 | `PT_K_CEIL`, `_CEIL_ADJ`, `_FLOOR`, `_FLOOR_ADJ` | `KEPT_CEILING`, `KEPT_CEILING_ADJACENT`, `KEPT_FLOOR`, `KEPT_FLOOR_ADJACENT` |
-| `pt_map_twin` | `side_twin`, a map table |
-| `pt_shade(i)`, `pt_pattern_xor` | `shade_even`, `shade_odd` (map tables, from palette.c), and `PATTERN_XY` |
+| `pt_map_ring_next` after `pt_map_twin` | `side_entry`, a map table |
+| `pt_shade(i)`, `pt_pattern_xor` | `shade_even`, `shade_odd` (map tables, from palette.c), and `PATTERN_XY`, or `pattern_xy` for the rarer lines |
 | `pt_ends.logdepth0`, `.logdepth1`, `.logcolumns` | `logdepth0`, `logdepth1`, `logcolumns` |
 | `pt_line.x0`, `.x1`, `.y`, `.below` | `line_x0`, `line_x1`, `line_y`, `line_below` (&80 below, else 0) |
 | `pt_line.g`, `.rl` | `line_grad`, `line_endy` |
@@ -170,7 +170,7 @@ or two bytes of zero page.
 | C | 6502 |
 |---|---|
 | `pt_render.top`, `.bot` | `bound_top`, `bound_bottom` |
-| a clip's `xa`, `xb` | `span_x0`, `span_x1` |
+| a clip's `xa`, `xb` | `span_x0`, `span_x1`: the walk's |
 | `tmax`, `bmin` | `walk_tmax`, `walk_bmin`; `clip_ceil`'s `cbmin` comes in A |
 | `screen_top_`, `screen_bot_` | — (`scan_edges`, from the extents: bit 7 the top's the screen's, bit 6 the bottom) |
 | `pt_scan.v`, `.h` | the open stretch: `run_x0` its start, and `run_y` (visible) or `stretch_row` (hidden); `stretch` says which |
@@ -198,7 +198,7 @@ or two bytes of zero page.
 | `cells[i].floor`, `.ceil`, `.sprite` | `cell_floor`, `cell_ceil`, `cell_sprite` |
 | `edges[i].angle`, `.colour`, `.len8` | `edge_angle`, `edge_colour`, `edge_len8` |
 | `sides[i].v`, `.edge`, `.adj`, `.anghi` | `side_v`, `side_edge`, `side_adj`, `side_anghi` |
-| `pt_map_twin(m, s)` | `side_twin`, made by `portalc_mapasm`: 0 for a wall |
+| `pt_map_ring_next(across, pt_map_twin(m, s))` | `side_entry`, made by `portalc_mapasm`: the side after the twin, where a walk through the portal begins; 0 for a wall |
 | `sprites[i].x`, `.y`, `.art`, `.ls` | `sprite_xlo` and so on, `sprite_art`, `sprite_lslo`, `sprite_lshi` |
 | `arts` | `art_pate`, `art_pato`, `art_lo`, `art_hi`, `art0`... |
 | `num_verts`, `num_cells`... | `MAP_VERTS`, `MAP_CELLS`... (assembly-time constants) |
@@ -307,7 +307,7 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has
   the child in a walk of its own, `cw`; the 6502 has one walk, in zero page,
   and pushes the parent's `walk_vi`, `walk_tmax` and `walk_bmin` round the
-  child's. The rest comes back: `walk_x` is the side's end's column, the
+  child's. The rest comes back: `span_x0` is the side's end's column, the
   window is the visit's (`visit_split_anglelo`, `visit_split_anglehi`, made
   at its first visit, as the C now makes it too), and the parent goes on to its next side
   from that side's start, as a later visit would. The C asserts all three.
@@ -318,9 +318,19 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   `enter` in its own place, as the C's tail call does, nothing saved.
 - **The depth counts down**, in `walk_levels`, from `MAX_DEPTH` - 1: past 0,
   the child's cut off.
-- **Twins and shades are tables.** `portalc_mapasm` writes `side_twin`, where
-  the C searches the cell across's ring, and `shade_even` and `shade_odd`,
-  palette.c's catalogue.
+- **Entries and shades are tables.** `portalc_mapasm` writes `side_entry`, the
+  side after the twin, where the C searches the cell across's ring for the
+  twin and steps on; and `shade_even` and `shade_odd`, palette.c's catalogue.
+- **The walk works out the span.** Its side loop sets `span_x1`, the side's
+  end or the portal's right column, and hands `process_edge` C set if the
+  side ends within the portal; `span_x0` is where the last span ended. It
+  skips two tests the C keeps as asserts: the last side's span is never
+  empty (the last span ended left of the portal's right column), and the
+  walk never meets a side facing away with columns.
+- **A first visit keeps the parent's start.** The side after the twin starts
+  where the portal does, at the same screen angle in the new window, so the
+  parent's `walk_u0`, `walk_e0` and `walk_c0` stay, and only `side_end` runs.
+  The C's `enter` does the same, and asserts the angle.
 - **The walk leaves out sprites** (`inst_new`, `inst_clip`, `inst_hide`), and
   the C's checks on side counts, a visit's columns running left to right,
   and the window's range.
@@ -342,6 +352,16 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - Then `update_camera`'s turn keys, the fill and the unplot. That's the
   first demo.
 - Later: sprites, then moving, collision and `pt_vcache_locate`.
+- To revisit, if the cycles are wanted: a `side_v1` map table, each side's
+  end vertex (`pt_map_side_v1`), written by `portalc_mapasm`. `side_end`
+  would then be `LDX side_v1,Y`, instead of finding the next side through
+  `walk_vi`, `visit_cell` and `RING_NEXT` and reading its `side_v`: 228
+  cycles a frame and 16 bytes of code, for `MAP_SIDES` bytes of map (119 in
+  the demo map). Left out for now, as it repeats `side_v`. Copying each
+  ring's first side after its last, for `side_v+1,Y`, costs more: the slot
+  is a hole in every side table, 5 bytes a cell.
+- To revisit: once the fill exists, it could put each column's
+  `toggle_end` back as it reads it, and `capture_root`'s reset loop goes.
 - To revisit: wiping all of `Persist` in one go in `map_init` (15 bytes
   against 23), which would mean nothing in `Persist` is set before it runs.
 - To revisit: the plotters' inputs (`run_x0`, `run_x1`, `run_y`) are file

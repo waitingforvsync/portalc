@@ -803,14 +803,15 @@ static uint8_t screen_angle_to_column(int16_t u)
 // whose window is a whole turn, the last side runs on round to the first
 // one's start, a turn up. One facing away (a cell seen through a portal has a
 // chain of them, the portal among them) turns back, its end at or left of
-// its start in the window, and spans nothing.
+// its start in the window, and spans nothing. So the end is where it is in
+// the window, unless that's half a turn or more left of the start: then
+// it's a turn on (on the 6502, a compare, and rarely an add).
 static void side_end(const pt_render *r, pt_walk *w)
 {
     const pt_visit *vs = &r->visits[w->vi];
     const pt_cell *c = &r->map->cells[vs->cell];
     int16_t u = vert_to_screen_angle(r, w, pt_map_side_v1(r->map, c, vs->side));
-    uint16_t d = (uint16_t)((uint16_t)(u - w->u0) & 1023u);
-    w->u1 = d <= 512 ? pt_i16((int32_t)w->u0 + d) : u;
+    w->u1 = u < w->u0 && w->u0 - u >= 512 ? pt_i16((int32_t)u + 1024) : u;
     w->c1 = screen_angle_to_column(w->u1);
 }
 
@@ -1035,6 +1036,8 @@ static void enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_walk *from, u
 {
     pt_visit *vs = &r->visits[vi];
     const pt_cell *c = &r->map->cells[vs->cell];
+    int16_t u0 = from->u0;    // (cw may be from itself)
+    uint8_t c0 = from->c0;
     int16_t mid = pt_i16(((int32_t)from->u0 + from->u1) >> 1);
     uint16_t split_angle = pt_u16((int32_t)mid + 512);
     RC_ASSERT(split_angle >= 256 && split_angle <= 1024);
@@ -1046,9 +1049,18 @@ static void enter(pt_render *r, uint8_t vi, uint8_t twin, const pt_walk *from, u
     RC_ASSERT(same_window(r, c, vs->split_angle, split_angle));
     *cw = (pt_walk) {.vi = vi, .x = xl, .tmax = tmax, .bmin = bmin,
                      .split_angle = vs->split_angle};
-    side_start(r, cw);
-    if (first)
+    if (first) {
+        // the side after the twin starts where the portal does, and that vertex keeps its screen
+        // angle in the new window, which splits half a turn from the portal's middle: only the
+        // side's end is new (on the 6502, the parent's walk_u0, walk_e0 and walk_c0 stay)
+        cw->u0 = u0;
+        cw->c0 = c0;
+        RC_ASSERT(vert_to_screen_angle(r, cw, pt_map_side(r->map, vs->side)->v) == u0);
+        side_end(r, cw);
         vs->inst = inst_new(r, vs->cell, vs->hf);
+    } else {
+        side_start(r, cw);
+    }
     for (uint8_t steps = pt_u8((int32_t)pt_map_ring_end(c) - c->first - 1); cw->c1 <= xl; steps--) {
         RC_ASSERT(steps != 0);
         side_next(r, cw);
@@ -1166,6 +1178,8 @@ static bool process_edge(pt_render *r, pt_walk *w, pt_walk *cw)
     RC_ASSERT(w->c0 <= w->x);
     uint8_t xa = w->x;
     uint8_t xb = w->c1 < vs->xr ? w->c1 : vs->xr;
+    RC_ASSERT(xa < vs->xr);    // the last side's span is never empty: the last one ended left of xr
+    RC_ASSERT(xa <= xb);       // the walk only meets sides facing the eye
     if (xa >= xb)
         return false;
     w->x = xb;

@@ -1,8 +1,9 @@
 // mapasm.c - the demo scene as Baron source, for beeb/src/mapdata.6502: every
 // field a list (map_...), then a table of its own (16-bit fields as low bytes and
 // high bytes), each kept within a page. Only what the engine reads goes:
-// a sprite's size and an art's palette are the map builder's. Each side's twin
-// goes too, which the C searches for, and the shades the colours index.
+// a sprite's size and an art's palette are the map builder's. Each portal's
+// entry side goes too, the one after its twin, which the C searches for; and the
+// shades the colours index.
 //
 //   portalc_mapasm > mapdata.6502
 //   portalc_mapasm --stress > stressdata.6502    (the stress scene, for the walk's check)
@@ -92,7 +93,11 @@ int main(int argc, char **argv)
     FIELD("side_edge", m.num_sides, m.sides[i].edge);
     FIELD("side_adj", m.num_sides, m.sides[i].adj);
     FIELD("side_anghi", m.num_sides, m.sides[i].anghi);
-    FIELD("side_twin", m.num_sides, m.sides[i].adj != 0 ? pt_map_twin(&m, (uint8_t)i) : 0);
+    // a portal's entry: the side after its twin, where a walk through it begins
+    FIELD("side_entry", m.num_sides,
+          m.sides[i].adj != 0
+              ? pt_map_ring_next(&m.cells[m.sides[i].adj], pt_map_twin(&m, (uint8_t)i))
+              : 0);
     FIELD("sprite_x", m.num_sprites, m.sprites[i].x);
     FIELD("sprite_y", m.num_sprites, m.sprites[i].y);
     FIELD("sprite_art", m.num_sprites, m.sprites[i].art);
@@ -112,11 +117,13 @@ int main(int argc, char **argv)
            "MAP_SPRITES = LEN(map_sprite_x)\nMAP_ARTS = LEN(map_art_e) DIV 8\n"
            "MAP_SHADES = LEN(map_shade_even)\n\n");
 
-    printf("\\\\ The tables. A side's twin is the side across its portal, 0 for a wall. An art's "
-           "patterns\n"
-           "\\\\ are by art * 8 + colour code, 0 transparent; its data is by art_lo and art_hi. "
-           "A shade's\n"
-           "\\\\ patterns are palette.c's, the even scanlines' and the odd's.\n\n");
+    printf("\\\\ The tables. A portal's entry is the side after its twin, the side across it, "
+           "where a walk\n"
+           "\\\\ through it begins; a wall's is 0, never read. An art's patterns are by art * 8 + "
+           "colour\n"
+           "\\\\ code, 0 transparent; its data is by art_lo and art_hi. A shade's patterns are "
+           "palette.c's,\n"
+           "\\\\ the even scanlines' and the odd's.\n\n");
     table("vert_xlo", "MAP_VERTS", "LO(map_vert_x)");
     table("vert_xhi", "MAP_VERTS", "HI(map_vert_x)");
     table("vert_ylo", "MAP_VERTS", "LO(map_vert_y)");
@@ -141,7 +148,7 @@ int main(int argc, char **argv)
     table("side_edge", "MAP_SIDES", "map_side_edge");
     table("side_adj", "MAP_SIDES", "map_side_adj");
     table("side_anghi", "MAP_SIDES", "map_side_anghi");
-    table("side_twin", "MAP_SIDES", "map_side_twin");
+    table("side_entry", "MAP_SIDES", "map_side_entry");
     printf("\n");
     table("sprite_xlo", "MAP_SPRITES", "LO(map_sprite_x)");
     table("sprite_xhi", "MAP_SPRITES", "HI(map_sprite_x)");

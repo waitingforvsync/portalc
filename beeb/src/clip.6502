@@ -10,10 +10,9 @@ SECTION Capture
 .bound_bottom SKIP SCREEN_WIDTH
 ENDSECTION
 
-\\ A clip's span; and the scan's state, shared by the clips, their columns and the stretches.
+\\ The scan's state, shared by the clips, their columns and the stretches. A clip's span is the
+\\ walk's (span_x0, span_x1: capture.6502).
 
-ZA_AUTO1 span_x0                        ; the span's columns, [x0, x1)
-ZA_AUTO1 span_x1
 ZA_AUTO1 scan_edges                     ; bit 7: the top's the screen's all along; bit 6: the bottom
 ZA_AUTO1 scan_end                       ; the column the scan's part stops at
 ZA_AUTO1 scan_fraction                  ; the line's row's fraction, the row being in Y

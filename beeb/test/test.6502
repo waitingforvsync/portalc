@@ -1,5 +1,5 @@
-\\ test/test.6502 - what make test's checks share: where their answers go, and the run, which the
-\\ loader calls in a check's build (-D TEST=TRUE). Each check's program names its check, check.
+\\ test/test.6502 - what make test's checks share: where their answers go, the run the loader calls
+\\ in a check's build (-D TEST=TRUE, its program naming its check), and T emptied and summed.
 
 TEST_RESULTS = &C000                    ; HAZEL, the filing system's 8K: paged in, its OS gone
 TEST_RESULTS_END = &E000
@@ -21,5 +21,56 @@ ENDSECTION
     LDA #0:STA t_done
     JSR check
     LDA #&A5:STA t_done
+    RTS
+}
+
+\\ Empty T, its junk rows too.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     T_JUNK_TOP to SCREEN_A: 0
+\\     A, X, Y: corrupted
+
+.clear_t
+{
+    LDA #HI(T_JUNK_TOP):STA page+2
+    LDA #0:TAY
+    LDX #HI(SCREEN_A-T_JUNK_TOP)        ; pages
+.page
+    STA T_JUNK_TOP,Y
+    INY
+    BNE page
+    INC page+2                          ; the operand's high byte
+    DEX
+    BNE page
+    RTS
+}
+
+\\ T's sums, its junk rows too.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     sum1, sum2: the Fletcher sums of T_JUNK_TOP to SCREEN_A
+\\     A, X, Y: corrupted
+
+.sum_t
+{
+    ZA_AUTO1 sum1                       ; out: the sum of the bytes
+    ZA_AUTO1 sum2                       ; out: the sum of the sums
+
+    LDA #HI(T_JUNK_TOP):STA page+2
+    LDA #0:STA sum1:STA sum2:TAY
+    LDX #HI(SCREEN_A-T_JUNK_TOP)        ; pages
+.page
+    LDA T_JUNK_TOP,Y:FLETCHER sum1, sum2
+    INY
+    BNE page
+    INC page+2
+    DEX
+    BNE page
     RTS
 }

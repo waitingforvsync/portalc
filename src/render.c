@@ -188,6 +188,12 @@ static pt_line make_line(uint8_t x0, uint8_t x1, const pt_ends *e, pt_height h, 
         }
     }
     L.g = pt_g_make(gm, neg);
+
+    // both ends on the screen: rl is the far end's own row, from its depth,
+    // and the rows stepped by the rounded gradient can overshoot it by up to
+    // 78/256 of a row, into the next row in about 0.5% of lines (fast_inside
+    // says what that costs). Stepping to the last column instead would cost
+    // a multiply a line
     if (!near0 && !near1) {
         L.x1 = x1;
         L.y = h.below ? pt_u16((int32_t)mid + o0) : pt_u16((int32_t)mid - o0);
@@ -327,6 +333,14 @@ static bool inside(uint8_t row, uint8_t tmax, uint8_t bmin)
 // compares settle it, and no multiply but the one to start part way along
 // it. *y is its row at xa wherever that's one of its columns, for the scan
 // to start from if the answer's no.
+//
+// Near enough: the last few rows can be one past rl (make_line), so one
+// can land on a bound. That's harmless here, as visible or hidden it's
+// toggled on that row; but the extent a floor or ceiling clip then gives
+// its child is a row too generous, and a child's line overshooting its own
+// rl in the same column can be drawn a row past its bound: a pixel of the
+// wrong colour. Never seen in the sweep, and the cheapest guarantee costs
+// the 6502 130 cycles a frame.
 static bool fast_inside(const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax, uint8_t bmin,
                         uint16_t *y)
 {
@@ -456,6 +470,11 @@ static void scan(pt_scan *s, uint8_t xa, uint8_t xb, pt_colfn col, uint16_t ya)
     if (l < rr) {
         uint16_t y = l == xa ? ya : line_y(L, l);
         for (uint8_t c = l;;) {
+            // a line's own rows are on its own side of the middle row (make_line's offsets
+            // run from it), so it only meets the screen's edge on that side: the 6502's plain
+            // loops count on it
+            RC_ASSERT(L->below ? row_of(y) >= PT_SCREEN_HEIGHT / 2
+                               : row_of(y) <= PT_SCREEN_HEIGHT / 2);
             col(s, c, y);
             if (++c == rr)
                 break;
@@ -567,6 +586,12 @@ static uint8_t clip_floor(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb
     if (L->below ? bmin == PT_SCREEN_HEIGHT : tmax == 0) {
         uint8_t l, rr;
         on_screen(L, xa, xb, &l, &rr);
+        if (L->below && l == rr) {
+            // all cut off: the child's bottom is the screen's all along, which bot[] needn't
+            // hold, as its extent says so
+            *room = true;
+            return PT_SCREEN_HEIGHT;
+        }
         if (L->below) {
             memset(&r->bot[xa], PT_SCREEN_HEIGHT, (size_t)(l - xa));
             memset(&r->bot[rr], PT_SCREEN_HEIGHT, (size_t)(xb - rr));
@@ -685,6 +710,29 @@ static void close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, 
     for (uint8_t c = l; c < rr; c++)
         if (r->bot[c] < PT_SCREEN_HEIGHT)
             pt_mode5_plot(r->tb, c, r->bot[c], cbfb);
+}
+
+void pt_render_clip_plain(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax,
+                          uint8_t bmin)
+{
+    clip_plain(r, L, xa, xb, tmax, bmin);
+}
+
+uint8_t pt_render_clip_floor(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb,
+                             uint8_t tmax, uint8_t bmin, bool *room)
+{
+    return clip_floor(r, L, xa, xb, tmax, bmin, room);
+}
+
+uint8_t pt_render_clip_ceil(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax,
+                            uint8_t cbmin, bool *room)
+{
+    return clip_ceil(r, L, xa, xb, tmax, cbmin, room);
+}
+
+void pt_render_close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, bool bz)
+{
+    close_columns(r, l, rr, cbfb, bz);
 }
 
 // ---- angles and columns ----

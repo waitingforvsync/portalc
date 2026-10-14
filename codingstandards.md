@@ -214,7 +214,7 @@ The rest:
   `portalc_arithref`; `make test_vcache`, the vertex cache against
   `portalc_vcacheref`; `make test_capture`, the capture against
   `portalc_captureref`; `make test_plot`, the plotters against
-  `portalc_plotref`.
+  `portalc_plotref`; `make test_clip`, the clips against `portalc_clipref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
@@ -225,7 +225,18 @@ The rest:
   more than one way (falling and rising) in each way, through an `IF` on
   its parameter. A break that writes outside its buffer can crash the check
   ("never finished"), which is a fail too, but one that shows a difference
-  says where.
+  says where. A fast path that hands what it rejects to a slower, exact one
+  can't be broken by making it stricter: break it laxly, letting through
+  what it should catch.
+- Made-up cases mustn't repeat with the cases' own structure: a value
+  stepped by 5 over 16 cases a line comes round to the same place each
+  line, and whole combinations (a kind of clip with a kind of span) never
+  occur. Take the systematic parts from the case's number (a kind of clip,
+  the bounds' edges), and the rest from an LFSR stepped once a case, the
+  same in the C and the 6502; then count in the C which paths the cases
+  reach before trusting the check.
+- After breaking on purpose, restore and rebuild before measuring or
+  replaying anything: a build left from the last break measures the break.
 - Sums are Fletcher's, mod 255 (`FLETCHER`, a carry out added back in).
   Mod 256, a byte that's the same in every frame of a row of 256 adds
   nothing, so an error in it can't show.

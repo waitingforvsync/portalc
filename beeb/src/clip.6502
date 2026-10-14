@@ -1,0 +1,789 @@
+\\ clip.6502 - the clips (render.c's scan and clips): a line over a span, against the bounds, its
+\\ visible stretches to the plotters and its hidden ones toggled on their bounds' rows.
+
+\\ The bounds, a row a column: the top's (the first row inside) and the bottom's (the first below).
+\\ Where a visit's extent says one's the screen's edge all along, they don't hold it.
+
+SECTION Capture
+    FITPAGE SCREEN_WIDTH
+.bound_top  SKIP SCREEN_WIDTH
+    FITPAGE SCREEN_WIDTH
+.bound_bottom SKIP SCREEN_WIDTH
+ENDSECTION
+
+\\ A clip's span; and the scan's state, shared by the clips, their columns and the stretches.
+
+ZA_AUTO1 span_x0                        ; the span's columns, [x0, x1)
+ZA_AUTO1 span_x1
+ZA_AUTO1 scan_edges                     ; bit 7: the top's the screen's all along; bit 6: the bottom
+ZA_AUTO1 scan_end                       ; the column the scan's part stops at
+ZA_AUTO1 scan_fraction                  ; the line's row's fraction, the row being in Y
+ZA_AUTO1 scan_whole                     ; its gradient's whole rows, the sign off
+ZA_AUTO1 scan_beyond                    ; bit 7: past the line's columns, its row the same all along
+ZA_AUTO1 scan_row                       ; the row, kept over a plot
+ZA_AUTO1 stretch                        ; bit 7: a visible stretch open; bit 6: a hidden one
+ZA_AUTO1 stretch_row                    ; the hidden one's row
+
+\\ A line forming no bound, over the span (clip_plain): it only toggles, whole to the plotters where
+\\ it's inside the bounds' extents all along, otherwise through a scan.
+\\
+\\ Inputs:
+\\     span_x0, span_x1: the span
+\\     line_x0 to line_below: the line
+\\     walk_tmax, walk_bmin: the bounds' extents
+\\     bound_top, bound_bottom: the bounds, where they're not the screen's edges
+\\     pattern_even, pattern_odd: its colour
+\\
+\\ Outputs:
+\\     T, the records, toggle_end: the line toggled
+\\     A, X, Y: corrupted
+
+.clip_plain
+{
+    ZA_AUTO1 own_x0                     ; local: the line's own columns in the span
+    ZA_AUTO1 own_x1
+
+    LDA pattern_even:ORA pattern_odd:BNE coloured
+    RTS                                 ; no colour: nothing to toggle
+.coloured
+    COLUMNS cut, before, cut
+.at_left
+    ROW_AT
+    ROWS_INSIDE walk_tmax, walk_bmin, slow_near
+    JMP plot_run                        ; inside all along: to the plotters whole
+.slow_near
+    JMP slow
+
+    \\ the line ends before the span: with the bound on its side the screen's edge, all of it on
+    \\ row 0 above (run_x0 and run_x1 the span), or in the junk row below
+
+.before
+    BIT line_below:BMI before_below
+    LDX walk_tmax:BNE to_scan           ; the top's in the array
+    LDX #0
+    JMP plot_flat                       ; (coloured)
+.before_below
+    LDX walk_bmin:CPX #SCREEN_HEIGHT:BNE to_scan
+.none
+    RTS
+.to_scan
+    JMP scan                            ; (out of reach)
+
+    \\ the line starts or ends inside the span: with the bound on its side the screen's edge, the
+    \\ columns cut off are a flat run on row 0 each side above, and nothing below
+
+.cut
+    BIT line_below:BMI cut_below
+    LDA walk_tmax:BNE to_scan           ; the top's in the array
+    ON_SCREEN span_x0, span_x1, own_x0, own_x1
+    LDA span_x0:LDX own_x0
+    JSR flat_top
+    LDA own_x1:LDX span_x1
+    JSR flat_top
+    JMP narrow
+.cut_below
+    LDA walk_bmin:CMP #SCREEN_HEIGHT:BNE to_scan
+    ON_SCREEN span_x0, span_x1, own_x0, own_x1
+.narrow
+    LDA own_x0:CMP own_x1:BEQ none      ; all cut off
+    LDA own_x1:STA run_x1
+    LDX own_x0:STX run_x0
+    CPX line_x0                         ; (C set)
+    JMP at_left
+
+    \\ otherwise the scan over its own columns, from its row at the span's start
+
+.slow
+    SCAN_EDGES walk_tmax, walk_bmin
+    SCAN_OWN plain_own
+    JMP stretch_end
+
+    \\ the bound on its side in the array: the scan, over the span
+
+.scan
+    SCAN_EDGES walk_tmax, walk_bmin
+    SCAN plain_columns, plain_own, span_x0, span_x1, own_x0, own_x1
+    RTS
+}
+
+\\ The line forming a child's bottom, over the span (clip_floor): the line, merged into the parent's
+\\ top where it's on or above that (no room there), and into its bottom where it's on or below it.
+\\
+\\ Inputs:
+\\     span_x0, span_x1: the span
+\\     line_x0 to line_below: the line
+\\     walk_tmax, walk_bmin: the parent's bounds' extents
+\\     bound_top, bound_bottom: its bounds, where they're not the screen's edges
+\\     pattern_even, pattern_odd: its colour
+\\
+\\ Outputs:
+\\     A: the child's bottom's extent, its highest row
+\\     room: bit 7 set if the child has room in any column, its bottom below its top
+\\     bound_bottom: the child's bottom over the span
+\\     T, the records, toggle_end: the line toggled
+\\     X, Y: corrupted
+
+.clip_floor
+{
+    ZA_AUTO1 room                       ; out: bit 7 set if the child has room anywhere
+    ZA_AUTO1 extent                     ; local: the child's bottom's extent so far
+    ZA_AUTO1 own_x0                     ; local: the line's own columns in the span
+    ZA_AUTO1 own_x1
+
+    LDA #SCREEN_HEIGHT:STA extent
+    LDA #0:STA room
+    COLUMNS cut, cut, cut
+.at_left
+    ROW_AT
+    ROWS_INSIDE walk_tmax, walk_bmin, slow
+    JMP fast
+
+    \\ otherwise the scan over its own columns
+
+.slow
+    SCAN_EDGES walk_tmax, walk_bmin
+    SCAN_OWN floor_columns
+    JSR stretch_end
+    LDA extent
+    RTS
+
+    \\ the columns the screen's pre-clip cut off, where the bound on the line's side is the screen's
+    \\ edge: off its bottom they lend the junk row, and room; off its top the child's bottom is row
+    \\ 0, the extent, under a flat run each side
+
+.to_scan
+    JMP scan                            ; (out of reach)
+.cut
+    BIT line_below:BPL cut_above
+    LDA walk_bmin:CMP #SCREEN_HEIGHT:BNE to_scan
+    ON_SCREEN span_x0, span_x1, own_x0, own_x1
+    LDA #&80:STA room                   ; some cut off: room
+    LDA own_x0:CMP own_x1:BEQ all_below
+    FILL bound_bottom, SCREEN_HEIGHT, span_x0, own_x0
+    FILL bound_bottom, SCREEN_HEIGHT, own_x1, span_x1
+    JMP narrow
+.all_below
+    LDA #SCREEN_HEIGHT                  ; the screen's bottom all along: the array needn't hold it
+    RTS
+.cut_above
+    LDA walk_tmax:BNE to_scan
+    ON_SCREEN span_x0, span_x1, own_x0, own_x1
+    LDA span_x0:LDX own_x0
+    JSR flat_top
+    LDA own_x1:LDX span_x1
+    JSR flat_top
+    FILL bound_bottom, 0, span_x0, own_x0
+    FILL bound_bottom, 0, own_x1, span_x1
+    LDA #0:STA extent                   ; some cut off: row 0 the extent
+.narrow
+    LDA own_x0:CMP own_x1:BNE narrowed
+    LDA extent                          ; all cut off
+    RTS
+.narrowed
+    LDA own_x1:STA run_x1
+    LDX own_x0:STX run_x0
+    CPX line_x0                         ; (C set)
+    JMP at_left
+
+    \\ inside all along: its rows the child's bottom, room all along, and the extent its ends'
+
+.fast
+    WRITE_ROWS bound_bottom
+    LDA #&80:STA room
+    LDA run_y+1                         ; the row at the start
+    CMP line_endy:BCC lower             ; or the one at the end, whichever's higher
+    LDA line_endy
+.lower
+    CMP extent:BCS run
+    STA extent
+.run
+    JSR plot_run
+    LDA extent
+    RTS
+
+    \\ the bound on its side in the array: the scan, over the span
+
+.scan
+    SCAN_EDGES walk_tmax, walk_bmin
+    SCAN floor_columns, floor_columns, span_x0, span_x1, own_x0, own_x1
+    LDA extent
+    RTS
+}
+
+\\ The line forming a child's top, after its floor line (clip_ceil): the line, merged into the
+\\ parent's top where it's on or above that, and into the child's bottom where it's on or below it.
+\\
+\\ Inputs:
+\\     A: the child's bottom's extent
+\\     span_x0, span_x1: the span
+\\     line_x0 to line_below: the line
+\\     walk_tmax: the parent's top's extent
+\\     bound_top, bound_bottom: the parent's top and the child's bottom, where they're not the
+\\         screen's edges
+\\     pattern_even, pattern_odd: its colour
+\\
+\\ Outputs:
+\\     A: the child's top's extent, its lowest row
+\\     room: bit 7 set if the child has room in any column, its bottom below its top
+\\     bound_top: the child's top over the span
+\\     T, the records, toggle_end: the line toggled
+\\     X, Y: corrupted
+
+.clip_ceil
+{
+    ZA_AUTO1 room                       ; out: bit 7 set if the child has room anywhere
+    ZA_AUTO1 bottom_extent              ; local: the child's bottom's extent
+    ZA_AUTO1 extent                     ; local: the child's top's extent so far
+    ZA_AUTO1 own_x0                     ; local: the line's own columns in the span
+    ZA_AUTO1 own_x1
+
+    STA bottom_extent
+    LDA #0:STA extent:STA room
+    COLUMNS cut, cut, cut
+.at_left
+    ROW_AT
+    ROWS_INSIDE walk_tmax, bottom_extent, slow
+    JMP fast
+
+    \\ otherwise the scan over its own columns
+
+.slow
+    SCAN_EDGES walk_tmax, bottom_extent
+    SCAN_OWN ceil_columns
+    JSR stretch_end
+    LDA extent
+    RTS
+
+    \\ the columns the screen's pre-clip cut off its top, where the parent's top is the screen's:
+    \\ the child's top is row 0 there, under a flat run each side
+
+.to_scan
+    JMP scan                            ; (out of reach)
+.cut
+    BIT line_below:BMI to_scan
+    LDA walk_tmax:BNE to_scan
+    ON_SCREEN span_x0, span_x1, own_x0, own_x1
+    LDA span_x0:LDX own_x0
+    JSR flat_top
+    LDA own_x1:LDX span_x1
+    JSR flat_top
+    FILL bound_top, 0, span_x0, own_x0
+    FILL bound_top, 0, own_x1, span_x1
+
+    \\ room where the child's bottom is below row 0 in a column cut off: the screen's always is
+
+    LDA bottom_extent:CMP #SCREEN_HEIGHT:BNE bottom_array
+    LDA span_x0:CMP own_x0:BNE roomy
+    LDA own_x1:CMP span_x1:BNE roomy
+    JMP narrow
+.bottom_array
+    LDX span_x0
+.before
+    CPX own_x0:BEQ after
+    LDA bound_bottom,X:BNE roomy
+    INX
+    BNE before                          ; (always)
+    ZA_UNREACHABLE
+.after
+    LDX own_x1
+.after_column
+    CPX span_x1:BEQ narrow
+    LDA bound_bottom,X:BNE roomy
+    INX
+    BNE after_column                    ; (always)
+    ZA_UNREACHABLE
+.roomy
+    LDA #&80:STA room
+.narrow
+    LDA own_x0:CMP own_x1:BNE narrowed
+    LDA extent                          ; all cut off
+    RTS
+.narrowed
+    LDA own_x1:STA run_x1
+    LDX own_x0:STX run_x0
+    CPX line_x0                         ; (C set)
+    JMP at_left
+
+    \\ inside all along: its rows the child's top, room all along, and the extent its ends'
+
+.fast
+    WRITE_ROWS bound_top
+    LDA #&80:STA room
+    LDA run_y+1                         ; the row at the start
+    CMP line_endy:BCS higher            ; or the one at the end, whichever's lower
+    LDA line_endy
+.higher
+    CMP extent:BCC run
+    STA extent
+.run
+    JSR plot_run
+    LDA extent
+    RTS
+
+    \\ the parent's top in the array: the scan, over the span
+
+.scan
+    SCAN_EDGES walk_tmax, bottom_extent
+    SCAN ceil_columns, ceil_columns, span_x0, span_x1, own_x0, own_x1
+    LDA extent
+    RTS
+}
+
+\\ Close a child's columns over the span after the fact (close_columns): its whole stack there
+\\ telescoped to its ceiling EOR floor, toggled at its bottom's row. None in the junk row.
+\\
+\\ Inputs:
+\\     A: the child's bottom's extent: 64, the junk row all along, closes nothing
+\\     span_x0, span_x1: the span
+\\     bound_bottom: the child's bottom
+\\     pattern_even, pattern_odd: its ceiling's colour EOR its floor's
+\\
+\\ Outputs:
+\\     T: the toggles
+\\     A, X, Y: corrupted
+
+.close_columns
+{
+    ZA_AUTO1 column                     ; local: the column
+
+    CMP #SCREEN_HEIGHT:BCS done         ; all in the junk row
+    LDA pattern_even:ORA pattern_odd:BEQ done
+    LDA span_x0:STA column
+.loop
+    LDX column
+    LDA bound_bottom,X:CMP #SCREEN_HEIGHT:BCS next
+    TAX                                 ; the row
+    LDA column
+    MODE5_AT
+    LDA column:AND #3:TAX
+    LDA mode5_pixel,X:TAX
+    MODE5_EOR_X
+.next
+    INC column
+    LDA column:CMP span_x1:BCC loop
+.done
+    RTS
+}
+
+\\ A plain line's own columns from X to scan_end, its row there in Y and scan_fraction: through
+\\ plain_columns to its first visible one, then on through the loop for its way and its bounds.
+\\
+\\ Inputs:
+\\     X: the first column
+\\     Y, scan_fraction: the line's row there
+\\     scan_end, scan_edges, scan_whole: the scan's
+\\
+\\ Outputs:
+\\     the stretches, the plotters' work
+\\     A, X, Y: corrupted
+
+.plain_own
+{
+    BIT line_grad+1:BMI rising
+    BIT scan_edges:BMI falling_top
+    BVS falling_bottom
+    JMP falling_arrays
+.falling_bottom
+    JMP falling_screen_bottom
+.falling_top
+    BVS falling_both
+    JMP falling_screen_top
+.falling_both
+    JMP falling_screen
+.rising
+    BIT scan_edges:BMI rising_top
+    BVS rising_bottom
+    JMP rising_arrays
+.rising_bottom
+    JMP rising_screen_bottom
+.rising_top
+    BVS rising_both
+    JMP rising_screen_top
+.rising_both
+    JMP rising_screen
+
+.falling_arrays
+    PLAIN_OWN TRUE, FALSE, FALSE, TRUE
+.falling_screen_bottom
+    PLAIN_OWN TRUE, FALSE, TRUE, FALSE
+.falling_screen_top
+    PLAIN_OWN TRUE, TRUE, FALSE, TRUE
+.falling_screen
+    PLAIN_OWN TRUE, TRUE, TRUE, FALSE
+.rising_arrays
+    PLAIN_OWN FALSE, FALSE, FALSE, TRUE
+.rising_screen_bottom
+    PLAIN_OWN FALSE, FALSE, TRUE, FALSE
+.rising_screen_top
+    PLAIN_OWN FALSE, TRUE, FALSE, TRUE
+.rising_screen
+    PLAIN_OWN FALSE, TRUE, TRUE, FALSE
+}
+
+\\ A plain line's columns from X to scan_end, a column at a time (plain_col): each visible strictly
+\\ between the bounds, or hidden on the bound it's on or past, to its first visible one.
+\\
+\\ Inputs:
+\\     X: the column
+\\     Y, scan_fraction: the line's row there
+\\     scan_end, scan_edges, scan_beyond, scan_whole: the scan's
+\\
+\\ Outputs:
+\\     C: clear at a visible column, its stretch open (never past the line's columns); set at
+\\         scan_end
+\\     X, Y, scan_fraction: that column, and the line's row there
+\\     A: corrupted
+
+.plain_columns
+{
+.column
+    BIT scan_edges:BMI top_screen
+    TYA:CMP bound_top,X
+    BEQ on_top
+    BCS bottom                          ; under it
+.on_top
+    LDA bound_top,X
+    JMP hidden
+.top_screen
+    TYA:BNE bottom                      ; under the screen's top: off row 0
+    BEQ hidden                          ; (always: A 0, the screen's top)
+    ZA_UNREACHABLE
+.bottom
+    BIT scan_edges:BVS bottom_screen
+    TYA:CMP bound_bottom,X:BCC visible
+    LDA bound_bottom,X
+    BCS hidden                          ; (always)
+    ZA_UNREACHABLE
+.bottom_screen
+    CPY #SCREEN_HEIGHT:BCC visible
+    LDA #SCREEN_HEIGHT
+.hidden
+    BIT stretch:BVC open                ; no hidden stretch open
+    CMP stretch_row:BEQ same            ; on the same row: on with it
+.open
+    JSR stretch_hidden
+.same
+    INX:CPX scan_end:BEQ end            ; (C set at the end)
+    BIT scan_beyond:BMI column          ; past the line's columns: no step
+    SCAN_STEP
+    JMP column
+.visible
+    JSR stretch_visible
+    CLC
+.end
+    RTS
+}
+
+\\ A floor line's columns from X to scan_end, a column at a time (floor_col): the child's bottom,
+\\ with its extent and room.
+\\
+\\ Inputs:
+\\     X: the column
+\\     Y, scan_fraction: the line's row there
+\\     scan_end, scan_edges, scan_beyond, scan_whole: the scan's
+\\     clip_floor.extent, clip_floor.room: so far
+\\
+\\ Outputs:
+\\     bound_bottom: the child's bottom over the columns
+\\     clip_floor.extent, clip_floor.room: on with them
+\\     the stretches, the plotters' work
+\\     A, X, Y: corrupted
+
+.floor_columns
+{
+    ZA_AUTO1 row                        ; local: the bound's row it's hidden on
+
+.column
+    TYA
+    BIT scan_edges:BMI top_screen
+    CMP bound_top,X:BEQ on_top:BCC on_top
+.bottom
+    BIT scan_edges:BVS bottom_screen
+    CMP bound_bottom,X:BCS on_bottom
+.visible                                ; A: the line's row, the child's bottom, under the top
+    STA bound_bottom,X
+    CMP clip_floor.extent:BCS high
+    STA clip_floor.extent
+.high
+    BIT stretch:BMI roomy               ; open already
+    JSR stretch_visible
+.roomy
+    LDA #&80:STA clip_floor.room
+.next
+    INX:CPX scan_end:BEQ end
+    BIT scan_beyond:BMI column          ; past the line's columns: no step
+    SCAN_STEP
+    JMP column
+.end
+    RTS
+.top_screen
+    TYA:BNE bottom                      ; under row 0
+    BEQ on_top_row                      ; (always: A 0, the screen's top)
+    ZA_UNREACHABLE
+.bottom_screen
+    CMP #SCREEN_HEIGHT:BCC visible
+    LDA #SCREEN_HEIGHT
+    STA bound_bottom,X                  ; the screen's, which the array doesn't hold
+    BCS on_bottom_row                   ; (always)
+    ZA_UNREACHABLE
+.on_top
+    LDA bound_top,X
+.on_top_row                             ; A: the top's row, the child's bottom: no room
+    STA bound_bottom,X
+    STA row
+    JSR stretch_hidden
+    LDA row
+    CMP clip_floor.extent:BCS next
+    STA clip_floor.extent
+    BCC next                            ; (always)
+    ZA_UNREACHABLE
+.on_bottom
+    LDA bound_bottom,X                  ; the parent's, in the array already
+.on_bottom_row                          ; A: the bottom's row, the child's bottom
+    STA row
+    JSR stretch_hidden
+    LDA row
+    CMP clip_floor.extent:BCS lower
+    STA clip_floor.extent
+.lower
+    LDA #0                              ; the top's row
+    BIT scan_edges:BMI top_row
+    LDA bound_top,X
+.top_row
+    CMP row:BCS next                    ; on or below the bottom: no room
+    BCC roomy                           ; (always)
+    ZA_UNREACHABLE
+}
+
+\\ A ceiling line's columns from X to scan_end, a column at a time (ceil_col): the child's top,
+\\ with its extent and room.
+\\
+\\ Inputs:
+\\     X: the column
+\\     Y, scan_fraction: the line's row there
+\\     scan_end, scan_edges, scan_beyond, scan_whole: the scan's
+\\     clip_ceil.extent, clip_ceil.room: so far
+\\
+\\ Outputs:
+\\     bound_top: the child's top over the columns
+\\     clip_ceil.extent, clip_ceil.room: on with them
+\\     the stretches, the plotters' work
+\\     A, X, Y: corrupted
+
+.ceil_columns
+{
+    ZA_AUTO1 row                        ; local: the bound's row it's hidden on
+
+.column
+    TYA
+    BIT scan_edges:BMI top_screen
+    CMP bound_top,X:BEQ on_top:BCC on_top
+.bottom
+    BIT scan_edges:BVS bottom_screen
+    CMP bound_bottom,X:BCS on_bottom
+.visible                                ; A: the line's row, the child's top, above the bottom
+    STA bound_top,X
+    CMP clip_ceil.extent:BCC low
+    STA clip_ceil.extent
+.low
+    BIT stretch:BMI roomy               ; open already
+    JSR stretch_visible
+.roomy
+    LDA #&80:STA clip_ceil.room
+.next
+    INX:CPX scan_end:BEQ end
+    BIT scan_beyond:BMI column          ; past the line's columns: no step
+    SCAN_STEP
+    JMP column
+.end
+    RTS
+.top_screen
+    TYA:BNE bottom                      ; under row 0
+    STA bound_top,X                     ; the screen's, which the array doesn't hold (A 0)
+    BEQ on_top_row                      ; (always)
+    ZA_UNREACHABLE
+.bottom_screen
+    CMP #SCREEN_HEIGHT:BCC visible
+    LDA #SCREEN_HEIGHT
+    BCS on_bottom_row                   ; (always)
+    ZA_UNREACHABLE
+.on_top
+    LDA bound_top,X                     ; the parent's, in the array already
+.on_top_row                             ; A: the top's row, the child's top
+    STA row
+    JSR stretch_hidden
+    LDA row
+    CMP clip_ceil.extent:BCC higher
+    STA clip_ceil.extent
+.higher
+    LDA #SCREEN_HEIGHT                  ; the bottom's row
+    BIT scan_edges:BVS bottom_row
+    LDA bound_bottom,X
+.bottom_row
+    CMP row:BEQ next:BCC next           ; on or above the top: no room
+    BCS roomy                           ; (always)
+    ZA_UNREACHABLE
+.on_bottom
+    LDA bound_bottom,X
+.on_bottom_row                          ; A: the bottom's row, the child's top: no room
+    STA bound_top,X
+    STA row
+    JSR stretch_hidden
+    LDA row
+    CMP clip_ceil.extent:BCC next
+    STA clip_ceil.extent
+    BCS next                            ; (always)
+    ZA_UNREACHABLE
+}
+
+\\ A flat run of toggles on row 0 over [A, X), if any (flat_top): a line off the screen's top.
+\\
+\\ Inputs:
+\\     A, X: the columns, [A, X)
+\\     pattern_even, pattern_odd: the colour
+\\
+\\ Outputs:
+\\     T: the run toggled
+\\     A, X, Y: corrupted
+
+.flat_top
+{
+    STA run_x0:STX run_x1
+    CMP run_x1:BCS none                 ; none
+    LDA pattern_even:ORA pattern_odd:BEQ none
+    LDX #0
+    JMP plot_flat
+.none
+    RTS
+}
+
+\\ Column X visible (col_visible): a hidden stretch ends there, and a visible one starts, unless
+\\ one's open already.
+\\
+\\ Inputs:
+\\     X: the column
+\\     Y, scan_fraction: the line's row there
+\\
+\\ Outputs:
+\\     stretch, run_x0, run_y: the visible stretch
+\\     A: corrupted
+\\     X, Y: preserved
+
+.stretch_visible
+{
+    BIT stretch:BMI done                ; open already
+    BVC open                            ; no hidden one
+    JSR hidden_end
+.open
+    STX run_x0
+    STY run_y+1
+    LDA scan_fraction:STA run_y
+    LDA #&80:STA stretch
+.done
+    RTS
+}
+
+\\ Column X hidden on a bound's row (col_hidden): a visible stretch ends there, and a hidden one on
+\\ another row; one starts on this row, unless it's open already.
+\\
+\\ Inputs:
+\\     X: the column
+\\     A: the row
+\\
+\\ Outputs:
+\\     stretch, run_x0, stretch_row: the hidden stretch
+\\     A: corrupted
+\\     X, Y: preserved
+
+.stretch_hidden
+{
+    ZA_AUTO1 row                        ; local: the row, over an end
+
+    BIT stretch:BMI visible             ; (A kept)
+    BVC open                            ; none open
+    CMP stretch_row:BEQ done            ; on the same row: on with it
+    STA row
+    JSR hidden_end
+    LDA row
+.open
+    STX run_x0
+    STA stretch_row
+    LDA #&40:STA stretch
+.done
+    RTS
+.visible
+    STA row
+    JSR visible_end
+    LDA row
+    JMP open
+}
+
+\\ The stretch open at column X ends there (run_end, hrun_end): plotted.
+\\
+\\ Inputs:
+\\     X: the column
+\\     stretch: the stretch open, if any
+\\
+\\ Outputs:
+\\     stretch: none
+\\     A: corrupted
+\\     X, Y: preserved
+
+.stretch_end
+{
+    BIT stretch:BMI visible_end
+    BVS hidden_end
+    RTS
+}
+
+\\ The visible stretch ends at column X (run_end): plotted whole.
+\\
+\\ Inputs:
+\\     X: the column
+\\     run_x0, run_y: the stretch
+\\
+\\ Outputs:
+\\     stretch: none
+\\     T, the records, toggle_end: the stretch plotted
+\\     A: corrupted
+\\     X, Y: preserved
+
+.visible_end
+{
+    STX run_x1
+    STY scan_row
+    JSR plot_run
+    LDX run_x1
+    LDY scan_row
+    LDA #0:STA stretch
+    RTS
+}
+
+\\ The hidden stretch ends at column X (hrun_end): a flat run on its row, unless that's the junk
+\\ row, or the line has no colour.
+\\
+\\ Inputs:
+\\     X: the column
+\\     run_x0, stretch_row: the stretch
+\\
+\\ Outputs:
+\\     stretch: none
+\\     T: the stretch toggled
+\\     A: corrupted
+\\     X, Y: preserved
+
+.hidden_end
+{
+    LDA #0:STA stretch
+    LDA stretch_row:CMP #SCREEN_HEIGHT
+    BCS done                            ; the junk row: never seen
+    LDA pattern_even:ORA pattern_odd:BEQ done
+    STX run_x1
+    STY scan_row
+    LDX stretch_row
+    JSR plot_flat
+    LDX run_x1
+    LDY scan_row
+.done
+    RTS
+}

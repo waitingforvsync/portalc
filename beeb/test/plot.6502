@@ -182,57 +182,6 @@ ENDSECTION
     RTS
 }
 
-\\ Empty T, its junk rows too.
-\\
-\\ Inputs:
-\\     none
-\\
-\\ Outputs:
-\\     T_JUNK_TOP to SCREEN_A: 0
-\\     A, X, Y: corrupted
-
-.clear_t
-{
-    LDA #HI(T_JUNK_TOP):STA page+2
-    LDA #0:TAY
-    LDX #HI(SCREEN_A-T_JUNK_TOP)        ; pages
-.page
-    STA T_JUNK_TOP,Y
-    INY
-    BNE page
-    INC page+2                          ; the operand's high byte
-    DEX
-    BNE page
-    RTS
-}
-
-\\ T's sums, its junk rows too.
-\\
-\\ Inputs:
-\\     none
-\\
-\\ Outputs:
-\\     sum1, sum2: the Fletcher sums of T_JUNK_TOP to SCREEN_A
-\\     A, X, Y: corrupted
-
-.sum_t
-{
-    ZA_AUTO1 sum1                       ; out: the sum of the bytes
-    ZA_AUTO1 sum2                       ; out: the sum of the sums
-
-    LDA #HI(T_JUNK_TOP):STA page+2
-    LDA #0:STA sum1:STA sum2:TAY
-    LDX #HI(SCREEN_A-T_JUNK_TOP)        ; pages
-.page
-    LDA T_JUNK_TOP,Y:FLETCHER sum1, sum2
-    INY
-    BNE page
-    INC page+2
-    DEX
-    BNE page
-    RTS
-}
-
 \\ The gradients, the runs' longest at each, and the lengths.
 
     FITPAGE GRADS

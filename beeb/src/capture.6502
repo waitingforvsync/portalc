@@ -39,7 +39,7 @@ ZA_AUTO1 line_x0                        ; its columns on the screen, [x0, x1): n
 ZA_AUTO1 line_x1
 ZA_AUTO2 line_y                         ; its row at x0, u8.8, the rounding half in
 ZA_AUTO2 line_grad                      ; its gradient: bit 15 the sign, then u7.8 rows a column
-ZA_AUTO1 line_endy                      ; a row at or past its last column, towards its end
+ZA_AUTO1 line_endy                      ; the row at its end: its last rows can be one past it
 ZA_AUTO1 line_below                     ; &80: below the eye, beyond the screen's bottom; 0: top
 
 \\ Each cell's visit, 0 for none: all 0 between captures, as each visit clears its own.

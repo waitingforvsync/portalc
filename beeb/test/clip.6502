@@ -1,0 +1,327 @@
+\\ test/clip.6502 - make test's check of the clips: made-up lines from make_line, each clipped
+\\ against made-up bounds over spans about its columns, for host/test_build.py.
+
+LINES = 256                             ; made-up lines (clipref's)
+CASES = 16                              ; clips of each: each kind against each bounds' edges
+LINES_HEIGHT = 17*256+31                ; their height's log
+
+SECTION TestResults
+.t_cases1   SKIP LINES                  ; each line's cases' Fletcher sums
+.t_cases2   SKIP LINES
+.t_t1       SKIP LINES/2                ; T's, after every two lines
+.t_t2       SKIP LINES/2
+ENDSECTION
+
+\\ Made-up lines from make_line, on a grid of their ends' depths' logs and of columns, each clipped
+\\ CASES times against made-up bounds over a span about its columns: plain, floor, ceiling and the
+\\ columns closed in turn, with the bounds' extents theirs over the span or the screen's edges, and
+\\ every other two lines' cases shifted so one end lands on the screen's edge. Each made-up value
+\\ is stepped on before it's used, as clipref steps it.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_cases1, t_cases2: each line's cases' answers, summed
+\\     t_t1, t_t2: T's sums, after every two lines
+
+.test_clip
+{
+    ZA_AUTO1 line                       ; local: the line
+    ZA_AUTO1 case                       ; local: its case
+    ZA_AUTO1 grid_i                     ; local: the made-up values: the grid's places
+    ZA_AUTO1 grid_j
+    ZA_AUTO1 column0                    ; local: the line's first column
+    ZA_AUTO1 slope1                     ; local: the bounds' slopes and bases
+    ZA_AUTO1 base1
+    ZA_AUTO1 slope2
+    ZA_AUTO1 base2
+    ZA_AUTO2 random                     ; local: a 16-bit Galois LFSR, for the cases' choices
+    ZA_AUTO1 even                       ; local: a colour
+    ZA_AUTO1 odd
+    ZA_AUTO1 height                     ; local: the line's height's log's high byte, and side
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0
+    STA line:STA grid_i:STA grid_j:STA column0
+    STA slope1:STA base1:STA slope2:STA base2
+    LDA #&E1:STA random
+    LDA #&AC:STA random+1
+    LDA #&5A:STA even
+    LDA #&C3:STA odd
+    JSR clear_t
+
+    \\ the line's ends and columns
+
+.each_line
+    CLC:LDA grid_i:ADC #5:STA grid_i
+    CLC:LDA grid_j:ADC #11:STA grid_j
+    CLC:LDA column0:ADC #13:AND #63:STA column0
+    STA walk_c0
+    LDA grid_j:LSR A:LSR A
+    SEC:ADC column0:STA walk_c1         ; + 1
+    LDA grid_i:AND #7
+    ASL A:ASL A:ASL A:ASL A:ASL A
+    STA logdepth0                       ; -512 + 32 i
+    LDA grid_i:LSR A:LSR A:LSR A
+    SEC:SBC #2:STA logdepth0+1
+    LDA grid_j:AND #7
+    ASL A:ASL A:ASL A:ASL A:ASL A
+    STA logdepth1
+    LDA grid_j:LSR A:LSR A:LSR A
+    SEC:SBC #2:STA logdepth1+1
+    SEC:LDA walk_c1:SBC walk_c0:TAX
+    LOG2_8                              ; A: the fraction, Y: the whole part
+    STA logcolumns:STY logcolumns+1
+    LDA grid_j:LSR A                    ; C: below
+    LDA #0:ROR A
+    ORA #HI(LINES_HEIGHT):STA height
+    LDA #0:STA case:STA sum1:STA sum2
+
+    \\ the made-up values on; the line made, and its span
+
+.each_case
+    CLC:LDA slope1:ADC #23:STA slope1
+    CLC:LDA base1:ADC #41:STA base1
+    CLC:LDA slope2:ADC #67:STA slope2
+    CLC:LDA base2:ADC #19:STA base2
+    LSR random+1:ROR random             ; the LFSR on
+    BCC stepped
+    LDA random+1:EOR #&B4:STA random+1
+.stepped
+    CLC:LDA even:ADC #29:STA even
+    CLC:LDA odd:ADC #53:STA odd
+    LDX #LO(LINES_HEIGHT):LDA height
+    JSR make_line
+
+    \\ the span: about the line's columns, from 8 before to 7 after each end
+
+    LDA random:AND #15
+    CLC:ADC line_x0
+    SEC:SBC #8:BCS start_on
+    LDA #0
+.start_on
+    CMP #SCREEN_WIDTH:BCC start_in
+    LDA #SCREEN_WIDTH-1
+.start_in
+    STA span_x0
+    LDA random:LSR A:LSR A:LSR A:LSR A
+    CLC:ADC line_x1
+    SEC:SBC #8:BCS end_on
+    LDA #0
+.end_on
+    CMP span_x0:BEQ end_past
+    BCC end_past
+    CMP #SCREEN_WIDTH+1:BCC end_in
+    LDA #SCREEN_WIDTH
+    BNE end_in                          ; (always)
+    ZA_UNREACHABLE
+.end_past
+    LDA span_x0:CLC:ADC #1              ; one column at least
+.end_in
+    STA span_x1
+
+    \\ most cases' line shifted by whole rows so that a row lands on the screen's edge: the one at
+    \\ its end (1), at its start (2 and 3), or, most often, at its last column in the span
+    \\ (4 to 7), on the edge it runs towards or from, if that's on its own side
+
+    ZA_AUTO1 shift                      ; local: the rows it moves
+
+    LDA line_x0:CMP line_x1:BCC some    ; no columns: as it is
+    JMP made
+.some
+    LDA random+1:AND #7
+    BEQ made
+    CMP #4:BCS last_row                 ; 4 to 7
+    CMP #2:BCS start_row                ; 2 and 3
+    LDA line_endy                       ; the row at its end
+    JMP towards
+.last_row                               ; the line's last column in the span
+    LDA line_y:STA row_move.row
+    LDA line_y+1:STA row_move.row+1
+    LDA line_x1:CMP span_x1:BCC last_in
+    LDA span_x1
+.last_in
+    SEC:SBC #1
+    CMP line_x0:BCS last_on
+    LDA line_x0                         ; none in the span: its first
+.last_on
+    SEC:SBC line_x0
+    SEC                                 ; forwards
+    JSR row_move
+    LDA row_move.row+1
+.towards                                ; the edge it runs towards
+    BIT line_grad+1:BMI to_top
+    BPL to_bottom                       ; (always)
+    ZA_UNREACHABLE
+.start_row                              ; the edge it runs from
+    LDA line_y+1
+    BIT line_grad+1:BMI to_bottom
+.to_top
+    BIT line_below:BMI made             ; only onto the edge on its own side
+    EOR #&FF:CLC:ADC #1                 ; 0 - the row
+    JMP shifted
+.to_bottom
+    BIT line_below:BPL made
+    EOR #&FF:SEC:ADC #SCREEN_HEIGHT     ; 64 - the row
+.shifted
+    STA shift
+    CLC:ADC line_y+1:STA line_y+1
+    LDA shift:CLC:ADC line_endy:STA line_endy
+.made
+
+    \\ the colour, the kind of clip, and the bounds' edges
+
+    ZA_AUTO1 kind                       ; local: 0 plain, 1 floor, 2 ceiling, 3 closed
+    ZA_AUTO1 edges                      ; local: bit 0: the top's the screen's; bit 1: the bottom
+
+    LDA even:STA pattern_even
+    LDA odd:STA pattern_odd
+    LDA case:AND #3:STA kind
+    LDA case:LSR A:LSR A
+    AND #3:STA edges
+    LDA random+1:AND #&38:CMP #&38:BNE coloured
+    LDA #0:STA pattern_even:STA pattern_odd
+.coloured
+
+    \\ the bounds: each a sawtooth, the bottom on from the top, to 64 at most
+
+    ZA_AUTO2 top                        ; local: the top's sawtooth
+    ZA_AUTO2 bottom                     ; local: the bottom's gap's
+
+    LDA base1:STA top+1
+    LDA base2:STA bottom+1
+    LDA #0:STA top:STA bottom
+    LDX #0
+.bounds
+    CLC:LDA top:ADC slope1:STA top
+    LDA top+1:ADC #0:STA top+1
+    AND #63:STA bound_top,X
+    CLC:LDA bottom:ADC slope2:STA bottom
+    LDA bottom+1:ADC #0:STA bottom+1
+    AND #63:CLC:ADC bound_top,X
+    CMP #SCREEN_HEIGHT+1:BCC fits
+    LDA #SCREEN_HEIGHT
+.fits
+    STA bound_bottom,X
+    INX
+    BPL bounds                          ; to 127
+
+    \\ a bound that's the screen's edge, made misleading: a clip mustn't read it
+
+    LDA edges:LSR A:BCC top_kept
+    LDA #63:LDX #SCREEN_WIDTH-1
+.top_misleading
+    STA bound_top,X
+    DEX
+    BPL top_misleading
+.top_kept
+    LDA edges:AND #2:BEQ bottom_kept
+    LDA #0:LDX #SCREEN_WIDTH-1
+.bottom_misleading
+    STA bound_bottom,X
+    DEX
+    BPL bottom_misleading
+.bottom_kept
+
+    \\ the extents over the span, or the screen's edges
+
+    LDA #0:STA walk_tmax
+    LDA #SCREEN_HEIGHT:STA walk_bmin
+    LDX span_x0
+.extents
+    LDA edges:LSR A:BCS top_done        ; the screen's
+    LDA bound_top,X:CMP walk_tmax:BCC top_done
+    STA walk_tmax
+.top_done
+    LDA edges:AND #2:BNE bottom_done
+    LDA bound_bottom,X:CMP walk_bmin:BCS bottom_done
+    STA walk_bmin
+.bottom_done
+    INX:CPX span_x1:BNE extents
+
+    \\ the clip, from no records and toggle_end at 1
+
+    ZA_AUTO1 extent                     ; local: its outputs
+    ZA_AUTO1 room
+
+    LDA #1:LDX #SCREEN_WIDTH/4-1
+.ends
+    STA toggle_end,X
+    DEX
+    BPL ends
+    LDA #0:STA num_recs:STA extent:STA room
+    LDX kind
+    BNE floor
+    JSR clip_plain
+    JMP clipped
+.floor
+    DEX:BNE ceiling
+    JSR clip_floor
+    STA extent
+    LDA clip_floor.room:STA room
+    JMP clipped
+.ceiling
+    DEX:BNE closed
+    LDA walk_bmin                       ; the child's bottom's extent
+    JSR clip_ceil
+    STA extent
+    LDA clip_ceil.room:STA room
+    JMP clipped
+.closed
+    LDA walk_bmin
+    JSR close_columns
+
+    \\ its answers: the extent and room, the records, toggle_end and the bounds
+
+.clipped
+    LDA extent:FLETCHER sum1, sum2
+    LDA room:FLETCHER sum1, sum2
+    LDA num_recs:FLETCHER sum1, sum2
+    LDX #0
+.records
+    CPX num_recs:BEQ recorded
+    FOR t = {rec_x0, rec_x1, rec_ylo, rec_yhi, rec_gradlo, rec_gradhi}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    INX
+    JMP records
+.recorded
+    LDX #0
+.toggles
+    LDA toggle_end,X:FLETCHER sum1, sum2
+    INX:CPX #SCREEN_WIDTH/4:BNE toggles
+    LDX #0
+.tops
+    LDA bound_top,X:FLETCHER sum1, sum2
+    INX
+    BPL tops
+    LDX #0
+.bottoms
+    LDA bound_bottom,X:FLETCHER sum1, sum2
+    INX
+    BPL bottoms
+    INC case
+    LDA case:CMP #CASES:BEQ cases
+    JMP each_case
+
+    \\ the line's sums, and T's after every two lines
+
+.cases
+    LDX line
+    LDA sum1:STA t_cases1,X
+    LDA sum2:STA t_cases2,X
+    TXA:LSR A:BCC next_line             ; an even line: T goes on
+    JSR sum_t
+    LDA line:LSR A:TAX
+    LDA sum_t.sum1:STA t_t1,X
+    LDA sum_t.sum2:STA t_t2,X
+    JSR clear_t
+.next_line
+    INC line
+    LDA line:CMP #LO(LINES):BEQ done    ; (256: round to 0)
+    JMP each_line
+.done
+    RTS
+}

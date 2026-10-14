@@ -80,7 +80,14 @@ ambitions.
 | `frame`'s visit cache clear | `.capture`'s end | done |
 | `walk`, `descend`, `enter` | — | not started |
 | `process_edge`, `edge_line` | — | not started |
-| `scan_of`, `scan` and the column functions, `close_columns`, `flat_top` | — | not started |
+| `clip_plain`, `clip_floor`, `clip_ceil` | the same (clip.6502) | done: 256 made-up lines from `make_line`, each clipped 16 times, every kind against every combination of the bounds' edges, `portalc_clipref` |
+| `scan_of`, `scan` | `SCAN_EDGES`, `SCAN` (clip_macros.6502) | done, in the clips' check |
+| `plain_col`, `floor_col`, `ceil_col` | `plain_columns`, `floor_columns`, `ceil_columns`; and a plain line's own columns in `plain_own`, through `PLAIN_OWN` | done, in the clips' check |
+| `floor_fast_col`, `ceil_fast_col` | `WRITE_ROWS`: X counts up to the page's end or middle, the store's base and the gradient patched in | done, in the clips' check |
+| `col_visible`, `col_hidden`, `run_end`, `hrun_end` | `stretch_visible`, `stretch_hidden`, `stretch_end`, `visible_end`, `hidden_end` | done, in the clips' check |
+| `fast_inside`, `on_screen`, `flat_top` | `COLUMNS`, `ROW_AT` and `ROWS_INSIDE`; `ON_SCREEN`, `flat_top` | done, in the clips' check |
+| the C sweep's 19,162 clip calls | replayed through the assembled clips on a cycle-exact model: the same as the C's, 5,210 cycles a frame | checked once, 2026-10-14 |
+| `close_columns` | `close_columns` | done, in the clips' check |
 | `plot_run`, with `record` | `plot_run` (plot.6502) | done: 9,600 made-up runs at 75 gradients, each run's record and `toggle_end`, and T after each gradient's, `portalc_plotref` |
 | `pt_plot_shallow`, `pt_plot_steep` | `plot_shallow`, `plot_steep`, through `SHALLOW` and `STEEP` (plot_macros.6502), each expanded falling and rising | done, in `plot_run`'s check |
 | `pt_plot_flat` | `plot_flat` | done: every x0 < x1 |
@@ -148,6 +155,19 @@ or two bytes of zero page.
 | the plotters' `gm` | `grad`; and `grad2`, `grad3`, `grad4`, `grad_less1` |
 | `pt_plot_steep`'s `gi`, `gf` | `grad_whole`; `gf` is `line_grad`'s low byte itself (`STEEP`'s `grad_fraction`) |
 | `f` | `fraction` (rising, 255 less it): `run_y` itself |
+
+### The clips
+
+| C | 6502 |
+|---|---|
+| `pt_render.top`, `.bot` | `bound_top`, `bound_bottom` |
+| a clip's `xa`, `xb` | `span_x0`, `span_x1` |
+| `tmax`, `bmin` | `walk_tmax`, `walk_bmin`; `clip_ceil`'s `cbmin` comes in A |
+| `screen_top_`, `screen_bot_` | — (`scan_edges`, from the extents: bit 7 the top's the screen's, bit 6 the bottom) |
+| `pt_scan.v`, `.h` | the open stretch: `run_x0` its start, and `run_y` (visible) or `stretch_row` (hidden); `stretch` says which |
+| `pt_scan.ext`, `.room` | the extent in A, and `clip_floor.room`, `clip_ceil.room` (bit 7) |
+| `scan`'s `l`, `rr` | `own_x0`, `own_x1` |
+| `step1`'s y | Y, the row, and `scan_fraction`; `scan_whole` the gradient's whole rows |
 
 ### The vertex cache
 
@@ -244,6 +264,33 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - **`plot_run` corrupts `run_y`.** A shallow or steep run counts its
   fraction and row in it as it goes (rising, 255 less the fraction), rather
   than copy them. Nothing reads it after; the record is taken first.
+- **No constant rows for the screen's edges.** The C points a scan at
+  `screen_top_` or `screen_bot_` where an extent says a bound is the
+  screen's edge all along. The 6502 picks code instead, once a scan: a
+  plain line's own columns go through one of eight variants of
+  `PLAIN_OWN`, falling or rising with each bound the screen's or the
+  array's. A screen edge needs no lookup (row 0 is `BEQ`, the junk row
+  `CPY #64`). As a line's rows only go one way, a visible line only meets
+  the edge it runs towards; and as its rows are on its own side of the
+  middle row (`make_line`'s, which the C asserts in `scan`), with both edges
+  the screen's a line above falling, or below rising, is visible to the end
+  once visible, and one that meets its edge stays on it. The four variants
+  with the bottom in the array have their own loop over hidden columns; the
+  rest, and the rarer column code, go through `plain_columns` and test
+  `scan_edges`.
+- **A clip starts from the span's columns.** `COLUMNS` puts the span in
+  `run_x0` and `run_x1` and asks, in three compares, whether it's all the
+  line's; if so, and the line's inside the extents (`ROWS_INSIDE`), it's
+  `JMP plot_run` with nothing copied, and a slow one scans its own columns
+  (`SCAN_OWN`). A line that doesn't cover the span, with the bound on its
+  side the screen's edge, has the columns cut off flat on row 0 or left
+  alone, and the rest as before; only with that bound in the array does it
+  get the C's whole scan.
+- **The open stretch is kept in the plotters' inputs** (`run_x0`, `run_y`),
+  so ending it is just the call.
+- **`WRITE_ROWS` patches its store's base and the gradient into the loop**,
+  so X counts up to the page's end (`bound_top`, at a page's start) or its
+  middle (`bound_bottom`, at its middle) with no compare a column.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 
@@ -253,11 +300,14 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   1. ~~The ends of a side: `edge_ends`, and `side_next`.~~ Done.
   2. ~~Lines: `make_line`, which needs a 16-bit exp and a multiply.~~ Done.
   3. ~~The plotters into T, and `record` with `toggle_end`.~~ Done.
-  4. The clips: `scan`, `clip_plain`, `clip_floor`, `clip_ceil`,
-     `close_columns`.
+  4. ~~The clips: `scan`, `clip_plain`, `clip_floor`, `clip_ceil`,
+     `close_columns`.~~ Done.
   5. The walk: `walk`, `process_edge`, `enter`, `descend`, the kept lines.
      One thing to decide first: where a child walk's state goes, since the
-     `walk_` zero page holds one walk.
+     `walk_` zero page holds one walk. Then check the clips' zero page
+     again: in their check, Baron lays some of their locals over the span,
+     the line and the extents, which nothing there reads after a clip; the
+     walk will.
 - The kept lines and the records stay as the C has them for now.
 - Then `update_camera`'s turn keys, the fill and the unplot. That's the
   first demo.

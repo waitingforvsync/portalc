@@ -1,0 +1,422 @@
+\\ clip_macros.6502 - the clips' macros: the scan's parts, and the plain clip's loops over a line's
+\\ visible columns, one for each way it goes and each of its bounds that's the screen's edge.
+
+\\ Which of the bounds are the screen's edges all along the scan, from their extents.
+\\
+\\ Inputs:
+\\     tmax: the top's extent, its lowest row: 0 if it's the screen's top all along
+\\     bmin: the bottom's, its highest: 64 if it's the screen's bottom all along
+\\
+\\ Outputs:
+\\     scan_edges: bit 7 set if the top's the screen's, bit 6 if the bottom is
+\\     A: corrupted
+
+MACRO SCAN_EDGES tmax, bmin
+    LDA bmin:CMP #SCREEN_HEIGHT         ; C: the bottom's the screen's
+    ROR scan_edges
+    LDA #0:CMP tmax                     ; C: the top's
+    ROR scan_edges                      ; the top's into bit 7, the bottom's on into 6
+ENDMACRO
+
+\\ The part of a span a line's own columns cover (on_screen): from the later of their starts to
+\\ the earlier of their ends, or none, both the span's end.
+\\
+\\ Inputs:
+\\     left, right: the span, [left, right)
+\\     line_x0, line_x1: the line's columns
+\\     first, past: where the part goes
+\\
+\\ Outputs:
+\\     first, past: the part, [first, past)
+\\     A: corrupted
+
+MACRO ON_SCREEN left, right, first, past
+    LDA line_x0:CMP left:BCS first_set  ; the line's start, or the span's if that's later
+    LDA left
+.first_set
+    STA first
+    LDA line_x1:CMP right:BCC past_set  ; the line's end, or the span's if that's earlier
+    LDA right
+.past_set
+    STA past
+    LDA first:CMP past:BCC done
+    LDA right:STA first:STA past        ; none
+.done
+ENDMACRO
+
+\\ A byte into a bound's columns [from, to), if any.
+\\
+\\ Inputs:
+\\     bound: bound_top or bound_bottom
+\\     value: the byte
+\\     from, to: the columns
+\\
+\\ Outputs:
+\\     bound: the byte in them
+\\     A, X: corrupted
+
+MACRO FILL bound, value, from, to
+    LDA #value
+    LDX from
+    CPX to:BCS done                     ; none
+.loop
+    STA bound,X
+    INX:CPX to:BNE loop
+.done
+ENDMACRO
+
+\\ Whether the span's columns are all the line's, with the span into run_x0 and run_x1.
+\\
+\\ Inputs:
+\\     span_x0, span_x1: the span
+\\     line_x0, line_x1: the line's columns
+\\     starts, before, ends: where to go if the line starts inside the span, ends before it, or
+\\         ends inside it
+\\
+\\ Outputs:
+\\     run_x0, run_x1: the span
+\\     X: run_x0
+\\     C, Z: set, and set if the span starts at the line's start, if they're all the line's
+\\     A: corrupted
+
+MACRO COLUMNS starts, before, ends
+    LDA span_x1:STA run_x1
+    LDX span_x0:STX run_x0
+    CPX line_x1:BCS before              ; the line ends before the span
+    CMP line_x1:BEQ in:BCS ends         ; or inside it
+.in
+    CPX line_x0:BCC starts              ; or starts inside it
+ENDMACRO
+
+\\ The line's row at run_x0, one of its columns, into run_y: its row at x0, moved along.
+\\
+\\ Inputs:
+\\     X: run_x0, the column
+\\     C, Z: set, and set if it's the line's first column (CPX line_x0)
+\\     the line: line_x0, line_y, line_grad
+\\
+\\ Outputs:
+\\     run_y: the row, u8.8
+\\     A: the row's high byte
+\\     X, Y: corrupted
+
+MACRO ROW_AT
+    BEQ at_start
+    TXA:SBC line_x0                     ; (C set) the columns along
+    LDX line_y:STX row_move.row
+    LDX line_y+1:STX row_move.row+1
+    JSR row_move                        ; (C set: forwards)
+    LDA row_move.row:STA run_y
+    LDA row_move.row+1:STA run_y+1
+    JMP done
+.at_start
+    LDA line_y:STA run_y
+    LDA line_y+1:STA run_y+1
+.done
+ENDMACRO
+
+\\ Whether the line's inside the bounds' extents all along the span, its columns all there
+\\ (fast_inside): its row at the span's start and the one at its end inside, near enough.
+\\
+\\ Inputs:
+\\     A: its row at the span's start
+\\     tmax, bmin: the bounds' extents
+\\     no: where to go if it's not
+\\
+\\ Outputs:
+\\     A: corrupted
+
+MACRO ROWS_INSIDE tmax, bmin, no
+    CMP tmax:BEQ no:BCC no              ; on or above the top somewhere
+    CMP bmin:BCS no                     ; on or below the bottom
+    LDA line_endy
+    CMP tmax:BEQ no:BCC no
+    CMP bmin:BCS no
+ENDMACRO
+
+\\ A scan's step to the next column, either way: the gradient added to the row, or taken off.
+\\
+\\ Inputs:
+\\     Y, scan_fraction: the row
+\\     line_grad, scan_whole: the gradient: its sign and fraction, and its whole rows
+\\
+\\ Outputs:
+\\     Y, scan_fraction: the next column's row
+\\     A: corrupted
+
+MACRO SCAN_STEP
+    BIT line_grad+1:BMI up
+    CLC
+    LDA scan_fraction:ADC line_grad:STA scan_fraction
+    TYA:ADC scan_whole:TAY
+    JMP done
+.up
+    SEC
+    LDA scan_fraction:SBC line_grad:STA scan_fraction
+    TYA:SBC scan_whole:TAY
+.done
+ENDMACRO
+
+\\ A floor or ceiling line's rows into a bound over the span (floor_fast_col, ceil_fast_col): the
+\\ line inside the extents all along, a row a column, stepped as the plotter steps it.
+\\
+\\ Inputs:
+\\     bound: bound_top or bound_bottom, at a page's start or half way along one
+\\     run_x0, run_x1, run_y: the span, and the line's row at its start
+\\     line_grad: its gradient
+\\
+\\ Outputs:
+\\     bound: the line's rows over the span
+\\     scan_fraction: corrupted
+\\     A, X, Y: corrupted
+
+MACRO WRITE_ROWS bound
+    ASSERT LO(bound) == 0 OR LO(bound) == &80, "WRITE_ROWS: a bound at a page's start or middle"
+    LDA run_y:STA scan_fraction
+    LDY run_y+1
+    BIT line_grad+1:BMI up
+    LDA line_grad:STA down_fraction+1   ; (self-modified: the gradient, and the base)
+    LDA line_grad+1:STA down_whole+1    ; (falling: no sign)
+    LDA run_x1:STA down_store+1
+    LDA run_x0:SEC:SBC run_x1           ; X counts up to the page's end or middle, C clear
+    IF LO(bound) <> 0
+        AND #&7F
+    ENDIF
+    TAX
+    TYA
+.down
+.down_store
+    STA bound-&100+LO(bound),X          ; (the base's low byte run_x1)
+    LDA scan_fraction
+.down_fraction
+    ADC #0:STA scan_fraction
+    TYA
+.down_whole
+    ADC #0:TAY                          ; (C clear: the row on the screen)
+    INX
+    IF LO(bound) == 0
+        BNE down
+    ELSE
+        BPL down
+    ENDIF
+    JMP done
+.up
+    LDA line_grad:STA up_fraction+1
+    LDA line_grad+1:AND #&7F:STA up_whole+1
+    LDA run_x1:STA up_store+1
+    LDA run_x0:SEC:SBC run_x1
+    IF LO(bound) <> 0
+        AND #&7F
+    ENDIF
+    TAX
+    TYA:SEC
+.up_loop
+.up_store
+    STA bound-&100+LO(bound),X
+    LDA scan_fraction
+.up_fraction
+    SBC #0:STA scan_fraction
+    TYA
+.up_whole
+    SBC #0:TAY                          ; (C set: the row on the screen)
+    INX
+    IF LO(bound) == 0
+        BNE up_loop
+    ELSE
+        BPL up_loop
+    ENDIF
+.done
+ENDMACRO
+
+\\ A scan over a span (scan): the columns before the line's own, its own, and those after, then the
+\\ stretch open at the end plotted. Past its own columns its row is the same all along.
+\\
+\\ Inputs:
+\\     beyond: the routine for the columns past the line's own (plain_columns and so on)
+\\     own: the routine for its own
+\\     left, right: the span, [left, right)
+\\     first, past: where the line's own columns in it go
+\\     the line, scan_edges, and the bounds
+\\
+\\ Outputs:
+\\     first, past: the line's own columns in the span
+\\     what the routines do
+\\     A, X, Y: corrupted
+
+MACRO SCAN beyond, own, left, right, first, past
+    ON_SCREEN left, right, first, past
+    LDA #0:STA stretch
+
+    \\ before the line's own columns
+
+    LDX left:CPX first:BEQ own_part
+    LDA first:STA scan_end
+    LDY #0
+    BIT line_below:BPL before_row       ; above the screen: row 0
+    LDY #SCREEN_HEIGHT                  ; below it: the junk row
+.before_row
+    LDA #&80:STA scan_beyond
+    JSR beyond
+
+    \\ its own, from its row at the first: the fast test's, at the span's start, or its own first
+
+.own_part
+    LDX first:CPX past:BEQ after
+    LDA line_y:STA row_move.row
+    LDA line_y+1:STA row_move.row+1
+    TXA:SEC:SBC line_x0:BEQ own_row
+    JSR row_move                        ; (C set: forwards)
+.own_row
+    LDA row_move.row:STA scan_fraction
+    LDY row_move.row+1
+    LDA line_grad+1:AND #&7F:STA scan_whole
+    LDA past:STA scan_end
+    LDA #0:STA scan_beyond
+    LDX first
+    JSR own
+
+    \\ after them, then the end
+
+.after
+    LDX past:CPX right:BEQ ends
+    LDA right:STA scan_end
+    LDY #0
+    BIT line_below:BPL after_row
+    LDY #SCREEN_HEIGHT
+.after_row
+    LDA #&80:STA scan_beyond
+    JSR beyond
+.ends
+    LDX right
+    JSR stretch_end
+ENDMACRO
+
+\\ A scan over a span of the line's own columns (scan): its rows stepping from its row at the start.
+\\
+\\ Inputs:
+\\     own: the routine for its columns (plain_own and so on)
+\\     run_x0, run_x1, run_y: the span, and the line's row at its start
+\\     the line, scan_edges, and the bounds
+\\
+\\ Outputs:
+\\     what the routine does
+\\     X: run_x1, for stretch_end to end the stretch open there
+\\     A, Y: corrupted
+
+MACRO SCAN_OWN own
+    LDA run_y:STA scan_fraction
+    LDY run_y+1
+    LDA line_grad+1:AND #&7F:STA scan_whole
+    LDA run_x1:STA scan_end
+    LDX run_x0
+    LDA #0:STA stretch:STA scan_beyond
+    JSR own
+    LDX scan_end
+ENDMACRO
+
+\\ A plain line's own columns from X to scan_end, for one way it goes and its bounds: a step and a
+\\ compare or two a column, hidden and visible, as plain_col.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling line, FALSE for a rising one
+\\     top_screen, bottom_screen: TRUE where the bound's the screen's edge
+\\     own_hidden: TRUE for its own loop over hidden columns (the bottom's in the array), FALSE to
+\\         go through plain_columns
+\\     X: the first column
+\\     Y, scan_fraction: the line's row there
+\\     line_grad, scan_whole, scan_end: the scan's
+\\
+\\ Outputs:
+\\     the stretches, the plotters' work
+\\     A, X, Y: corrupted
+
+MACRO PLAIN_OWN down, top_screen, bottom_screen, own_hidden
+    ASSERT NOT(own_hidden AND bottom_screen), "PLAIN_OWN: its own hidden loop takes the bottom's array"
+    IF own_hidden
+    .column                             ; column X, row Y: hidden or visible
+        TYA
+        IF top_screen
+            BEQ hidden                  ; row 0: on the screen's top (A 0)
+        ELSE
+            CMP bound_top,X:BEQ on_top:BCC on_top
+        ENDIF
+        CMP bound_bottom,X:BCC visible
+        LDA bound_bottom,X
+        IF NOT(top_screen)
+            JMP hidden
+        .on_top
+            LDA bound_top,X
+        ENDIF
+    .hidden                             ; A: the row it's hidden on
+        BIT stretch:BVC open            ; no hidden stretch open
+        CMP stretch_row:BEQ hidden_next ; on the same row: on with it
+    .open
+        JSR stretch_hidden
+    .hidden_next
+        INX:CPX scan_end:BEQ done       ; (C clear on: under the end)
+        IF down
+            LDA scan_fraction:ADC line_grad:STA scan_fraction
+            TYA:ADC scan_whole:TAY
+        ELSE
+            SEC
+            LDA scan_fraction:SBC line_grad:STA scan_fraction
+            TYA:SBC scan_whole:TAY
+        ENDIF
+        JMP column
+    ELSE
+    .column
+        JSR plain_columns               ; to the first visible column (opened)
+        BCC visible
+        RTS
+    ENDIF
+.loop                                   ; visible from the last column on
+    IF down                             ; (C clear)
+        LDA scan_fraction:ADC line_grad:STA scan_fraction
+        TYA:ADC scan_whole:TAY
+    ELSE
+        SEC
+        LDA scan_fraction:SBC line_grad:STA scan_fraction
+        TYA:SBC scan_whole:TAY
+    ENDIF
+    IF NOT(top_screen)
+        CMP bound_top,X:BCC hidden_again:BEQ hidden_again
+    ELIF NOT(down)
+        BEQ hidden_again                ; row 0: on the screen's top
+    ENDIF
+    IF NOT(bottom_screen)
+        CMP bound_bottom,X:BCS hidden_again
+    ELIF down
+        CPY #SCREEN_HEIGHT              ; the junk row: past the screen's bottom
+        BCS hidden_again
+    ENDIF
+.next
+    INX:CPX scan_end:BNE loop           ; (C clear: under the end)
+.done
+    RTS
+.visible
+    IF own_hidden
+        JSR stretch_visible
+    ENDIF
+    IF top_screen AND bottom_screen     ; it only meets the screen's edge on its own side
+        IF down
+            BIT line_below:BPL done     ; above, falling: visible to the end
+        ELSE
+            BIT line_below:BMI done     ; below, rising: likewise
+        ENDIF
+    ENDIF
+    JMP next
+.hidden_again
+    IF top_screen AND bottom_screen     ; on the screen's edge it runs to: there to the end
+        IF down
+            JMP visible_end             ; in the junk row, never seen
+        ELSE
+            LDA #0:JMP stretch_hidden   ; on row 0
+        ENDIF
+    ELIF own_hidden
+        JMP column
+    ELSE
+        JSR plain_columns
+        BCC next                        ; back at a visible column
+        RTS
+    ENDIF
+ENDMACRO

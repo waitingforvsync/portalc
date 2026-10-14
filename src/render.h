@@ -59,7 +59,7 @@ typedef struct pt_height {
 
 // A line kept for a later visit: its columns on the screen, [x0, x1), its
 // row at x0 (u8.8, the rounding half in), its gradient (sign bit + u7.8),
-// and a row at or past its last column, for the fast path. Its side of the
+// and the row at its end (pt_line's rl), for the fast path. Its side of the
 // screen and its colour come from its height and its edge. 7 bytes.
 typedef struct pt_kept {
     uint8_t x0, x1;
@@ -238,8 +238,8 @@ typedef struct pt_line {
     uint8_t x1;
     uint16_t y;       // the row at x0, u8.8 with the rounding bias in
     uint16_t g;       // sign bit + u7.8 magnitude
-    uint8_t rl;       // a row at or past its last column, towards its end:
-                      // with the row at x0, its rows' extremes
+    uint8_t rl;       // the row at its end: with the row at x0, its rows'
+                      // extremes, near enough (make_line, fast_inside)
     uint8_t below;    // the side it is cut off on: below the screen, or above
     uint8_t ce;
     uint8_t co;
@@ -252,5 +252,16 @@ pt_line pt_render_line(const pt_walk *w, const pt_ends *e, pt_height h);
 // Columns [x0, x1) of line L plotted into T from its row y at x0 (plot_run):
 // recorded, and toggle_end brought down, for the tools' checks.
 void pt_render_plot_run(pt_render *r, const pt_line *L, uint8_t x0, uint8_t x1, uint16_t y);
+
+// The clips over [xa, xb) against the bounds in r->top and r->bot, their
+// extents tmax and bmin (clip_plain, clip_floor, clip_ceil), and the columns
+// closed (close_columns), for the tools' checks.
+void pt_render_clip_plain(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax,
+                          uint8_t bmin);
+uint8_t pt_render_clip_floor(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb,
+                             uint8_t tmax, uint8_t bmin, bool *room);
+uint8_t pt_render_clip_ceil(pt_render *r, const pt_line *L, uint8_t xa, uint8_t xb, uint8_t tmax,
+                            uint8_t cbmin, bool *room);
+void pt_render_close_columns(pt_render *r, uint8_t l, uint8_t rr, pt_pattern cbfb, bool bz);
 
 #endif

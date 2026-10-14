@@ -9,8 +9,8 @@ import time
 import b2
 from test_tables import symbols
 
-USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture or plot; its build, '
-         'its symbols, and the C\'s answers)')
+USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot or clip; its '
+         'build, its symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -179,6 +179,19 @@ def plot_expected(c):
     ]
 
 
+def clip_expected(c):
+    """The clips' sums: each line's cases' answers (the extent and room, the records, toggle_end
+    and the bounds after), and T after every two lines."""
+    cases1, cases2 = hex_sums(c['cases'])
+    t1, t2 = hex_sums(c['t'])
+    return [
+        ('clip cases s1', 't_cases1', 0, 0, cases1),
+        ('clip cases s2', 't_cases2', 0, 0, cases2),
+        ('clip T s1', 't_t1', 0, 0, t1),
+        ('clip T s2', 't_t2', 0, 0, t2),
+    ]
+
+
 def arith_expected(c):
     """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
     answer's input, the answers)."""
@@ -217,7 +230,7 @@ def arith_expected(c):
 
 
 EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
-            'plot': plot_expected}
+            'plot': plot_expected, 'clip': clip_expected}
 
 
 def main():

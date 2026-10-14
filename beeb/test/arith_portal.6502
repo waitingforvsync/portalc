@@ -1,5 +1,5 @@
 \\ test/arith_portal.6502 - make test_arith's PORTAL: the arithmetic macros' check, with the loader
-\\ and its tables, and of the engine only the camera's position, which POLAR reads.
+\\ and its tables, and of the engine only the camera, whose position POLAR reads, and its interrupt.
 
 INCLUDE "../src/memory.6502"
 INCLUDE "../src/constants.6502"
@@ -24,6 +24,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
 .maincode_image
     SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
         INCLUDE "../src/mapdata.6502"
+        INCLUDE "../src/irq.6502"
     ENDSECTION
 
     INCLUDE "../src/entry.6502"

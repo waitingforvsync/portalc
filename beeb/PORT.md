@@ -22,7 +22,7 @@ ambitions.
 | C | 6502 | State |
 |---|---|---|
 | `pt_arith_init` (arith.c) | `make_tables` (tables.6502), packed at assembly time by `pk_` and unpacked by `UNPACK` | done: every byte, `portalc_tables` |
-| main.c's loop: `pt_camera_tick`, `pt_render_frame` | `start` (start.6502): `update_camera`, `capture`, wait, `fill`, `sprites`, swap, `unplot` | the loop is done; the stages are stubs |
+| main.c's loop: `pt_camera_tick`, `pt_render_frame` | `start` (start.6502): `update_camera`, `capture`, wait, `fill`, `sprites`, swap, `unplot` | done, bar `sprites`, a stub: the first demo runs |
 | main.c's `gather_input` | `irq` (irq.6502): vsync count, keys as the `IN_` bits, screen swap | done, checked by hand in jsbeeb |
 | — | `boot.6502`: finds a sideways RAM bank | Beeb only, in progress |
 | — | `entry` (entry.6502): takes over the machine, copies the code out, sets up the screen | Beeb only |
@@ -58,7 +58,7 @@ ambitions.
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_camera_tick` (camera.c) | `update_camera` (camera.6502) | stub. The turn keys come first |
+| `pt_camera_tick` (camera.c) | `update_camera` (camera.6502): the turn keys only | done, checked by hand in jsbeeb: both screens the same as the C's frame, sprites off, at the start, after 41 ticks left, and after 121 right, past 0 |
 
 ### The capture (render.c)
 
@@ -320,6 +320,10 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   routine, which reads the record itself (X its number). The C asserts T's
   screen is clear after; the checks find its junk rows clear too. It costs
   5.7k cycles a frame over the sweep's frames, 4.5k of it shallow runs.
+- **A frame's ticks share its keys.** The interrupt ORs the keys held at
+  each vsync into `keys` and counts the vsyncs in `framectr`; `update_camera`
+  takes both with the vsync held off and runs that many ticks with those
+  keys. The C reads the keys afresh for each tick.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has
@@ -367,7 +371,13 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   5. ~~The walk: `walk`, `process_edge`, `enter`, `descend`, the kept
      lines.~~ Done.
 - The records stay as the C has them for now.
-- Then `update_camera`'s turn keys. That's the first demo.
+- ~~Then `update_camera`'s turn keys. That's the first demo.~~ Done: it runs.
+  Over the sweep's frames (the cycle-exact model; the fill from its
+  `toggle_end`) a frame is 66.9k cycles on average: capture 29.2k, fill
+  32.6k, unplot 5.7k. A quarter of the frames take one vsync's 40k, 44% two,
+  and 32% three or more (up to 165k); those average a 55.5k capture, a
+  36.6k fill and a 10.9k unplot. Turning on the spot at the start, 66% of
+  the angles take two vsyncs or fewer.
 - Later: sprites, then moving, collision and `pt_vcache_locate`.
 - To revisit, if the cycles are wanted: a `side_v1` map table, each side's
   end vertex (`pt_map_side_v1`), written by `portalc_mapasm`. `side_end`

@@ -9,17 +9,48 @@ ZA_AUTO2 camy                           ; y in whole units
 ZA_AUTO2 camangle                       ; its facing, in 1024ths of a turn (10 bits): 0 faces +x
 ZA_AUTO1 camcell                        ; the cell it's in
 
-\\ Run a tick for each vsync the interrupt's counted, with the keys it's gathered. A stub for now.
-\\ A tick that changes camx or camy must reset the vertex cache (vcache_reset).
+\\ Run a tick for each vsync the interrupt's counted, with the keys it's gathered (pt_camera_tick):
+\\ for now, only the turn. A tick that changes camx or camy must reset the vertex cache.
 \\
 \\ Inputs:
 \\     framectr: the ticks to run
 \\     keys: the keys held
+\\     camangle: the facing
 \\
 \\ Outputs:
+\\     camangle: turned
 \\     framectr, keys: 0
+\\     A, X, Y: corrupted
 
 .update_camera
 {
+    \\ the ticks and the keys, with the vsync held off, so none comes between the read and the clear
+
+    SEI
+    LDX framectr
+    LDY keys
+    LDA #0:STA framectr:STA keys
+    CLI
+
+    \\ each tick's turn: left or right, both cancelling. Left adds a turn less TURN; the high byte's
+    \\ add never carries either way, so C stays clear round the loop
+
+    TXA:BEQ done                        ; no ticks
+    TYA:AND #IN_TURNL OR IN_TURNR
+    CMP #IN_TURNR:BEQ right             ; (C set)
+    CMP #IN_TURNL:BNE done              ; neither, or both
+    CLC
+.left
+    LDA camangle:ADC #LO(1024-CAM_TURN_SPEED):STA camangle
+    LDA camangle+1:ADC #HI(1024-CAM_TURN_SPEED):AND #3:STA camangle+1
+    DEX:BNE left
+    RTS
+.right
+    CLC
+.turn_right
+    LDA camangle:ADC #LO(CAM_TURN_SPEED):STA camangle
+    LDA camangle+1:ADC #HI(CAM_TURN_SPEED):AND #3:STA camangle+1
+    DEX:BNE turn_right
+.done
     RTS
 }

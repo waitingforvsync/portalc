@@ -41,6 +41,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         ELSE
             INCLUDE "../src/mapdata.6502"
         ENDIF
+        INCLUDE "../src/irq.6502"
     ENDSECTION
 
     INCLUDE "../src/entry.6502"

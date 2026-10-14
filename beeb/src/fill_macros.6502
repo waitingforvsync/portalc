@@ -1,0 +1,92 @@
+\\ fill_macros.6502 - the fill's macros: a screen's blocks (mode5.c's fill), and the loop that fills
+\\ the screen through them, a byte column at a time.
+
+\\ A screen's body: a byte column's scanline at each canvas row, 0 to 63, T's byte EORed into the
+\\ colour and stored. An RTS patched over a row's EOR ends it at that row.
+\\
+\\ Inputs:
+\\     screen: the screen it stores to
+\\     A: the colour above row 0
+\\     X: the column's block, + 1 for its odd scanlines
+\\     T: the frame's lines
+\\
+\\ Outputs:
+\\     the screen: the column's scanline, to the row it ends at
+\\     A: the colour there
+\\     X, Y: preserved
+
+MACRO FILL_BODY screen
+    FOR row = 0..<SCREEN_HEIGHT
+        EOR T_ORG+(row DIV 4)*256+(row MOD 4)*2,X
+        STA screen+(row DIV 4)*256+(row MOD 4)*2,X
+    NEXT
+    RTS
+ENDMACRO
+
+\\ A screen's tail: the colour stored at each canvas row, from row 1, entered at the row the body
+\\ ended at. The body never ends at row 0, as a column's end is at least 1.
+\\
+\\ Inputs:
+\\     screen: the screen it stores to
+\\     A: the colour
+\\     X: the column's block, + 1 for its odd scanlines
+\\
+\\ Outputs:
+\\     the screen: the column's scanline, from the row it's entered at to the bottom
+\\     A, X, Y: preserved
+
+MACRO FILL_TAIL screen
+    FOR row = 1..<SCREEN_HEIGHT
+        STA screen+(row DIV 4)*256+(row MOD 4)*2,X
+    NEXT
+    RTS
+ENDMACRO
+
+\\ Fill a screen from T (pt_mode5_fill) through its blocks, a byte column at a time: an RTS over its
+\\ end row's EOR in the body, the body and tail for each scanline, then the EOR back.
+\\
+\\ Inputs:
+\\     body, tail: the screen's blocks
+\\     exitlo, exithi, taillo, tailhi: by the end row, where the RTS goes and where the tail starts
+\\     A, X: the colour above row 0, the even scanlines' and the odd's
+\\     toggle_end: each byte column's end, the row after its last toggled row: 1 to 65
+\\     T: the frame's lines, none below a column's end
+\\
+\\ Outputs:
+\\     the screen: filled
+\\     A, X, Y: corrupted
+
+MACRO FILL_COLUMNS body, tail, exitlo, exithi, taillo, tailhi
+    STA even+1:STX odd+1
+    LDA #LO(toggle_end):STA read+1
+    LDX #0                              ; the first column's block
+    CLC                                 ; (and clear until the last column's done)
+.column
+.read
+    LDY toggle_end                      ; the column's end (the operand's stepped on a column)
+    LDA exitlo,Y:STA patch+1:STA unpatch+1
+    LDA exithi,Y:STA patch+2:STA unpatch+2
+    LDA taillo,Y:STA even_tail+1:STA odd_tail+1
+    LDA tailhi,Y:STA even_tail+2:STA odd_tail+2
+    LDA #&60                            ; RTS
+.patch
+    STA fill_spare                      ; over the end row's EOR
+.even
+    LDA #0:JSR body                     ; the even scanlines
+.even_tail
+    JSR tail
+    ZA_CANCALL tail
+    INX                                 ; the odd
+.odd
+    LDA #0:JSR body
+.odd_tail
+    JSR tail
+    ZA_CANCALL tail
+    LDA #&5D                            ; EOR abs,X
+.unpatch
+    STA fill_spare
+    INC read+1
+    TXA:ADC #7:TAX                      ; the next column's block: 0, with C set, past the last
+    BNE column
+    RTS
+ENDMACRO

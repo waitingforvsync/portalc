@@ -224,7 +224,8 @@ The rest:
   `portalc_plotref`; `make test_clip`, the clips against `portalc_clipref`;
   `make test_walk`, whole captures against `portalc_walkref`, and
   `make test_walk3`, over the stress scene with the depth capped at 3,
-  against `portalc_walk3ref`.
+  against `portalc_walk3ref`; `make test_fill`, the fill against
+  `portalc_fillref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
@@ -243,8 +244,8 @@ The rest:
   line, and whole combinations (a kind of clip with a kind of span) never
   occur. Take the systematic parts from the case's number (a kind of clip,
   the bounds' edges), and the rest from an LFSR stepped once a case, the
-  same in the C and the 6502; then count in the C which paths the cases
-  reach before trusting the check.
+  same in the C and the 6502 (`LFSR`, test_macros.6502); then count in the
+  C which paths the cases reach before trusting the check.
 - A path the demo scene never takes is checked over the C's stress scene
   (`test/stressdata.6502`, which `make map` makes), and a cap it never
   meets with the cap lowered: a variant of the check, as

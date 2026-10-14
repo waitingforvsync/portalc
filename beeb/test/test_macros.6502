@@ -14,3 +14,21 @@ MACRO FLETCHER sum1, sum2
     CLC:ADC sum1:ADC #0:STA sum1
     CLC:ADC sum2:ADC #0:STA sum2
 ENDMACRO
+
+\\ Step a 16-bit Galois LFSR on (taps &B400), as the C's checks step theirs.
+\\
+\\ Inputs:
+\\     random: the LFSR
+\\
+\\ Outputs:
+\\     random: stepped
+\\     A: its low byte
+\\     X, Y: preserved
+
+MACRO LFSR random
+    LSR random+1:ROR random
+    BCC stepped
+    LDA random+1:EOR #&B4:STA random+1
+.stepped
+    LDA random
+ENDMACRO

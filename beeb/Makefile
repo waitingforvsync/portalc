@@ -12,8 +12,9 @@
 #   make test_plot       the plotters, likewise
 #   make test_clip       the clips, likewise
 #   make test_walk       the walk, the whole capture, likewise; and test_walk3
-#                        over the stress scene, its depth capped at 3: each
-#                        test/CHECK_portal.6502, built with -D TEST=TRUE
+#                        over the stress scene, its depth capped at 3
+#   make test_fill       the fill, likewise: each test/CHECK_portal.6502,
+#                        built with -D TEST=TRUE
 #   make map      remake src/mapdata.6502 from the C's demo scene, and
 #                 test/stressdata.6502 from its stress scene
 #   make clean
@@ -33,7 +34,7 @@ B2_WIN = b2
 
 SRC = boot.6502 portal.6502
 DEPS = $(SRC) $(wildcard src/*.6502) $(wildcard test/*.6502)
-CHECKS = arith vcache capture plot clip walk walk3
+CHECKS = arith vcache capture plot clip walk walk3 fill
 
 all: $(BUILD)/portal.ssd
 

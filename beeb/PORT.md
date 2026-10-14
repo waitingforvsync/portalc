@@ -100,7 +100,7 @@ ambitions.
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_mode5_fill` (mode5.c) | `fill` (fill.6502) | stub |
+| `pt_mode5_fill` (mode5.c), with `frame`'s start colour | `fill` (fill.6502), the camera cell's ceiling's colour, then on into `fill_colour`: `FILL_COLUMNS` (fill_macros.6502) through each screen's blocks, `FILL_BODY` and `FILL_TAIL` | done: 64 made-up frames, every end into each screen, half from a cell's ceiling, `portalc_fillref` |
 | `pt_sprite_plot` (sprite.c) | `sprites` (sprites.6502) | stub |
 | `unplot` (render.c), plot.c's `pt_unplot_` | `unplot` (unplot.6502) | stub. The records it reads are made |
 
@@ -302,6 +302,15 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - **`WRITE_ROWS` patches its store's base and the gradient into the loop**,
   so X counts up to the page's end (`bound_top`, at a page's start) or its
   middle (`bound_bottom`, at its middle) with no compare a column.
+- **The fill goes through each screen's own unrolled blocks** (mode5.c's
+  notes). The body EORs a canvas row's byte from T into the colour and
+  stores it, rows 0 to 63, X the column's block (one on for its odd
+  scanlines); an RTS patched over the column's end row's `EOR` stops it, and
+  the tail stores the colour from there down. Tables by the end row say
+  where the RTS and the tail go: ends 64 and 65 stop at the body's own RTS,
+  so they patch `fill_spare`, and the tail starts at row 1, as no end is 0.
+  A byte above a column's end costs 9 cycles, one below 5, and a column 134
+  more: 32.6k cycles a frame over walkref's frames.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has

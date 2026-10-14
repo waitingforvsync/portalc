@@ -1,0 +1,116 @@
+\\ test/fill.6502 - make test's check of the fill: made-up frames filled into each screen in turn,
+\\ each screen summed after, for host/test_build.py.
+
+CASES = 64                              ; made-up frames, into screen A and B by turns
+ASSERT MAP_CELLS > 16, "test_fill: a cell from 1 to 16"
+
+SECTION TestResults
+.t_screen1  SKIP CASES                  ; each case's screen's sums
+.t_screen2  SKIP CASES
+ENDSECTION
+
+\\ Made-up frames: a colour, or for every other pair, a cell, 1 to 16, whose ceiling's colour fill
+\\ takes; each byte column's end, 1 to 65; and T made up above each end, a canvas row's even
+\\ scanline then its odd, and 0 below. Each made-up value is the next step of a 16-bit Galois LFSR,
+\\ as fillref steps it. Each frame filled into its screen, A then B by turns, and the screen summed.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_screen1, t_screen2: each case's screen's sums
+
+.test_fill
+{
+    ZA_AUTO2 random                     ; local: the LFSR
+    ZA_AUTO1 case                       ; local: the frame
+    ZA_AUTO1 even                       ; local: its colour
+    ZA_AUTO1 odd
+    ZA_AUTO1 column                     ; local: a byte column
+    ZA_AUTO1 rows                       ; local: its rows made up, to go
+
+    LDA #LO(&ACE1):STA random
+    LDA #HI(&ACE1):STA random+1
+    LDA #0:STA case
+
+    \\ the colour, or the cell; and the ends: 0 to 127 made up, less 65 if that's past 64, then + 1
+
+.each_case
+    JSR clear_t
+    LFSR random:STA even
+    LFSR random:STA odd
+    LDA case:AND #2:BEQ coloured
+    LFSR random
+    AND #15:TAX:INX:STX camcell
+.coloured
+    LDX #0
+.ends
+    LFSR random
+    AND #127:CMP #65:BCC under
+    SBC #64                             ; (C set) - 65, + 1
+    BCS ended                           ; (always)
+    ZA_UNREACHABLE
+.under
+    ADC #1                              ; (C clear)
+.ended
+    STA toggle_end,X
+    INX:CPX #SCREEN_WIDTH/4:BNE ends
+
+    \\ T above each end, from row 0 down
+
+    LDA #0:STA column
+.each_column
+    LDX column:LDA toggle_end,X
+    CMP #SCREEN_HEIGHT+1:BCC rowed
+    LDA #SCREEN_HEIGHT                  ; 65: the same as 64
+.rowed
+    STA rows
+    TXA:ASL A:ASL A                     ; the column's first pixel
+    LDX #0
+    MODE5_AT
+.row
+    LFSR random:STA (cursor),Y
+    INY
+    LFSR random:STA (cursor),Y
+    MODE5_DOWN
+    DEC rows:BNE row
+    INC column
+    LDA column:CMP #SCREEN_WIDTH/4:BNE each_column
+
+    \\ filled into its screen, A for an even case, B for an odd, from the colour or the cell; and
+    \\ the screen summed
+
+    ZA_AUTO1 sum1                       ; local: the sum of the screen's bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA case:LSR A
+    LDA #HI(SCREEN_A):BCC screen
+    LDA #HI(SCREEN_B)
+.screen
+    STA base
+    LDA case:AND #2:BEQ colour
+    JSR fill
+    JMP filled
+.colour
+    LDA even:LDX odd
+    JSR fill_colour
+.filled
+    LDA base:STA page+2
+    LDA #0:STA sum1:STA sum2:TAY
+    LDX #HI(SCREEN_B-SCREEN_A)          ; pages
+.page
+    LDA &FF00,Y:FLETCHER sum1, sum2     ; (the operand's high byte the screen's page)
+    INY
+    BNE page
+    INC page+2
+    DEX
+    BNE page
+    LDX case
+    LDA sum1:STA t_screen1,X
+    LDA sum2:STA t_screen2,X
+    INC case
+    LDA case:CMP #CASES:BEQ done
+    JMP each_case
+.done
+    RTS
+}

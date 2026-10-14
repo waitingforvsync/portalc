@@ -1,15 +1,78 @@
-\\ fill.6502 - the fill: T into the buffer not on show.
+\\ fill.6502 - the fill (pt_mode5_fill): T into the buffer not on show, a byte column at a time,
+\\ through each screen's own blocks.
 
-\\ Fill the screen from T, a byte column at a time. A stub for now.
+\\ Where an end row past the body's last row patches its RTS, as the body ends with one already.
+
+SECTION Between
+.fill_spare SKIP 1
+ENDSECTION
+
+\\ Fill the buffer not on show from T, each byte column from the camera cell's ceiling's colour
+\\ (pt_mode5_fill); then fill_colour.
 \\
 \\ Inputs:
-\\     base: the buffer's page
-\\     T: the frame's lines
+\\     camcell: the camera's cell
+\\     base, toggle_end, T: as fill_colour's
 \\
 \\ Outputs:
-\\     the buffer: filled
+\\     as fill_colour's
 
 .fill
 {
-    RTS
+    LDX camcell:LDY cell_ceil,X         ; the ceiling's shade
+    LDX shade_odd,Y
+    LDA shade_even,Y                    ; then on into fill_colour
 }
+
+\\ Fill the buffer not on show from T, each byte column from a colour (pt_mode5_fill).
+\\
+\\ Inputs:
+\\     A, X: the colour above row 0, the even scanlines' and the odd's
+\\     base: the buffer's page
+\\     toggle_end: each byte column's end, the row after its last toggled row: 1 to 65
+\\     T: the frame's lines, none below a column's end
+\\
+\\ Outputs:
+\\     the buffer: filled
+\\     A, X, Y: corrupted
+
+.fill_colour
+{
+    LDY base:CPY #HI(SCREEN_A):BEQ a
+    FILL_COLUMNS fill_body_b, fill_tail_b, fill_exitlo_b, fill_exithi_b, fill_taillo_b, fill_tailhi_b
+.a
+    FILL_COLUMNS fill_body_a, fill_tail_a, fill_exitlo_a, fill_exithi_a, fill_taillo_a, fill_tailhi_a
+}
+
+\\ By the end row, 0 to 65 (0 unused, 65 the same as 64), where the RTS goes in each screen's body,
+\\ the row's EOR, and where its tail starts, its first store row 1's; then the blocks. The body's
+\\ own RTS ends rows 64 and 65, so their patch goes to fill_spare.
+
+FUNCTION fill_exits(body) = CONCAT(body+6*(0..<SCREEN_HEIGHT), {fill_spare, fill_spare})
+FUNCTION fill_tails(tail) = tail+3*(CONCAT(0..SCREEN_HEIGHT, SCREEN_HEIGHT)-1)
+
+    FITPAGE SCREEN_HEIGHT+2
+.fill_exitlo_a EQUB LO(fill_exits(fill_body_a))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_exithi_a EQUB HI(fill_exits(fill_body_a))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_taillo_a EQUB LO(fill_tails(fill_tail_a))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_tailhi_a EQUB HI(fill_tails(fill_tail_a))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_exitlo_b EQUB LO(fill_exits(fill_body_b))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_exithi_b EQUB HI(fill_exits(fill_body_b))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_taillo_b EQUB LO(fill_tails(fill_tail_b))
+    FITPAGE SCREEN_HEIGHT+2
+.fill_tailhi_b EQUB HI(fill_tails(fill_tail_b))
+
+.fill_body_a
+    FILL_BODY SCREEN_A
+.fill_tail_a
+    FILL_TAIL SCREEN_A
+.fill_body_b
+    FILL_BODY SCREEN_B
+.fill_tail_b
+    FILL_TAIL SCREEN_B

@@ -57,7 +57,7 @@ endif()
 # comparison against a floating-point ray cast ----
 
 foreach(tool sweep fb2ppm mapdump refcmp tables mapasm arithref vcacheref captureref plotref clipref
-             walkref)
+             walkref fillref)
     add_executable(portalc_${tool} tools/${tool}.c)
     target_link_libraries(portalc_${tool} PRIVATE portal)
     if(NOT MSVC)

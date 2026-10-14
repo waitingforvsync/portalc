@@ -9,8 +9,8 @@ import time
 import b2
 from test_tables import symbols
 
-USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot, clip, walk '
-         'or walk3; its build, its symbols, and the C\'s answers)')
+USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot, clip, walk, '
+         'walk3 or fill; its build, its symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -205,6 +205,15 @@ def walk_expected(c):
     ]
 
 
+def fill_expected(c):
+    """The fill's sums: each made-up frame's screen after it."""
+    screen1, screen2 = hex_sums(c['screens'])
+    return [
+        ('fill s1', 't_screen1', 0, 0, screen1),
+        ('fill s2', 't_screen2', 0, 0, screen2),
+    ]
+
+
 def arith_expected(c):
     """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
     answer's input, the answers)."""
@@ -244,7 +253,7 @@ def arith_expected(c):
 
 EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
             'plot': plot_expected, 'clip': clip_expected, 'walk': walk_expected,
-            'walk3': walk_expected}
+            'walk3': walk_expected, 'fill': fill_expected}
 
 
 def main():

@@ -19,7 +19,8 @@ in `src/`, which models it. Read this before writing any.
 - Every whole-line comment is `\\`: the file's header, the notes between
   routines, a routine's header and its parts'. Only trailing comments use
   `;`.
-- Lines go to 100 columns at most.
+- Comments go to 100 columns at most, wrapped to fit. Code that can't be
+  split, like a long macro call, can run past.
 - A file's header comment says what's in the file, in two lines at most.
 - A routine's or macro's header says what it's for, in two lines at most.
   Then a blank `\\` line, `Inputs:` with an indented list, one to a line,
@@ -125,6 +126,12 @@ can be from the start, not tidied up later.
 - Pass values in registers, not zero page, wherever they fit. A count in X,
   counted down by `DEX:BNE`, needs no store to set it up and costs 2 cycles
   a time round; a `pages` variable needs the store and a 5-cycle `DEC`.
+- No copy made only to be read: read the value where it already is (the
+  steep plotter adds `line_grad` itself, not a local holding its low
+  byte). And no copy made only to be changed, when nothing wants the
+  original after: work on it in place (the plotters count their row and
+  fraction in `run_y`, listed as corrupted). Copy only what something
+  still reads after it's changed.
 - Code that runs once is thrown away afterwards (the loader's memory
   becomes T), so it can be a `MACRO`, inlined where it's used, and
   self-modifying: `abs,Y` with the operand's high byte stepped by `INC`,

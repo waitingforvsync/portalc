@@ -63,7 +63,7 @@ ENDSECTION
     INC vc_num:LDY vc_num
     TXA:STA vc_vert,Y
     TYA:STA vc_slot,X
-    POLAR vert_xlo, vert_xhi, vert_ylo, vert_yhi, vc_anglo, vc_anghi, vc_logdistlo, vc_logdisthi
+    POLAR vc_num, vert_xlo, vert_xhi, vert_ylo, vert_yhi, vc_anglo, vc_anghi, vc_logdistlo, vc_logdisthi
     TYA                                 ; the entry
     LDY ysave
     RTS

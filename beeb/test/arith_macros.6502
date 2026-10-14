@@ -49,6 +49,7 @@ ENDMACRO
 
 MACRO TEST_POLAR xlo, xhi, sums1, sums2
     ZA_AUTO1 row                        ; local: y's index
+    ZA_AUTO1 point                      ; local: x's
     ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
     ZA_AUTO1 sum2                       ; local: and the sum of the sums
 
@@ -72,13 +73,13 @@ MACRO TEST_POLAR xlo, xhi, sums1, sums2
 
     \\ POLAR at every point, its answer at its index
 
-    LDX #0
-.point
-    TXA:TAY
-    POLAR xlo, xhi, t_pylo, t_pyhi, t_palo, t_pahi, t_plogdistlo, t_plogdisthi
-    INY:TYA:TAX
+    LDA #0:STA point
+.each
+    LDX point
+    POLAR point, xlo, xhi, t_pylo, t_pyhi, t_palo, t_pahi, t_plogdistlo, t_plogdisthi
+    INC point
     BEQ sums
-    JMP point
+    JMP each
 
     \\ the rows's sums, point by point
 

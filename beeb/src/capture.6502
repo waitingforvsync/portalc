@@ -687,30 +687,26 @@ ENDSECTION
 
 .visit_of
 {
-    ZA_AUTO1 cell                       ; local: the cell
-    ZA_AUTO1 visit                      ; local: its new visit
-
     LDA cell_visit,X:BEQ make           ; not met yet
     TAX
     RTS
 .make
-    STX cell
-    LDY num_visits:STY visit
-    INC num_visits
+    LDY num_visits                      ; the new visit, counted at the end
     TYA:STA cell_visit,X
     TXA:STA visit_cell,Y
     LDA #0:STA visit_side,Y:STA visit_xr,Y:STA visit_kept,Y
     LDA cell_ceilz,X
     HEIGHT_OF
-    LDY visit
+    LDY num_visits
     STA visit_hchi,Y
     TXA:STA visit_hclo,Y
-    LDX cell
+    LDX visit_cell,Y                    ; the cell again
     LDA cell_floorz,X
     HEIGHT_OF
-    LDY visit
+    LDY num_visits
     STA visit_hfhi,Y
     TXA:STA visit_hflo,Y
-    LDX visit
+    LDX num_visits
+    INC num_visits
     RTS
 }

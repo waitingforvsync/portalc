@@ -153,28 +153,25 @@ ENDMACRO
 \\ offset from the middle of the camera's whole-unit square, in half units, its log less 256.
 \\
 \\ Inputs:
+\\     index: the answer's index, in zero page
 \\     xlo, xhi, ylo, yhi: the points' coordinate tables
 \\     anglo, anghi, logdistlo, logdisthi: the tables the answer goes in
 \\     X: the point
-\\     Y: the answer's index
 \\     camx, camy: the camera, in whole units
 \\
 \\ Outputs:
 \\     anglo,Y: the world angle's step within its quadrant
 \\     anghi,Y: the quadrant
 \\     logdistlo,Y, logdisthi,Y: 256 log2 of the distance, in whole units (pt_polar's lr)
-\\     Y: preserved
-\\     X: corrupted
+\\     Y: the index
+\\     A, X: corrupted
 
-MACRO POLAR xlo, xhi, ylo, yhi, anglo, anghi, logdistlo, logdisthi
-    ZA_AUTO1 index                      ; local: Y, where the answer goes
+MACRO POLAR index, xlo, xhi, ylo, yhi, anglo, anghi, logdistlo, logdisthi
     ZA_AUTO1 quadrant                   ; local: 0 to 3
     ZA_AUTO1 flip                       ; local: &FF to flip atan's byte: steep and odd differ
     ZA_AUTO2 major                      ; local: the major component, in half units
     ZA_AUTO2 minor                      ; local: and the minor
     ZA_AUTO2 logmajor                   ; local: the major's log
-
-    STY index
 
     \\ x's offset, as d = v - cam - 1, the C's being 2d + 1 (never 0): its magnitude is 2d + 1,
     \\ or 2(d EOR &FFFF) + 1 for d < 0. Into major, for now

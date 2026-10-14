@@ -1,5 +1,5 @@
-\\ test/plot_portal.6502 - make test_plot's PORTAL: the plotters' check, with the engine it needs:
-\\ the plotters, and the capture, whose line's gradient they plot by, and what it needs.
+\\ test/plot_portal.6502 - make test_plot's PORTAL: the plotters' and the unplot's check, with the
+\\ engine they need: them, and the capture, whose line's gradient they plot by, and what it needs.
 
 INCLUDE "../src/memory.6502"
 INCLUDE "../src/constants.6502"
@@ -10,6 +10,7 @@ INCLUDE "../src/map_macros.6502"
 INCLUDE "../src/vcache_macros.6502"
 INCLUDE "../src/capture_macros.6502"
 INCLUDE "../src/plot_macros.6502"
+INCLUDE "../src/unplot_macros.6502"
 INCLUDE "../src/entry_macros.6502"
 INCLUDE "test_macros.6502"
 
@@ -24,6 +25,7 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         INCLUDE "../src/camera.6502"
         INCLUDE "../src/capture.6502"
         INCLUDE "../src/plot.6502"
+        INCLUDE "../src/unplot.6502"
         INCLUDE "test.6502"
         INCLUDE "plot.6502"
     ENDSECTION

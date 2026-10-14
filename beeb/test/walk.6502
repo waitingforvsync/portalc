@@ -8,19 +8,23 @@ ANGLES = 32                             ; from each place: every 8th of the C's 
 SECTION TestResults
 .t_answers1 SKIP PLACES                 ; each place's frames' answers' Fletcher sums
 .t_answers2 SKIP PLACES
-.t_t1       SKIP PLACES                 ; T's, after each place's frames
+.t_clear1   SKIP PLACES                 ; T's, after the unplot clears each place's first frame
+.t_clear2   SKIP PLACES
+.t_t1       SKIP PLACES                 ; T's, after each place's other frames
 .t_t2       SKIP PLACES
 ENDSECTION
 
 \\ From each place, at each angle, the whole capture: each frame's counts, records, toggle_end and
-\\ visits, summed by place, then T's sums after the place's frames.
+\\ visits, summed by place; T's sums after the unplot clears the first frame; and T's after the
+\\ place's other frames.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
 \\     t_answers1, t_answers2: the frames' answers' sums, by place
-\\     t_t1, t_t2: T's, by place
+\\     t_clear1, t_clear2: T's after the first frame's unplot, by place
+\\     t_t1, t_t2: T's after the other frames, by place
 
 .test_walk
 {
@@ -72,6 +76,16 @@ ENDSECTION
     INX
     JMP visits
 .visited
+
+    \\ the first frame cleared out of T again
+
+    LDA camangle:ORA camangle+1:BNE next
+    JSR unplot
+    JSR sum_t
+    LDX place
+    LDA sum_t.sum1:STA t_clear1,X
+    LDA sum_t.sum2:STA t_clear2,X
+.next
     CLC:LDA camangle:ADC #1024/ANGLES   ; on to the next angle
     STA camangle
     LDA camangle+1:ADC #0:AND #3:STA camangle+1

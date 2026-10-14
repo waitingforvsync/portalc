@@ -1,0 +1,251 @@
+\\ unplot_macros.6502 - the unplot's macros: a run's bytes zeroed whole, both scanlines, stepped
+\\ as its plotter stepped it (plot.c's unplotters), A holding the 0 between rows.
+
+\\ Zero a row's byte at the cursor, both its scanlines (pt_mode5_zero).
+\\
+\\ Inputs:
+\\     A: 0
+\\     cursor, Y: the row's even scanline
+\\
+\\ Outputs:
+\\     T: the byte zeroed
+\\     Y: the row's odd scanline
+\\     A, X, C: preserved
+
+MACRO UNPLOT_ROW
+    STA (cursor),Y
+    INY
+    STA (cursor),Y
+ENDMACRO
+
+\\ A row on, the way a run goes, from either of a row's scanlines, A kept (pt_mode5_down,
+\\ pt_mode5_up, without mode5_down's or mode5_up's load).
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     odd: TRUE from the row's odd scanline, FALSE from its even
+\\     cursor, Y: the row
+\\
+\\ Outputs:
+\\     cursor, Y: the next row's even scanline
+\\     A, X: preserved
+\\     C: clear, falling; preserved, rising
+
+MACRO UNPLOT_MOVE down, odd
+    IF down
+        INY
+        IF NOT(odd) : INY : ENDIF
+        CPY #8:BNE done                 ; (C clear: under 8)
+        LDY #0:INC cursor+1             ; past the block's end: the top of the block below
+        CLC
+    ELSE
+        DEY:DEY
+        IF odd : DEY : ENDIF
+        BPL done
+        LDY #6:DEC cursor+1             ; above the block's top: the bottom of the block above
+    ENDIF
+.done
+ENDMACRO
+
+\\ A shallow run's part byte, at either end, a column at a time (plot.c's unpart_down, unpart_up,
+\\ bar the step into the next byte): its first column's row zeroed, then each step's carry a row on.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     grad: the gradient
+\\     count: the steps, 0 to 3
+\\     X: the fraction at the first column (rising, 255 less it)
+\\     cursor, Y: its row's even scanline
+\\     C: clear
+\\
+\\ Outputs:
+\\     T: the byte's rows zeroed
+\\     X: the fraction at the last column
+\\     cursor, Y: its row's odd scanline
+\\     count: 0
+\\     A: corrupted
+\\     C: clear
+
+MACRO UNPLOT_PART down, grad, count
+    LDA #0
+    UNPLOT_ROW
+    LDA count:BEQ done
+    TXA
+.step
+    ADC grad:BCC same                   ; a step: its carry a row on
+    TAX
+    LDA #0
+    UNPLOT_MOVE down, TRUE
+    UNPLOT_ROW
+    TXA
+    IF NOT(down) : CLC : ENDIF
+.same
+    DEC count:BNE step
+    TAX
+.done
+ENDMACRO
+
+\\ A shallow run's whole bytes (plot.c's unbyte_down, unbyte_up), for a gradient whose 3 grad's high
+\\ byte is rows: from each byte's first column's row, 3 grad's carries on to its last column, then
+\\ a step into the next byte, its carry a row on.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     rows: 3 grad's high byte, 0 to 2
+\\     grad, grad3: the gradient, and 3 grad's low byte
+\\     bytes: the whole bytes, some
+\\     X: the fraction at the first's first column (rising, 255 less it)
+\\     cursor, Y: its row's even scanline
+\\     C: clear
+\\
+\\ Outputs:
+\\     T: the bytes' rows zeroed
+\\     X: the fraction at the next byte's first column
+\\     cursor, Y: its row's even scanline
+\\     bytes: 0
+\\     A: corrupted
+\\     C: clear
+
+MACRO UNPLOT_BYTES down, rows, grad, grad3, bytes
+.each
+    TXA:ADC grad3:TAX                   ; on to the byte's last column: C, a row more
+    LDA #0
+    UNPLOT_ROW
+    BCC more
+    UNPLOT_MOVE down, TRUE
+    UNPLOT_ROW
+.more
+    FOR row = 0..<rows
+        UNPLOT_MOVE down, TRUE
+        UNPLOT_ROW
+    NEXT
+    DEY                                 ; the last row's even scanline
+    IF NOT(down) : CLC : ENDIF
+    LDA cursor:ADC #8:STA cursor        ; the next byte (past the row's last, nothing follows)
+    TXA:ADC grad:TAX                    ; its first column: C, a row on
+    BCC same
+    UNPLOT_MOVE down, FALSE
+    IF NOT(down) : CLC : ENDIF
+.same
+    DEC bytes:BNE each
+ENDMACRO
+
+\\ A shallow run one way, not flat (pt_unplot_shallow's): the first byte's columns a column at a
+\\ time, if the run starts inside it, whole bytes by 3 grad, then the last byte's columns.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     grad, grad3, rows3: the gradient, and 3 grad's low byte and high byte
+\\     fraction: the row's fraction at x0
+\\     x0, x1: the run's columns
+\\     bytes: its whole bytes, x1 DIV 4 less (x0 + 3) DIV 4: less than none if it's inside one
+\\         byte, from past its start
+\\     cursor, Y: x0's row's even scanline
+\\     C: clear
+\\
+\\ Outputs:
+\\     T: the run's bytes zeroed
+\\     bytes: corrupted
+\\     A, X, Y: corrupted
+
+MACRO UNPLOT_SHALLOW down, grad, grad3, rows3, fraction, x0, x1, bytes
+    ZA_AUTO1 count                      ; local: a part byte's steps to go
+
+    LDA fraction
+    IF NOT(down) : EOR #&FF : ENDIF     ; 255 - f: each borrow up a carry
+    TAX
+
+    \\ the first byte's columns, if the run starts inside it: to its last, then a step into the
+    \\ next byte; or, the run inside it, to the run's last
+
+    LDA x0:AND #3:BEQ whole
+    BIT bytes:BMI single
+    EOR #3:STA count                    ; its steps to its last column
+    UNPLOT_PART down, grad, count
+    TXA:ADC grad:TAX                    ; a step into the next byte: C, a row on
+    BCS head_on
+    DEY                                 ; the row's even scanline
+    BCC head_next                       ; (always)
+    ZA_UNREACHABLE
+.head_on
+    UNPLOT_MOVE down, TRUE
+    IF NOT(down) : CLC : ENDIF
+.head_next
+    LDA cursor:ADC #8:STA cursor        ; (C clear after: the run goes on past the byte)
+
+    \\ the last byte's columns, if the run ends inside it, after the whole bytes (below, out of the
+    \\ way of the branches)
+
+.whole
+    LDA bytes:BNE some
+.tail
+    LDA x1:AND #3:BEQ done
+    SBC #0:STA count                    ; (C clear) its steps: its columns less 1
+.part
+    UNPLOT_PART down, grad, count
+.done
+    RTS
+.single
+    LDA x1:CLC:SBC x0:STA count         ; its steps: x1 - x0 - 1
+    CLC:BCC part                        ; (always)
+    ZA_UNREACHABLE
+
+    \\ the whole bytes, by 3 grad's high byte
+
+.some
+    LDA rows3:BNE large
+    UNPLOT_BYTES down, 0, grad, grad3, bytes
+    JMP tail
+.large
+    LSR A:BNE bytes2                    ; 1: 0, 2: 1
+    CLC                                 ; (set by 1's shift)
+    UNPLOT_BYTES down, 1, grad, grad3, bytes
+    JMP tail
+.bytes2
+    UNPLOT_BYTES down, 2, grad, grad3, bytes
+    JMP tail
+ENDMACRO
+
+\\ A steep run one way (pt_unplot_steep's): each column's row zeroed, then the gradient's whole
+\\ rows on, and one more on the fraction's carry, a byte on every fourth column.
+\\
+\\ Inputs:
+\\     down: TRUE for a falling run, FALSE for a rising one
+\\     grad_whole, grad_fraction: the gradient's whole rows and fraction
+\\     fraction: the row's fraction at x0
+\\     count: the run's columns
+\\     pixels: x0's byte's columns from x0, 1 to 4
+\\     cursor, Y: x0's row's even scanline
+\\     C: clear
+\\
+\\ Outputs:
+\\     T: the run's bytes zeroed
+\\     fraction, count, pixels: corrupted
+\\     A, X, Y: corrupted
+
+MACRO UNPLOT_STEEP down, grad_whole, grad_fraction, fraction, count, pixels
+    IF NOT(down)
+        LDA fraction:EOR #&FF           ; 255 - f: the borrows up as carries
+        STA fraction
+    ENDIF
+.column
+    LDA #0
+    UNPLOT_ROW
+    DEC count:BEQ done
+    LDA fraction:ADC grad_fraction:STA fraction
+    LDA grad_whole:ADC #0:TAX           ; the rows on: 1 to 128, C clear
+.rows
+    IF down
+        MODE5_DOWN
+    ELSE
+        MODE5_UP
+    ENDIF
+    DEX:BNE rows
+    DEC pixels:BNE column
+    LDA #4:STA pixels
+    LDA cursor:ADC #8:STA cursor        ; the next byte
+    BCC column                          ; (always: the run has columns in it)
+    ZA_UNREACHABLE
+.done
+    RTS
+ENDMACRO

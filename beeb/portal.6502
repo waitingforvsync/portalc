@@ -13,6 +13,7 @@ INCLUDE "src/plot_macros.6502"
 INCLUDE "src/clip_macros.6502"
 INCLUDE "src/walk_macros.6502"
 INCLUDE "src/fill_macros.6502"
+INCLUDE "src/unplot_macros.6502"
 INCLUDE "src/entry_macros.6502"
 
 SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END

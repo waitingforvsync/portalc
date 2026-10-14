@@ -65,13 +65,15 @@ int main(void)
     // at each gradient, made-up runs into an empty T: from each column in turn, a length from
     // the list cut to the screen and to a fall of 64 rows, a row and fraction made up and then
     // kept to the screen, a colour made up but every 32nd none, and toggle_end made up: each
-    // run's count, record and toggle_end, then T after them all, the junk rows too
+    // run's count, record and toggle_end; then T after them all, the junk rows too, and after
+    // the unplot clears them from their records
     printf("{\n  \"runs\": [");
     for (unsigned k = 0; k < 2 * MAGS - 1; k++) {
         uint16_t mag = mags[k < MAGS ? k : k - MAGS + 1];
         uint16_t g = (uint16_t)(k < MAGS ? mag : mag | 0x8000u);
         unsigned most = mag == 0 ? 128 : 16384u / mag + 1;
         memset(r.tmem, 0, sizeof r.tmem);
+        r.num_recs = 0;
         printf("%s\n    {\"runs\": \"", k ? "," : "");
         for (unsigned j = 0; j < RUNS; j++) {
             fraction = (uint8_t)(fraction + 37);
@@ -99,15 +101,17 @@ int main(void)
             }
             for (unsigned i = 0; i < sizeof r.toggle_end; i++)
                 r.toggle_end[i] = (uint8_t)(((base + 5 * i) & 63) + 1);
-            r.num_recs = 0;
             pt_render_plot_run(&r, &L, x0, (uint8_t)(x0 + len), (uint16_t)y);
-            const pt_rec *q = &r.recs[0];
+            const pt_rec *q = &r.recs[r.num_recs - 1];
             uint8_t rec[7] = {r.num_recs, q->x0, q->x1, (uint8_t)q->y, (uint8_t)(q->y >> 8),
                               (uint8_t)q->g, (uint8_t)(q->g >> 8)};
             hex(rec, sizeof rec);
             hex(r.toggle_end, sizeof r.toggle_end);
         }
         printf("\", \"t\": \"");
+        hex(r.tmem, sizeof r.tmem);
+        pt_render_unplot(&r);
+        printf("\", \"unplot\": \"");
         hex(r.tmem, sizeof r.tmem);
         printf("\"}");
     }

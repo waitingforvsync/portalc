@@ -220,9 +220,10 @@ The rest:
   `portalc_tables`; `make test_arith`, the macros against
   `portalc_arithref`; `make test_vcache`, the vertex cache against
   `portalc_vcacheref`; `make test_capture`, the capture against
-  `portalc_captureref`; `make test_plot`, the plotters against
-  `portalc_plotref`; `make test_clip`, the clips against `portalc_clipref`;
-  `make test_walk`, whole captures against `portalc_walkref`, and
+  `portalc_captureref`; `make test_plot`, the plotters and the unplot
+  against `portalc_plotref`; `make test_clip`, the clips against
+  `portalc_clipref`; `make test_walk`, whole captures, each place's first
+  frame unplotted, against `portalc_walkref`, and
   `make test_walk3`, over the stress scene with the depth capped at 3,
   against `portalc_walk3ref`; `make test_fill`, the fill against
   `portalc_fillref`.

@@ -1483,6 +1483,11 @@ void pt_render_capture(pt_render *r, uint8_t angle, uint8_t cell)
         r->cell_visit[r->visits[i].cell] = 0;
 }
 
+void pt_render_unplot(pt_render *r)
+{
+    unplot(r);
+}
+
 static void frame(pt_render *r, uint8_t angle, uint8_t cell)
 {
     const pt_map *m = r->map;

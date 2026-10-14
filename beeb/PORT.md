@@ -93,6 +93,7 @@ ambitions.
 | `pt_plot_shallow`, `pt_plot_steep` | `plot_shallow`, `plot_steep`, through `SHALLOW` and `STEEP` (plot_macros.6502), each expanded falling and rising | done, in `plot_run`'s check |
 | `pt_plot_flat` | `plot_flat` | done: every x0 < x1 |
 | mode5.h's cursor | `MODE5_AT`, `MODE5_EOR` (and `MODE5_EOR_X`, the mask in X), `MODE5_DOWN`, `MODE5_UP`, `MODE5_NEXT` | done, in the plotters' checks |
+| `pt_mode5_zero`, and `pt_mode5_down`, `_up` for the unplot | `UNPLOT_ROW`, `UNPLOT_MOVE` | done, in the unplot's checks |
 | `pt_mode5_plot` | — | not ported: only `close_columns` uses it (step 4), and it never ran in the sweep |
 | `inst_new`, `inst_clip`, `inst_hide` | — | not started (sprites) |
 
@@ -102,7 +103,8 @@ ambitions.
 |---|---|---|
 | `pt_mode5_fill` (mode5.c), with `frame`'s start colour | `fill` (fill.6502), the camera cell's ceiling's colour, then on into `fill_colour`: `FILL_COLUMNS` (fill_macros.6502) through each screen's blocks, `FILL_BODY` and `FILL_TAIL` | done: 64 made-up frames, every end into each screen, half from a cell's ceiling, `portalc_fillref` |
 | `pt_sprite_plot` (sprite.c) | `sprites` (sprites.6502) | stub |
-| `unplot` (render.c), plot.c's `pt_unplot_` | `unplot` (unplot.6502) | stub. The records it reads are made |
+| `unplot` (render.c), with `pt_render_unplot` for the checks | `unplot` (unplot.6502), each record through `unplot_flat`, `unplot_shallow` or `unplot_steep`, then row 0 | done: the plotters' made-up runs cleared at each gradient, `portalc_plotref`; and each place's first frame in the walks' checks |
+| `pt_unplot_shallow`, `pt_unplot_steep` (plot.c), with `unpart_`, `unbyte_` | `UNPLOT_SHALLOW`, `UNPLOT_STEEP` (unplot_macros.6502), with `UNPLOT_PART` and `UNPLOT_BYTES` | done, in the unplot's checks |
 
 ## Names
 
@@ -159,6 +161,7 @@ or two bytes of zero page.
 | `pt_pattern.e`, `.o` | `pattern_even`, `pattern_odd` |
 | `pt_mode5_cur` | `cursor` (the block), with Y |
 | `pt_mode5_at`, `_eor`, `_down`, `_up`, `_next` | `MODE5_AT`, `MODE5_EOR`, `MODE5_DOWN`, `MODE5_UP`, `MODE5_NEXT` |
+| `pt_mode5_zero`; the unplot's down and up | `UNPLOT_ROW`; `UNPLOT_MOVE` |
 | `pt_rec.x0`, `.x1`, `.y`, `.g` | `rec_x0`, `rec_x1`, `rec_ylo`/`rec_yhi`, `rec_gradlo`/`rec_gradhi` |
 | record's `toggle_end` update | `NOTE_TOGGLE` (A the row, X the byte column) |
 | the plotters' `gm` | `grad`; and `grad2`, `grad3`, `grad4`, `grad_less1` |
@@ -311,6 +314,12 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   so they patch `fill_spare`, and the tail starts at row 1, as no end is 0.
   A byte above a column's end costs 9 cycles, one below 5, and a column 134
   more: 32.6k cycles a frame over walkref's frames.
+- **The unplot holds its 0 in A.** Its row moves (`UNPLOT_MOVE`) step Y and
+  the cursor without `mode5_down` or `mode5_up`, so A keeps the 0 it stores
+  while X holds a shallow run's fraction. Each kind of record has its
+  routine, which reads the record itself (X its number). The C asserts T's
+  screen is clear after; the checks find its junk rows clear too. It costs
+  5.7k cycles a frame over the sweep's frames, 4.5k of it shallow runs.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has
@@ -358,8 +367,7 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   5. ~~The walk: `walk`, `process_edge`, `enter`, `descend`, the kept
      lines.~~ Done.
 - The records stay as the C has them for now.
-- Then `update_camera`'s turn keys, the fill and the unplot. That's the
-  first demo.
+- Then `update_camera`'s turn keys. That's the first demo.
 - Later: sprites, then moving, collision and `pt_vcache_locate`.
 - To revisit, if the cycles are wanted: a `side_v1` map table, each side's
   end vertex (`pt_map_side_v1`), written by `portalc_mapasm`. `side_end`

@@ -1,14 +1,161 @@
-\\ unplot.6502 - clearing the last frame's lines out of T.
+\\ unplot.6502 - clearing the last frame's lines out of T (render.c's unplot, plot.c's unplotters):
+\\ each recorded run stepped again, every byte it toggled zeroed whole, both scanlines.
 
-\\ Clear every run the last frame recorded, so T's all zero again. A stub for now.
+\\ Clear every run the last frame recorded, then row 0 whole, which the clips' flat runs off the
+\\ top toggle unrecorded (unplot). Their other unrecorded toggles are on a bound's row, a run's.
 \\
 \\ Inputs:
-\\     the records: the last frame's runs
+\\     num_recs and the records: the last frame's runs
+\\     T: the last frame's lines
 \\
 \\ Outputs:
-\\     T: all 0
+\\     T: all 0, its junk rows too
+\\     A, X, Y: corrupted
 
 .unplot
 {
+    ZA_AUTO1 record                     ; local: the record
+
+    LDX num_recs:BEQ top
+.each
+    DEX:STX record
+    LDA rec_gradhi,X:AND #&7F:BNE steep ; a row a column or more
+    LDA rec_gradlo,X:BEQ flat
+    JSR unplot_shallow
+    JMP next
+.steep
+    JSR unplot_steep
+    JMP next
+.flat
+    JSR unplot_flat
+.next
+    LDX record:BNE each
+
+    \\ row 0, whole: both its scanlines in each byte column, four columns a time round
+
+.top
+    CLC
+.row0
+    LDA #0
+    FOR column = 0..3
+        STA T_ORG+column*8,X:STA T_ORG+column*8+1,X
+    NEXT
+    TXA:ADC #32:TAX                     ; four columns on: 0 past the last
+    BNE row0                            ; (C clear till then)
     RTS
+}
+
+\\ A flat run's bytes zeroed along its row (pt_unplot_shallow's flat): Y the offset in the row's
+\\ page, as plot_flat has it.
+\\
+\\ Inputs:
+\\     X: the record
+\\
+\\ Outputs:
+\\     T: the run's bytes zeroed
+\\     cursor: its row's page
+\\     A, X, Y: corrupted
+
+.unplot_flat
+{
+    ZA_AUTO1 scanline                   ; local: the row's even scanline in its blocks
+    ZA_AUTO1 last                       ; local: the last byte's odd scanline's offset in the page
+
+    LDY rec_yhi,X
+    LDA trowhi,Y:STA cursor+1
+    LDA #0:STA cursor
+    TYA:AND #3:ASL A:STA scanline       ; (row AND 3) * 2, and C clear
+    LDA rec_x1,X:SBC #0                 ; the last column
+    AND #&FC:ASL A:ORA scanline
+    ORA #1:STA last
+    LDA rec_x0,X:AND #&FC:ASL A:ORA scanline:TAY
+.byte
+    LDA #0
+    UNPLOT_ROW
+    CPY last:BEQ done
+    TYA:ADC #7:TAY                      ; (C clear: under the last) the next byte's even scanline
+    BNE byte                            ; (always)
+    ZA_UNREACHABLE
+.done
+    RTS
+}
+
+\\ A shallow run (pt_unplot_shallow), under a row a column, not flat: falling or rising.
+\\
+\\ Inputs:
+\\     X: the record
+\\
+\\ Outputs:
+\\     T: the run's bytes zeroed
+\\     cursor: corrupted
+\\     A, X, Y: corrupted
+
+.unplot_shallow
+{
+    ZA_AUTO1 grad                       ; local: the gradient, under 256
+    ZA_AUTO1 grad3                      ; local: 3 grad's low byte
+    ZA_AUTO1 rows3                      ; local: and its high byte, 0 to 2
+    ZA_AUTO1 fraction                   ; local: the row's fraction at x0
+    ZA_AUTO1 x0                         ; local: the run's columns
+    ZA_AUTO1 x1
+    ZA_AUTO1 bytes                      ; local: its whole bytes
+    ZA_AUTO1 sign                       ; local: bit 7 set if it's rising
+
+    LDA rec_gradhi,X:STA sign
+    LDA rec_ylo,X:STA fraction
+    LDA rec_gradlo,X:STA grad
+    ASL A:STA grad3
+    LDA #0:ROL A:STA rows3              ; 2 grad, and C clear
+    LDA grad3:ADC grad:STA grad3
+    LDA rows3:ADC #0:STA rows3          ; 3 grad
+    LDA rec_x1,X:STA x1
+    LSR A:LSR A:STA bytes
+    LDA rec_x0,X:STA x0
+    CLC:ADC #3:LSR A:LSR A              ; the first byte that starts in the run
+    EOR #&FF:SEC:ADC bytes:STA bytes    ; x1 DIV 4 less it
+    LDA rec_yhi,X:TAX
+    LDA x0:MODE5_AT                     ; (C clear)
+    BIT sign:BPL falling
+    JMP rising
+.falling
+    UNPLOT_SHALLOW TRUE, grad, grad3, rows3, fraction, x0, x1, bytes
+.rising
+    UNPLOT_SHALLOW FALSE, grad, grad3, rows3, fraction, x0, x1, bytes
+}
+
+\\ A steep run (pt_unplot_steep), a row a column or more: falling or rising.
+\\
+\\ Inputs:
+\\     X: the record
+\\
+\\ Outputs:
+\\     T: the run's bytes zeroed
+\\     cursor: corrupted
+\\     A, X, Y: corrupted
+
+.unplot_steep
+{
+    ZA_AUTO1 grad_whole                 ; local: the gradient's whole rows a column
+    ZA_AUTO1 grad_fraction              ; local: and its fraction
+    ZA_AUTO1 fraction                   ; local: the row's fraction
+    ZA_AUTO1 count                      ; local: the columns to go
+    ZA_AUTO1 pixels                     ; local: and to go in the byte
+    ZA_AUTO1 sign                       ; local: bit 7 set if it's rising
+
+    LDA rec_gradlo,X:STA grad_fraction
+    LDA rec_gradhi,X:STA sign
+    AND #&7F:STA grad_whole
+    LDA rec_ylo,X:STA fraction
+    LDA rec_x1,X:SEC:SBC rec_x0,X:STA count
+    LDA rec_x0,X:AND #3:EOR #&FF
+    SEC:ADC #4:STA pixels               ; 4 less x0's pixel in its byte
+    LDA rec_x0,X:PHA
+    LDA rec_yhi,X:TAX
+    PLA:MODE5_AT                        ; (C clear)
+    BIT sign:BPL falling
+    JMP rising
+.falling
+    UNPLOT_STEEP TRUE, grad_whole, grad_fraction, fraction, count, pixels
+.rising
+    UNPLOT_STEEP FALSE, grad_whole, grad_fraction, fraction, count, pixels
 }

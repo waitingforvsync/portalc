@@ -164,16 +164,19 @@ def hex_sums(hexes):
 
 
 def plot_expected(c):
-    """The plotters' sums: by gradient, each run's count, record (the first) and toggle_end,
-    then T after them; and T after each four start columns' flat runs."""
+    """The plotters' sums: by gradient, each run's count, record (the last) and toggle_end,
+    then T after them, and after the unplot; and T after each four start columns' flat runs."""
     runs1, runs2 = hex_sums(g['runs'] for g in c['runs'])
     plot1, plot2 = hex_sums(g['t'] for g in c['runs'])
+    unplot1, unplot2 = hex_sums(g['unplot'] for g in c['runs'])
     flat1, flat2 = hex_sums(c['flat'])
     return [
         ('plot_run s1', 't_runs1', 0, 0, runs1),
         ('plot_run s2', 't_runs2', 0, 0, runs2),
         ('plot_run T s1', 't_plot1', 0, 0, plot1),
         ('plot_run T s2', 't_plot2', 0, 0, plot2),
+        ('unplot T s1', 't_unplot1', 0, 0, unplot1),
+        ('unplot T s2', 't_unplot2', 0, 0, unplot2),
         ('plot_flat s1', 't_flat1', 0, 0, flat1),
         ('plot_flat s2', 't_flat2', 0, 0, flat2),
     ]
@@ -194,12 +197,15 @@ def clip_expected(c):
 
 def walk_expected(c):
     """The walk's sums, by the camera's place: each frame's counts, records, toggle_end and visits,
-    and T after the place's frames."""
+    T after the first frame's unplot, and T after the place's other frames."""
     answers1, answers2 = hex_sums(p['answers'] for p in c['places'])
+    clear1, clear2 = hex_sums(p['clear'] for p in c['places'])
     t1, t2 = hex_sums(p['t'] for p in c['places'])
     return [
         ('walk s1', 't_answers1', 0, 0, answers1),
         ('walk s2', 't_answers2', 0, 0, answers2),
+        ('unplot T s1', 't_clear1', 0, 0, clear1),
+        ('unplot T s2', 't_clear2', 0, 0, clear2),
         ('walk T s1', 't_t1', 0, 0, t1),
         ('walk T s2', 't_t2', 0, 0, t2),
     ]

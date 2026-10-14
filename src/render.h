@@ -227,6 +227,10 @@ pt_walk pt_render_root(pt_render *r, uint8_t angle, uint8_t cell);
 // are left.
 void pt_render_capture(pt_render *r, uint8_t angle, uint8_t cell);
 
+// The last frame's runs cleared out of T from the records, then row 0
+// (unplot), for the tools' checks: T is all 0 after.
+void pt_render_unplot(pt_render *r);
+
 // A height z as an edge's lines see it from an eye at eye_z (height_of).
 pt_height pt_render_height(uint8_t z, uint8_t eye_z);
 

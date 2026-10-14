@@ -38,8 +38,10 @@ int main(void)
     pt_render_init(&r, &m, &vc);
 
     // whole captures from each place, at each angle: each frame's counts, records, toggle_end and
-    // visits, then T after the place's frames, the junk rows too
+    // visits; T after the first frame's unplot clears it; and T after the place's other frames,
+    // the junk rows too
     static place at[PT_MAX_PLACES];
+    static uint8_t cleared[sizeof r.tmem];
     unsigned n = places(&m, at);
     printf("{\n  \"places\": [");
     memset(r.tmem, 0, sizeof r.tmem);
@@ -62,7 +64,13 @@ int main(void)
                 uint8_t v[4] = {vs->cell, vs->side, vs->xr, vs->kept};
                 hex(v, sizeof v);
             }
+            if (a == 0) {
+                pt_render_unplot(&r);
+                memcpy(cleared, r.tmem, sizeof cleared);
+            }
         }
+        printf("\", \"clear\": \"");
+        hex(cleared, sizeof cleared);
         printf("\", \"t\": \"");
         hex(r.tmem, sizeof r.tmem);
         printf("\"}");

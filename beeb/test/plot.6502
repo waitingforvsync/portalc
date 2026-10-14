@@ -1,5 +1,6 @@
-\\ test/plot.6502 - make test's check of the plotters: made-up runs at gradients either side of
-\\ each way's limits, and flat runs, summed with T after them, for host/test_build.py.
+\\ test/plot.6502 - make test's check of the plotters and the unplot: made-up runs at gradients
+\\ either side of each way's limits, and flat runs, summed with T after them, and after the unplot,
+\\ for host/test_build.py.
 
 \\ The gradients' magnitudes, as plotref's: flat; shallow, either side of 64 (one carry a byte at
 \\ most, or the tree), 128 and 255; steep, either side of 256, on to the steepest. Each falling,
@@ -21,21 +22,24 @@ SECTION TestResults
 .t_runs2    SKIP GRADS                  ; and toggle_end
 .t_plot1    SKIP GRADS                  ; T's after them
 .t_plot2    SKIP GRADS
+.t_unplot1  SKIP GRADS                  ; T's after the unplot clears the runs
+.t_unplot2  SKIP GRADS
 .t_flat1    SKIP SCREEN_WIDTH/4         ; T's after each four start columns' flat runs
 .t_flat2    SKIP SCREEN_WIDTH/4
 ENDSECTION
 
 \\ At each gradient, made-up runs into an empty T: from each column in turn, a length from the
 \\ list cut to the screen and to a fall of 64 rows, a row and fraction made up then kept to the
-\\ screen, a colour made up but every 32nd none, and toggle_end made up. Then flat runs from every
-\\ column to every end, their rows and colours made up. Each made-up value is stepped on before
-\\ it's used, as plotref steps it.
+\\ screen, a colour made up but every 32nd none, and toggle_end made up; then the unplot clears them
+\\ from their records. Then flat runs from every column to every end, their rows and colours made
+\\ up. Each made-up value is stepped on before it's used, as plotref steps it.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
 \\     t_runs1, t_runs2, t_plot1, t_plot2: the runs' sums and T's, by gradient
+\\     t_unplot1, t_unplot2: T's after the unplot, by gradient
 \\     t_flat1, t_flat2: T's after each four start columns' flat runs
 
 .test_plot
@@ -62,7 +66,7 @@ ENDSECTION
     LDA #0:STA grad
 .gradient
     JSR clear_t
-    LDA #0:STA sum1:STA sum2:STA run
+    LDA #0:STA sum1:STA sum2:STA run:STA num_recs
     LDX grad
     LDA t_gradlo,X:STA line_grad
     LDA t_gradhi,X:STA line_grad+1
@@ -125,11 +129,11 @@ ENDSECTION
     TAY:AND #63:CLC:ADC #1:STA toggle_end,X
     TYA:CLC:ADC #5
     INX:CPX #SCREEN_WIDTH/4:BNE ends
-    LDA #0:STA num_recs
     JSR plot_run
     LDA num_recs:FLETCHER sum1, sum2
+    LDX num_recs:DEX
     FOR t = {rec_x0, rec_x1, rec_ylo, rec_yhi, rec_gradlo, rec_gradhi}
-        LDA t:FLETCHER sum1, sum2       ; the record, the first
+        LDA t,X:FLETCHER sum1, sum2     ; the record, the last
     NEXT
     LDX #0
 .sum_ends
@@ -146,6 +150,11 @@ ENDSECTION
     LDX grad
     LDA sum_t.sum1:STA t_plot1,X
     LDA sum_t.sum2:STA t_plot2,X
+    JSR unplot
+    JSR sum_t
+    LDX grad
+    LDA sum_t.sum1:STA t_unplot1,X
+    LDA sum_t.sum2:STA t_unplot2,X
     INC grad
     LDA grad:CMP #GRADS:BEQ flat
     JMP gradient

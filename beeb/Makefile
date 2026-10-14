@@ -9,7 +9,7 @@
 #   make test_arith      the arithmetic macros, in a program of their own
 #   make test_vcache     the vertex cache, likewise
 #   make test_capture    the capture, likewise
-#   make test_plot       the plotters, likewise
+#   make test_plot       the plotters and the unplot, likewise
 #   make test_clip       the clips, likewise
 #   make test_walk       the walk, the whole capture, likewise; and test_walk3
 #                        over the stress scene, its depth capped at 3

@@ -2,7 +2,7 @@ add_subdirectory(richc)
 
 # ---- portal engine library (pure C, links only richc core) ----
 
-add_library(portal STATIC
+set(PORTAL_SOURCES
     arith.c
     camera.c
     map.c
@@ -23,15 +23,19 @@ add_library(portal STATIC
     vcache.h
 )
 
-target_link_libraries(portal PUBLIC richc)
-target_include_directories(portal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
-if(MSVC)
-    target_compile_options(portal PRIVATE /W3)
-else()
-    # -Wconversion: every narrowing written out, in the type the 6502 holds
-    target_compile_options(portal PRIVATE -Wall -Wextra -Wconversion)
-endif()
+# portal_depth3 is the same with the walk's depth capped at 3, for the walk's check (walk3ref)
+foreach(lib portal portal_depth3)
+    add_library(${lib} STATIC ${PORTAL_SOURCES})
+    target_link_libraries(${lib} PUBLIC richc)
+    target_include_directories(${lib} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    if(MSVC)
+        target_compile_options(${lib} PRIVATE /W3)
+    else()
+        # -Wconversion: every narrowing written out, in the type the 6502 holds
+        target_compile_options(${lib} PRIVATE -Wall -Wextra -Wconversion)
+    endif()
+endforeach()
+target_compile_definitions(portal_depth3 PUBLIC PT_MAX_DEPTH=3)
 
 # ---- windowed app ----
 
@@ -52,7 +56,8 @@ endif()
 # ---- verification tools: byte-exact sweep dumps, the map dump, and the
 # comparison against a floating-point ray cast ----
 
-foreach(tool sweep fb2ppm mapdump refcmp tables mapasm arithref vcacheref captureref plotref clipref)
+foreach(tool sweep fb2ppm mapdump refcmp tables mapasm arithref vcacheref captureref plotref clipref
+             walkref)
     add_executable(portalc_${tool} tools/${tool}.c)
     target_link_libraries(portalc_${tool} PRIVATE portal)
     if(NOT MSVC)
@@ -61,6 +66,12 @@ foreach(tool sweep fb2ppm mapdump refcmp tables mapasm arithref vcacheref captur
 endforeach()
 if(NOT MSVC)
     target_link_libraries(portalc_refcmp PRIVATE m)
+endif()
+add_executable(portalc_walk3ref tools/walkref.c)
+target_link_libraries(portalc_walk3ref PRIVATE portal_depth3)
+target_compile_definitions(portalc_walk3ref PRIVATE WALK_STRESS)
+if(NOT MSVC)
+    target_compile_options(portalc_walk3ref PRIVATE -Wall -Wextra)
 endif()
 
 # ---- tests ----

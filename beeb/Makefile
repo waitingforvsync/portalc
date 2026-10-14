@@ -10,9 +10,12 @@
 #   make test_vcache     the vertex cache, likewise
 #   make test_capture    the capture, likewise
 #   make test_plot       the plotters, likewise
-#   make test_clip       the clips, likewise: test/CHECK_portal.6502, built
-#                        with -D TEST=TRUE
-#   make map      remake src/mapdata.6502 from the C's demo scene
+#   make test_clip       the clips, likewise
+#   make test_walk       the walk, the whole capture, likewise; and test_walk3
+#                        over the stress scene, its depth capped at 3: each
+#                        test/CHECK_portal.6502, built with -D TEST=TRUE
+#   make map      remake src/mapdata.6502 from the C's demo scene, and
+#                 test/stressdata.6502 from its stress scene
 #   make clean
 #
 # A running b2 is driven through its HTTP API on port 48075: reset into the
@@ -30,7 +33,7 @@ B2_WIN = b2
 
 SRC = boot.6502 portal.6502
 DEPS = $(SRC) $(wildcard src/*.6502) $(wildcard test/*.6502)
-CHECKS = arith vcache capture plot clip
+CHECKS = arith vcache capture plot clip walk walk3
 
 all: $(BUILD)/portal.ssd
 
@@ -71,6 +74,7 @@ $(CHECKS:%=test_%): test_%: $(BUILD)/test_%.ssd
 map:
 	cmake --build $(CBUILD) --target portalc_mapasm
 	$(CBUILD)/src/portalc_mapasm > src/mapdata.6502
+	$(CBUILD)/src/portalc_mapasm --stress > test/stressdata.6502
 
 clean:
 	rm -rf $(BUILD)

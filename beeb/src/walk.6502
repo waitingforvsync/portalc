@@ -1,0 +1,503 @@
+\\ walk.6502 - the walk (render.c's walk, process_edge, enter): a visit's sides in turn, each one's
+\\ lines clipped against the bounds, and the children through its portals walked. And the capture.
+
+\\ How many more walks may nest: one less a level down, the cut-off below 0.
+
+ZA_AUTO1 walk_levels                    ; MAX_DEPTH - 1 at the root, at depth 1
+
+\\ Sides' lines kept for a cell's later visit, which resumes on the side (render.c's pt_kept): by
+\\ the visit's entry * 4 + the line's slot, entry 0 unused.
+
+KEPT_CEILING = 0                        ; the slots: the line at the cell's ceiling,
+KEPT_CEILING_ADJACENT = 1               ; at the cell across's,
+KEPT_FLOOR = 2                          ; at the cell's floor,
+KEPT_FLOOR_ADJACENT = 3                 ; and at the cell across's
+ASSERT KEPT_CEILING == 0 AND KEPT_FLOOR != 0, "the walk: process_edge branches on the slots"
+
+SECTION Capture
+    FITPAGE MAX_KEPT*4
+.kept_x0    SKIP MAX_KEPT*4             ; line_x0 to line_endy, as make_line made them
+    FITPAGE MAX_KEPT*4
+.kept_x1    SKIP MAX_KEPT*4
+    FITPAGE MAX_KEPT*4
+.kept_ylo   SKIP MAX_KEPT*4
+    FITPAGE MAX_KEPT*4
+.kept_yhi   SKIP MAX_KEPT*4
+    FITPAGE MAX_KEPT*4
+.kept_gradlo SKIP MAX_KEPT*4
+    FITPAGE MAX_KEPT*4
+.kept_gradhi SKIP MAX_KEPT*4
+    FITPAGE MAX_KEPT*4
+.kept_endy  SKIP MAX_KEPT*4
+ENDSECTION
+
+\\ Capture the frame (pt_render_capture): its setup and root walk, the walk into T, and the visit
+\\ cache emptied.
+\\
+\\ Inputs:
+\\     camx, camy, camangle, camcell: the camera
+\\
+\\ Outputs:
+\\     T: the frame's lines
+\\     num_recs and the records: what the unplot clears
+\\     toggle_end: where the fill can stop
+\\     A, X, Y: corrupted
+
+.capture
+{
+    JSR capture_root
+    LDA #MAX_DEPTH-1:STA walk_levels
+    JSR walk
+    JMP forget_visits
+}
+
+\\ Walk the walk's visit (walk): each side from its own, until one ends at or past the portal's
+\\ right column. A child through an earlier side is walked recursively; the last's, in its place.
+\\
+\\ Inputs:
+\\     walk_vi and the walk: begun on its side
+\\     walk_levels: how many more walks may nest
+\\     bound_top, bound_bottom: its bounds, where its extents don't say they're the screen's edges
+\\
+\\ Outputs:
+\\     T, the records, toggle_end: its lines, and its children's
+\\     the visits, the kept lines, bound_top, bound_bottom: as its sides left them
+\\     A, X, Y: corrupted
+
+.walk
+{
+.side
+    LDX walk_vi
+    LDA walk_c1:CMP visit_xr,X:BCS last ; the side ends at or past the portal's right column
+    JSR process_edge
+    BCC next                            ; no child through it
+
+    \\ a child through the side: walked, only its parent's visit and extents saved round it, or
+    \\ past the cap its columns closed. Then the parent's next side, begun afresh as a later visit's
+    \\ would be, the window the visit's and the span's start the side's
+
+    LDA walk_vi:PHA
+    LDA walk_tmax:PHA
+    LDA walk_bmin:PHA
+    JSR enter
+    DEC walk_levels:BMI cut
+    JSR walk
+.resume
+    INC walk_levels
+    PLA:STA walk_bmin
+    PLA:STA walk_tmax
+    PLA:STA walk_vi:TAX
+    LDA visit_split_anglelo,X:STA walk_split_angle
+    LDA visit_split_anglehi,X:STA walk_split_angle+1
+    LDA #0:STA visit_kept,X             ; (side_next's: any lines kept were the side's)
+    LDY visit_side,X
+    LDA visit_cell,X:TAX
+    RING_NEXT
+    LDX walk_vi
+    TYA:STA visit_side,X
+    JSR side_start
+    LDA walk_c0:STA walk_x              ; (the child's walk left its own)
+    JMP side
+
+    \\ past the cap (descend's cut-off): the child's whole stack telescoped to its ceiling EOR floor
+    \\ on its bottom rows, so the opening shows a flat colour
+
+.cut
+    LDX walk_vi:LDY visit_cell,X
+    LDX cell_ceil,Y
+    LDA cell_floor,Y:TAY
+    PATTERN_XY
+    LDA walk_bmin
+    JSR close_columns
+    JMP resume
+
+.next
+    JSR side_next
+    JMP side
+
+    \\ the last side: a child through it is walked in this walk's place (a tail call)
+
+.last
+    JSR process_edge
+    BCC done
+    JSR enter
+    JMP side
+.done
+    RTS
+}
+
+\\ The walk's side (process_edge): its span of the portal and its lines, and the child through it if
+\\ there is one, for the walk to enter. A soft edge has no lines, and the child the parent's bounds.
+\\
+\\ Inputs:
+\\     walk_vi and the walk: on the side
+\\     bound_top, bound_bottom: its bounds, where its extents don't say they're the screen's edges
+\\
+\\ Outputs:
+\\     C: set if there's a child to enter
+\\     X: its visit
+\\     enter.tmax, enter.bmin: its bounds' extents
+\\     span_x0, span_x1: its columns
+\\     walk_x: on to the span's end
+\\     bound_top, bound_bottom: the child's bounds over the span
+\\     T, the records, toggle_end: the side's lines
+\\     the visits, the kept lines: as the side made them
+\\     A, Y: corrupted
+
+.process_edge
+{
+    ZA_AUTO1 wall                       ; local: the shades: the side's wall's
+    ZA_AUTO1 ceiling                    ; local: this cell's ceiling's
+    ZA_AUTO1 floor                      ; local: and floor's
+
+    \\ the span: from where the walk's last span ended to the side's end, within the portal. The
+    \\ side never starts right of it (render.c's process_edge says why)
+
+    LDX walk_vi
+    LDA walk_x:STA span_x0
+    LDA walk_c1:CMP visit_xr,X:BCC end
+    LDA visit_xr,X
+.end
+    STA span_x1
+    CMP span_x0:BCC none                ; nothing of it in the portal
+    BNE some
+.none
+    CLC
+    RTS
+.some
+    STA walk_x
+
+    \\ a soft edge: no lines, and the child keeps both bounds
+
+    LDY visit_side,X
+    LDX side_edge,Y
+    LDA edge_colour,X:BNE hard
+    LDA walk_tmax:STA enter.tmax
+    LDA walk_bmin:STA enter.bmin
+    LDX side_adj,Y
+    JSR visit_of
+    SEC
+    RTS
+
+    \\ the side's lines: the last visit's, to use, or, where the side runs on past the portal and
+    \\ the pool has room, kept as they're made for the next
+
+.hard
+    TAX:DEX:STX wall                    ; the colour's shade, 0 being soft
+    LDX walk_vi
+    LDY visit_cell,X
+    LDA cell_ceil,Y:STA ceiling
+    LDA cell_floor,Y:STA floor
+    LDA #0:STA edge_line.ends
+    LDA visit_kept,X:BEQ fresh
+    ASL A:ASL A:STA edge_line.kept
+    LDA #&80:STA edge_line.use
+    BNE lines                           ; (always)
+    ZA_UNREACHABLE
+.fresh
+    STA edge_line.use
+    STA edge_line.kept                  ; none
+    LDA visit_xr,X:CMP walk_c1:BCS lines ; the side ends within the portal
+    LDA num_kept:CMP #MAX_KEPT:BCS lines ; the pool's full
+    STA visit_kept,X
+    INC num_kept
+    ASL A:ASL A:STA edge_line.kept
+.lines
+    LDY visit_side,X
+    LDA side_adj,Y:BNE portal
+
+    \\ a solid wall: its ceiling line and floor line, toggles only
+
+    LDX ceiling:LDY wall
+    PATTERN_XY
+    LDY walk_vi
+    LDX visit_hclo,Y:LDA visit_hchi,Y
+    LDY #KEPT_CEILING
+    JSR edge_line
+    JSR clip_plain
+    LDX floor:LDY wall
+    PATTERN_XY
+    LDY walk_vi
+    LDX visit_hflo,Y:LDA visit_hfhi,Y
+    LDY #KEPT_FLOOR
+    JSR edge_line
+    JSR clip_plain
+    CLC
+    RTS
+
+    \\ a portal: the cell across, its visit and shades, and how its ceiling and floor step from this
+    \\ cell's
+
+    ZA_AUTO1 child                      ; local: the cell across's visit
+    ZA_AUTO1 ceiling_across             ; local: its shades
+    ZA_AUTO1 floor_across
+    ZA_AUTO1 ceiling_step               ; local: bit 7 set if its ceiling's lower, bit 6 if level
+    ZA_AUTO1 floor_step                 ; local: bit 7 set if its floor's higher, bit 6 if level
+
+.portal
+    TAY
+    LDA cell_ceil,Y:STA ceiling_across
+    LDA cell_floor,Y:STA floor_across
+    TYA:TAX
+    JSR visit_of
+    STX child
+    LDX walk_vi
+    LDY visit_side,X
+    LDA visit_cell,X:TAX                ; this cell
+    LDA side_adj,Y:TAY                  ; the cell across
+    LDA cell_ceilz,Y:CMP cell_ceilz,X
+    BNE ceiling_steps
+    LDA #&40                            ; level
+    BNE ceiling_stepped                 ; (always)
+    ZA_UNREACHABLE
+.ceiling_steps
+    LDA #0:ROR A                        ; C set: lower
+.ceiling_stepped
+    STA ceiling_step
+    LDA cell_floorz,X:CMP cell_floorz,Y
+    BNE floor_steps
+    LDA #&40
+    BNE floor_stepped                   ; (always)
+    ZA_UNREACHABLE
+.floor_steps
+    LDA #0:ROR A                        ; C set: higher
+.floor_stepped
+    STA floor_step
+
+    \\ the lines forming no bound go first, against the bounds intact: the ceiling's where the
+    \\ ceiling across is lower, or level, as a change of colour, if it is one; likewise the floor's
+
+    BIT ceiling_step:BMI ceiling_wall
+    BVC ceiling_plain_done
+    LDX ceiling:LDY ceiling_across
+    PATTERN_XY
+    LDA pattern_even:ORA pattern_odd:BNE ceiling_plain
+    BEQ ceiling_plain_done              ; (always)
+    ZA_UNREACHABLE
+.ceiling_wall
+    LDX ceiling:LDY wall
+    PATTERN_XY
+.ceiling_plain
+    LDY walk_vi
+    LDX visit_hclo,Y:LDA visit_hchi,Y
+    LDY #KEPT_CEILING
+    JSR edge_line
+    JSR clip_plain
+.ceiling_plain_done
+    BIT floor_step:BMI floor_wall
+    BVC floor_plain_done
+    LDX floor:LDY floor_across
+    PATTERN_XY
+    LDA pattern_even:ORA pattern_odd:BNE floor_plain
+    BEQ floor_plain_done                ; (always)
+    ZA_UNREACHABLE
+.floor_wall
+    LDX floor:LDY wall
+    PATTERN_XY
+.floor_plain
+    LDY walk_vi
+    LDX visit_hflo,Y:LDA visit_hfhi,Y
+    LDY #KEPT_FLOOR
+    JSR edge_line
+    JSR clip_plain
+.floor_plain_done
+
+    \\ the floor line builds the child's bottom against the parent's bounds: the cell across's,
+    \\ where its floor's higher, or else this cell's, the change of colour. Level, there's no line,
+    \\ and the child keeps the parent's bottom
+
+    BIT floor_step:BVS floor_level
+    BMI floor_across_line
+    LDX floor:LDY floor_across
+    PATTERN_XY
+    LDY walk_vi
+    LDX visit_hflo,Y:LDA visit_hfhi,Y
+    LDY #KEPT_FLOOR
+    BNE floor_line                      ; (always)
+    ZA_UNREACHABLE
+.floor_across_line
+    LDX floor_across:LDY wall
+    PATTERN_XY
+    LDY child
+    LDX visit_hflo,Y:LDA visit_hfhi,Y
+    LDY #KEPT_FLOOR_ADJACENT
+.floor_line
+    JSR edge_line
+    JSR clip_floor
+    STA enter.bmin
+    JMP ceiling_bound
+.floor_level
+    LDA walk_bmin:STA enter.bmin
+
+    \\ then the ceiling line the child's top, against the parent's top and the child's bottom:
+    \\ likewise, the cell across's where its ceiling's lower
+
+.ceiling_bound
+    BIT ceiling_step:BVS ceiling_level
+    BMI ceiling_across_line
+    LDX ceiling:LDY ceiling_across
+    PATTERN_XY
+    LDY walk_vi
+    LDX visit_hclo,Y:LDA visit_hchi,Y
+    LDY #KEPT_CEILING
+    BEQ ceiling_line                    ; (always: slot 0)
+    ZA_UNREACHABLE
+.ceiling_across_line
+    LDX wall:LDY ceiling_across
+    PATTERN_XY
+    LDY child
+    LDX visit_hclo,Y:LDA visit_hchi,Y
+    LDY #KEPT_CEILING_ADJACENT
+.ceiling_line
+    JSR edge_line
+    LDA enter.bmin
+    JSR clip_ceil
+    STA enter.tmax
+    BIT clip_ceil.room:BMI entered
+    BPL closed                          ; (always)
+    ZA_UNREACHABLE
+.ceiling_level
+    LDA walk_tmax:STA enter.tmax
+    BIT floor_step:BVS entered          ; both level: the parent's room
+    BIT clip_floor.room:BMI entered
+
+    \\ no room anywhere: the child isn't walked, its stack telescoped to its ceiling EOR floor on
+    \\ its bottom rows, as its walk's toggles would be
+
+.closed
+    LDX ceiling_across:LDY floor_across
+    PATTERN_XY
+    LDA enter.bmin
+    JSR close_columns
+    CLC
+    RTS
+.entered
+    LDX child
+    SEC
+    RTS
+}
+
+\\ Enter the child (enter): its walk in the walk's place over the span. A first visit makes its
+\\ window and begins after the twin; a later one resumes on its side. Then on past the span's start.
+\\
+\\ Inputs:
+\\     X: the child's visit
+\\     tmax, bmin: its bounds' extents
+\\     span_x0, span_x1: its columns, the portal's
+\\     walk_vi, walk_u0, walk_u1: the parent's walk, on the portal
+\\
+\\ Outputs:
+\\     walk_vi and the walk: the child's, on its first side ending right of span_x0
+\\     visit_side, visit_xr, visit_split_anglelo, visit_split_anglehi: the child's visit's
+\\     A, X, Y: corrupted
+
+.enter
+{
+    ZA_AUTO1 tmax                       ; in: the child's bounds' extents
+    ZA_AUTO1 bmin
+    ZA_AUTO1 middle                     ; local: the portal's middle's low byte
+
+    LDA visit_xr,X:BNE begin            ; walked before: its window and side kept
+
+    \\ a first visit: its window split half a turn on from the portal's middle, which holds the cell
+    \\ in one piece, and its side the one after the twin, the side the walk comes in by
+
+    CLC
+    LDA walk_u0:ADC walk_u1:STA middle
+    LDA walk_u0+1:ADC walk_u1+1
+    CMP #&80:ROR A                      ; halved, signed
+    ROR middle
+    CLC:ADC #2                          ; + 512
+    STA visit_split_anglehi,X
+    LDA middle:STA visit_split_anglelo,X
+    LDY walk_vi
+    LDA visit_side,Y:TAY
+    LDA side_twin,Y:TAY
+    STX walk_vi
+    LDA visit_cell,X:TAX
+    RING_NEXT
+    LDX walk_vi
+    TYA:STA visit_side,X
+
+    \\ its walk, from the span's start between its bounds, on its side's start; then on to the first
+    \\ side ending right of the span's start
+
+.begin
+    STX walk_vi
+    LDA span_x0:STA walk_x
+    LDA tmax:STA walk_tmax
+    LDA bmin:STA walk_bmin
+    LDA visit_split_anglelo,X:STA walk_split_angle
+    LDA visit_split_anglehi,X:STA walk_split_angle+1
+    LDY visit_side,X
+    JSR side_start
+.step
+    LDA span_x0:CMP walk_c1:BCC stepped
+    JSR side_next
+    JMP step
+.stepped
+    LDX walk_vi
+    LDA span_x1:STA visit_xr,X
+    RTS
+}
+
+\\ The side's line at a height (edge_line): the one kept in its slot, or made from the side's ends,
+\\ worked out once for all its lines, and kept in its slot if the side's to be.
+\\
+\\ Inputs:
+\\     X, A: the height, as the visits hold it: the log's low byte, then its high, below in bit 7
+\\     Y: the line's slot
+\\     kept: the side's slots in the pool, entry * 4: 0 for none
+\\     use: bit 7 set to use them, as the last visit kept them
+\\     ends: bit 7 set once the side's ends are worked out
+\\     walk_vi and the walk: on the side
+\\
+\\ Outputs:
+\\     line_x0 to line_below: the line
+\\     ends: bit 7 set if they were worked out
+\\     the kept lines: the line, if the side's kept
+\\     A, X, Y: corrupted
+
+.edge_line
+{
+    ZA_AUTO1 kept                       ; in: the side's slots in the pool
+    ZA_AUTO1 use                        ; in: bit 7 set to use them
+    ZA_AUTO1 ends                       ; in/out: bit 7 set once the side's ends are worked out
+    ZA_AUTO1 slot                       ; local: the line's slot
+    ZA_AUTO2 height                     ; local: the height, over edge_ends
+
+    BIT use:BPL make
+    AND #&80:STA line_below
+    TYA:ORA kept:TAY
+    LDA kept_x0,Y:STA line_x0
+    LDA kept_x1,Y:STA line_x1
+    LDA kept_ylo,Y:STA line_y
+    LDA kept_yhi,Y:STA line_y+1
+    LDA kept_gradlo,Y:STA line_grad
+    LDA kept_gradhi,Y:STA line_grad+1
+    LDA kept_endy,Y:STA line_endy
+    RTS
+
+    \\ made: the side's ends first, if they're not worked out yet
+
+.make
+    STY slot
+    BIT ends:BMI ready
+    STX height:STA height+1
+    JSR edge_ends
+    LDA #&80:STA ends
+    LDX height:LDA height+1
+.ready
+    JSR make_line
+    LDA kept:BEQ done
+    ORA slot:TAY
+    LDA line_x0:STA kept_x0,Y
+    LDA line_x1:STA kept_x1,Y
+    LDA line_y:STA kept_ylo,Y
+    LDA line_y+1:STA kept_yhi,Y
+    LDA line_grad:STA kept_gradlo,Y
+    LDA line_grad+1:STA kept_gradhi,Y
+    LDA line_endy:STA kept_endy,Y
+.done
+    RTS
+}

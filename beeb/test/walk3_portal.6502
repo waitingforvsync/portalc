@@ -1,0 +1,6 @@
+\\ test/walk3_portal.6502 - make test_walk3's PORTAL: the walk's check over the C's stress scene,
+\\ the walk's depth capped at 3, so the cut-off runs, and so do children with no room.
+
+depth_cap = 3
+stress_scene = TRUE
+INCLUDE "walk_portal.6502"

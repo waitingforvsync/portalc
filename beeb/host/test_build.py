@@ -9,8 +9,8 @@ import time
 import b2
 from test_tables import symbols
 
-USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot or clip; its '
-         'build, its symbols, and the C\'s answers)')
+USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot, clip, walk '
+         'or walk3; its build, its symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -103,11 +103,11 @@ def capture_expected(c):
         bs = []
         for a in range(256):
             f = frames[p * 256 + a]
-            vi, x, tmax, bmin, wrap, u0, u1, c0, c1 = f[0:9]
+            vi, x, tmax, bmin, split_angle, u0, u1, c0, c1 = f[0:9]
             vcell, vside, vxr, vkept, hcb, hcl, hfb, hfl = f[9:17]
             u0 &= 0xFFFF
             u1 &= 0xFFFF
-            bs += [vi, x, tmax, bmin, wrap & 0xFF, wrap >> 8, u0 & 0xFF, u0 >> 8, u1 & 0xFF, u1 >> 8,
+            bs += [vi, x, tmax, bmin, split_angle & 0xFF, split_angle >> 8, u0 & 0xFF, u0 >> 8, u1 & 0xFF, u1 >> 8,
                    c0, c1]
             bs += [vcell, vside, vxr, vkept, hcl & 0xFF, (hcl >> 8) | (hcb << 7), hfl & 0xFF,
                    (hfl >> 8) | (hfb << 7)]
@@ -192,6 +192,19 @@ def clip_expected(c):
     ]
 
 
+def walk_expected(c):
+    """The walk's sums, by the camera's place: each frame's counts, records, toggle_end and visits,
+    and T after the place's frames."""
+    answers1, answers2 = hex_sums(p['answers'] for p in c['places'])
+    t1, t2 = hex_sums(p['t'] for p in c['places'])
+    return [
+        ('walk s1', 't_answers1', 0, 0, answers1),
+        ('walk s2', 't_answers2', 0, 0, answers2),
+        ('walk T s1', 't_t1', 0, 0, t1),
+        ('walk T s2', 't_t2', 0, 0, t2),
+    ]
+
+
 def arith_expected(c):
     """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
     answer's input, the answers)."""
@@ -230,7 +243,8 @@ def arith_expected(c):
 
 
 EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
-            'plot': plot_expected, 'clip': clip_expected}
+            'plot': plot_expected, 'clip': clip_expected, 'walk': walk_expected,
+            'walk3': walk_expected}
 
 
 def main():

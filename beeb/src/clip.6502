@@ -5,9 +5,8 @@
 \\ Where a visit's extent says one's the screen's edge all along, they don't hold it.
 
 SECTION Capture
-    FITPAGE SCREEN_WIDTH
+    ALIGN &100                          ; a page's start, and its middle, as WRITE_ROWS counts
 .bound_top  SKIP SCREEN_WIDTH
-    FITPAGE SCREEN_WIDTH
 .bound_bottom SKIP SCREEN_WIDTH
 ENDSECTION
 

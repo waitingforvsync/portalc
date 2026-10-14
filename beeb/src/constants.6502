@@ -5,6 +5,12 @@ SCREEN_HEIGHT = 64                      ; canvas rows, two scanlines each
 MAX_VERTS = 64                          ; the map's caps (map.h's PT_MAX_): size tables by these
 MAX_CELLS = 32
 MAX_VISITS = 31                         ; render.h's PT_MAX_VISITS: with entry 0, 8 tables a page
+IF DEFINED(depth_cap)                   ; a check's lower cap (test/walk3_portal.6502), so it's met
+    MAX_DEPTH = depth_cap
+ELSE
+    MAX_DEPTH = 16                      ; render.h's PT_MAX_DEPTH: portals nested along a sightline
+ENDIF
+MAX_KEPT = 8                            ; render.h's PT_MAX_KEPT: sides' lines kept, entry 0 null
 CAM_HEIGHT = 10                         ; the eye above its cell's floor, in z steps (render.h)
 MAX_VCACHE = 63                         ; vcache.h's PT_MAX_VCACHE: with entry 0, four tables a page
 MAX_RECS = 128                          ; render.h's PT_MAX_RECS: runs plotted in a frame

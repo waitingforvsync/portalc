@@ -1,0 +1,46 @@
+\\ test/walk_portal.6502 - make test_walk's PORTAL: the walk's check, with the whole capture, over
+\\ the demo scene; or, for test_walk3 (walk3_portal.6502), over the stress scene.
+
+INCLUDE "../src/memory.6502"
+INCLUDE "../src/constants.6502"
+INCLUDE "../src/macros.6502"
+INCLUDE "../src/arith_macros.6502"
+INCLUDE "../src/tables_macros.6502"
+INCLUDE "../src/map_macros.6502"
+INCLUDE "../src/vcache_macros.6502"
+INCLUDE "../src/capture_macros.6502"
+INCLUDE "../src/plot_macros.6502"
+INCLUDE "../src/clip_macros.6502"
+INCLUDE "../src/walk_macros.6502"
+INCLUDE "../src/entry_macros.6502"
+INCLUDE "test_macros.6502"
+
+check = test_walk
+
+SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
+.swramcode_image
+    SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
+        INCLUDE "../src/arith.6502"
+        INCLUDE "../src/map.6502"
+        INCLUDE "../src/vcache.6502"
+        INCLUDE "../src/camera.6502"
+        INCLUDE "../src/capture.6502"
+        INCLUDE "../src/plot.6502"
+        INCLUDE "../src/clip.6502"
+        INCLUDE "../src/walk.6502"
+        INCLUDE "test.6502"
+        INCLUDE "walk.6502"
+    ENDSECTION
+
+.maincode_image
+    SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
+        IF DEFINED(stress_scene)
+            INCLUDE "stressdata.6502"
+        ELSE
+            INCLUDE "../src/mapdata.6502"
+        ENDIF
+    ENDSECTION
+
+    INCLUDE "../src/entry.6502"
+    INCLUDE "../src/tables.6502"
+ENDSECTION

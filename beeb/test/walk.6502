@@ -1,0 +1,99 @@
+\\ test/walk.6502 - make test's check of the walk: whole captures from places in each cell, for
+\\ host/test_build.py.
+
+INCLUDE "places.6502"
+
+ANGLES = 32                             ; from each place: every 8th of the C's 256ths
+
+SECTION TestResults
+.t_answers1 SKIP PLACES                 ; each place's frames' answers' Fletcher sums
+.t_answers2 SKIP PLACES
+.t_t1       SKIP PLACES                 ; T's, after each place's frames
+.t_t2       SKIP PLACES
+ENDSECTION
+
+\\ From each place, at each angle, the whole capture: each frame's counts, records, toggle_end and
+\\ visits, summed by place, then T's sums after the place's frames.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_answers1, t_answers2: the frames' answers' sums, by place
+\\     t_t1, t_t2: T's, by place
+
+.test_walk
+{
+    ZA_AUTO1 place                      ; local: the camera's place
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    JSR map_init                        ; the vertex cache and visits empty
+    JSR clear_t
+    LDA #0:STA place
+.position
+    LDX place
+    LDA t_placecell,X:STA camcell
+    LDA t_placexlo,X:STA camx
+    LDA t_placexhi,X:STA camx+1
+    LDA t_placeylo,X:STA camy
+    LDA t_placeyhi,X:STA camy+1
+    JSR vcache_reset
+    LDA #0:STA camangle:STA camangle+1:STA sum1:STA sum2
+.angle
+    JSR capture
+
+    \\ the counts, the records, where each byte column's fill stops, and the visits
+
+    FOR v = {num_visits, num_kept, num_recs}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    LDX #0
+.records
+    CPX num_recs:BEQ recorded
+    FOR t = {rec_x0, rec_x1, rec_ylo, rec_yhi, rec_gradlo, rec_gradhi}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    INX
+    JMP records
+.recorded
+    LDX #0
+.ends
+    LDA toggle_end,X:FLETCHER sum1, sum2
+    INX
+    CPX #SCREEN_WIDTH/4
+    BNE ends
+    LDX #1
+.visits
+    CPX num_visits:BEQ visited
+    FOR t = {visit_cell, visit_side, visit_xr, visit_kept}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    INX
+    JMP visits
+.visited
+    CLC:LDA camangle:ADC #1024/ANGLES   ; on to the next angle
+    STA camangle
+    LDA camangle+1:ADC #0:AND #3:STA camangle+1
+    ORA camangle
+    BEQ angles                          ; round to 0: all of them
+    JMP angle
+
+    \\ the place's sums, and T's after its frames
+
+.angles
+    LDX place
+    LDA sum1:STA t_answers1,X
+    LDA sum2:STA t_answers2,X
+    JSR sum_t
+    LDX place
+    LDA sum_t.sum1:STA t_t1,X
+    LDA sum_t.sum2:STA t_t2,X
+    JSR clear_t
+    INC place
+    LDA place:CMP #PLACES
+    BEQ done
+    JMP position
+.done
+    RTS
+}

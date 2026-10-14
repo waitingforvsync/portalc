@@ -18,8 +18,10 @@
 #include "sprite.h"
 #include "vcache.h"
 
+#ifndef PT_MAX_DEPTH          // (a check lowers it, so the cut-off runs)
 #define PT_MAX_DEPTH 16      // portals nested along a line of sight (the walk's
                               // recursion, which keeps only a visit index)
+#endif
 #define PT_MAX_VISITS 31      // visits one frame may make, not necessarily a cell each
                               // (entry 0 is null, so 32 a table: on the Beeb, 8 tables a page)
 #define PT_CAM_HEIGHT 10      // eye height above the cell's floor, in 8-unit z steps
@@ -78,10 +80,10 @@ typedef struct pt_kept {
 // side the last one stopped on, and that side's lines are the same as last
 // time. So a walk that stops on a side running on past its portal keeps the
 // side's lines in the pool for the next, and the record points at them.
-// That's all it keeps besides the cell's heights: everything else a walk
-// needs it makes again on each visit (render.c's pt_walk). The portal's
-// bounds are the renderer's per-column rows, over its columns. The walk
-// recurses on the index alone.
+// That's all it keeps besides the cell's heights and its window, made at
+// the first visit: everything else a walk needs it makes again on each
+// visit (render.c's pt_walk). The portal's bounds are the renderer's
+// per-column rows, over its columns. The walk recurses on the index alone.
 typedef struct pt_visit {
     uint8_t cell;         // the cell visited: it clears the cell's index when
                           // the capture's done
@@ -92,6 +94,9 @@ typedef struct pt_visit {
     uint8_t inst;         // its sprite as seen this frame, 0 for none
     uint8_t kept;         // side k's lines in the pool, 0 for none
     pt_height hc, hf;     // the cell's ceiling and floor, as its lines see them
+    uint16_t split_angle; // its window (pt_walk's), made at the first visit:
+                          // any portal's gives its vertices the same screen
+                          // angles
 } pt_visit;
 
 // A sprite seen this frame: where it goes on the screen, its depth for the
@@ -181,8 +186,10 @@ void pt_render_frame(pt_render *r, uint16_t cam_x, uint16_t cam_y, uint8_t angle
 
 // A visit's walk: all it needs while it's in progress, and nothing a later
 // visit does. It's made each time a walk enters the cell, and the walk's
-// recursion keeps it while a child's walk runs (on the 6502, a slot per
-// depth). The visit record keeps only what's left for a later visit.
+// recursion keeps it while a child's walk runs (on the 6502, only vi, tmax
+// and bmin, on the stack: the window comes back from the visit, and the
+// side's end from its side). The visit record keeps what's left for a later
+// visit.
 typedef struct pt_walk {
     uint8_t vi;           // the visit
     uint8_t x;            // where the next edge's span starts: the end of the
@@ -191,7 +198,7 @@ typedef struct pt_walk {
                           // lowest top row, at most the highest bottom row.
                           // 0 and 64 say the bound is the screen's edge all
                           // along, and its rows aren't kept in top[] or bot[]
-    uint16_t wrap;        // the cell's window: screen angles at or past this,
+    uint16_t split_angle; // the cell's window: screen angles at or past this,
                           // 256..1024, are a turn less
     int16_t u0, u1;       // the current side's ends' screen angles (u1 a
                           // turn on, up to 1,535, for the eye's own cell's
@@ -200,10 +207,10 @@ typedef struct pt_walk {
 } pt_walk;
 
 // Where the camera cell's walk begins: the side that straddles the view's
-// left edge, and its window's split (pt_walk's wrap).
+// left edge, and its window's split (pt_walk's split_angle).
 typedef struct pt_root_side {
     uint8_t side;
-    uint16_t wrap;
+    uint16_t split_angle;
 } pt_root_side;
 
 // The root walk's side, for the eye in cell with the view's left edge at vl
@@ -214,6 +221,11 @@ pt_root_side pt_render_root_side(pt_vcache *vc, const pt_map *m, uint8_t cell, u
 // root visit made and the walk begun on it, for the tools' checks. The caller
 // empties the visit cache after, as a frame does.
 pt_walk pt_render_root(pt_render *r, uint8_t angle, uint8_t cell);
+
+// A frame's capture: its setup, the walk into T and the records, and the
+// visit cache emptied, for the tools' checks; the fill, sprites and unplot
+// are left.
+void pt_render_capture(pt_render *r, uint8_t angle, uint8_t cell);
 
 // A height z as an edge's lines see it from an eye at eye_z (height_of).
 pt_height pt_render_height(uint8_t z, uint8_t eye_z);

@@ -100,6 +100,11 @@ in `src/`, which models it. Read this before writing any.
   after a `BRK`'s message. It prunes the path that never happens, so Baron
   holds nothing live for it; without it the allocator packs worse.
 - `ZA_WIPE` straight after a loop that wipes zero page wholesale.
+- Recursion keeps nothing in zero page across the recursive call but a
+  running count (`walk_levels`, `DEC` before, `INC` after). What a level
+  wants back goes on the stack round the call, `LDA v:PHA` before and
+  `PLA:STA v` after, or is made again before it's read; Baron refuses
+  anything else held across, so it checks what's saved is enough.
 - `ZA_INDEXEDBY` on an indexed access whose index set is known.
 - `ZA_DISCARD` before a loop that rebuilds a multi-byte variable through
   indexed stores: an indexed store proves nothing.
@@ -214,7 +219,10 @@ The rest:
   `portalc_arithref`; `make test_vcache`, the vertex cache against
   `portalc_vcacheref`; `make test_capture`, the capture against
   `portalc_captureref`; `make test_plot`, the plotters against
-  `portalc_plotref`; `make test_clip`, the clips against `portalc_clipref`.
+  `portalc_plotref`; `make test_clip`, the clips against `portalc_clipref`;
+  `make test_walk`, whole captures against `portalc_walkref`, and
+  `make test_walk3`, over the stress scene with the depth capped at 3,
+  against `portalc_walk3ref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
@@ -235,6 +243,12 @@ The rest:
   the bounds' edges), and the rest from an LFSR stepped once a case, the
   same in the C and the 6502; then count in the C which paths the cases
   reach before trusting the check.
+- A path the demo scene never takes is checked over the C's stress scene
+  (`test/stressdata.6502`, which `make map` makes), and a cap it never
+  meets with the cap lowered: a variant of the check, as
+  `test/walk3_portal.6502` sets `depth_cap` and `stress_scene` and
+  includes `walk_portal.6502`. The source picks its default with
+  `IF DEFINED()`, binding another name (`MAX_DEPTH`), as Baron's guide says.
 - After breaking on purpose, restore and rebuild before measuring or
   replaying anything: a build left from the last break measures the break.
 - Sums are Fletcher's, mod 255 (`FLETCHER`, a carry out added back in).

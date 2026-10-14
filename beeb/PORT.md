@@ -64,22 +64,23 @@ ambitions.
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_render_root`, `frame`'s setup | `.capture`'s start (capture.6502) | done, sprites aside: `portalc_captureref`, from 146 places, each cell's centroid and near each of its corners |
-| `pt_render_root_side`, `root_screen_angle` | inline in `.capture` | done |
-| `root_walk` | inline in `.capture` | done, sprites aside (`inst_new`, `inst_clip`) |
+| `pt_render_capture` | `capture` (walk.6502): `capture_root`, `walk`, `forget_visits` | done, sprites aside: `portalc_walkref`, whole captures from the 146 places at 32 angles each; and `portalc_walk3ref`, the stress scene's 106 places, the depth capped at 3 |
+| `pt_render_root`, `frame`'s setup | `capture_root` (capture.6502) | done, sprites aside: `portalc_captureref`, from 146 places, each cell's centroid and near each of its corners |
+| `pt_render_root_side`, `root_screen_angle` | inline in `capture_root` | done |
+| `root_walk` | inline in `capture_root` | done, sprites aside (`inst_new`, `inst_clip`) |
 | `visit_of` | `visit_of` | done |
 | `height_of`, `pt_render_height` | `HEIGHT_OF` | done: every z at every eye height |
 | `vert_to_screen_angle` | `VERT_TO_SCREEN_ANGLE` | done |
 | `screen_angle_to_column` | `SCREEN_ANGLE_TO_COLUMN` | done |
-| `side_start` | inline in `.capture` | done |
+| `side_start` | `side_start`, which runs on into `side_end` | done |
 | `side_end` | `side_end` | done |
 | `side_next` | `side_next`, which runs on into `side_end` | done: the eye's cell walked side by side to the portal's right column, as `walk` walks it |
 | `edge_ends` | `edge_ends` | done: each of those sides with columns |
 | `make_line` | `make_line` | done: those sides' lines at the cell's ceiling and floor and the eye's height, and 65,536 made-up lines for the paths the walk never takes |
 | `exp2_sat`, `row_move` (`pt_mulg_u16`) | `exp2_sat`, `row_move` | done, in `make_line`'s check |
-| `frame`'s visit cache clear | `.capture`'s end | done |
-| `walk`, `descend`, `enter` | — | not started |
-| `process_edge`, `edge_line` | — | not started |
+| `frame`'s visit cache clear | `forget_visits` | done |
+| `walk`, `descend`, `enter` | `walk` (walk.6502), with `descend`'s cut-off inline; `enter` | done, in the walk's checks |
+| `process_edge`, `edge_line` | `process_edge`, `edge_line` | done, in the walk's checks: every path but a level ceiling that changes colour, which neither scene has |
 | `clip_plain`, `clip_floor`, `clip_ceil` | the same (clip.6502) | done: 256 made-up lines from `make_line`, each clipped 16 times, every kind against every combination of the bounds' edges, `portalc_clipref` |
 | `scan_of`, `scan` | `SCAN_EDGES`, `SCAN` (clip_macros.6502) | done, in the clips' check |
 | `plain_col`, `floor_col`, `ceil_col` | `plain_columns`, `floor_columns`, `ceil_columns`; and a plain line's own columns in `plain_own`, through `PLAIN_OWN` | done, in the clips' check |
@@ -131,10 +132,18 @@ or two bytes of zero page.
 | `visits[i].cell`, `.side`, `.xr`, `.kept` | `visit_cell`, `visit_side`, `visit_xr`, `visit_kept` |
 | `visits[i].hc` (`pt_height`) | `visit_hclo`, `visit_hchi`, with `below` in bit 7 of `hchi` |
 | `visits[i].hf` | `visit_hflo`, `visit_hfhi`, likewise |
+| `visits[i].split_angle` | `visit_split_anglelo`, `visit_split_anglehi` |
 | `visits[i].inst` | — (sprites) |
-| `pt_walk.vi`, `.x`, `.tmax`, `.bmin`, `.wrap` | `walk_vi`, `walk_x`, `walk_tmax`, `walk_bmin`, `walk_wrap` |
+| `pt_walk.vi`, `.x`, `.tmax`, `.bmin`, `.split_angle` | `walk_vi`, `walk_x`, `walk_tmax`, `walk_bmin`, `walk_split_angle` |
 | `pt_walk.u0`, `.u1`, `.c0`, `.c1` | `walk_u0`, `walk_u1`, `walk_c0`, `walk_c1` |
 | — | `walk_e0`, `walk_e1`: the ends' vertex cache entries |
+| `walk`'s `depth` | `walk_levels`: the walks that may still nest, counting down from `MAX_DEPTH` - 1 |
+| `process_edge`'s child walk (`cw`) | its visit in X, and `enter.tmax`, `enter.bmin` |
+| `pt_edgelines.kept`, `.use`, `.have` | `edge_line.kept` (the entry * 4), `edge_line.use`, `edge_line.ends` (bit 7) |
+| `r->kept[k][slot]` (`pt_kept`) | `kept_x0`, `kept_x1`, `kept_ylo`, `kept_yhi`, `kept_gradlo`, `kept_gradhi`, `kept_endy`, by entry * 4 + slot |
+| `PT_K_CEIL`, `_CEIL_ADJ`, `_FLOOR`, `_FLOOR_ADJ` | `KEPT_CEILING`, `KEPT_CEILING_ADJACENT`, `KEPT_FLOOR`, `KEPT_FLOOR_ADJACENT` |
+| `pt_map_twin` | `side_twin`, a map table |
+| `pt_shade(i)`, `pt_pattern_xor` | `shade_even`, `shade_odd` (map tables, from palette.c), and `PATTERN_XY` |
 | `pt_ends.logdepth0`, `.logdepth1`, `.logcolumns` | `logdepth0`, `logdepth1`, `logcolumns` |
 | `pt_line.x0`, `.x1`, `.y`, `.below` | `line_x0`, `line_x1`, `line_y`, `line_below` (&80 below, else 0) |
 | `pt_line.g`, `.rl` | `line_grad`, `line_endy` |
@@ -189,6 +198,7 @@ or two bytes of zero page.
 | `cells[i].floor`, `.ceil`, `.sprite` | `cell_floor`, `cell_ceil`, `cell_sprite` |
 | `edges[i].angle`, `.colour`, `.len8` | `edge_angle`, `edge_colour`, `edge_len8` |
 | `sides[i].v`, `.edge`, `.adj`, `.anghi` | `side_v`, `side_edge`, `side_adj`, `side_anghi` |
+| `pt_map_twin(m, s)` | `side_twin`, made by `portalc_mapasm`: 0 for a wall |
 | `sprites[i].x`, `.y`, `.art`, `.ls` | `sprite_xlo` and so on, `sprite_art`, `sprite_lslo`, `sprite_lshi` |
 | `arts` | `art_pate`, `art_pato`, `art_lo`, `art_hi`, `art0`... |
 | `num_verts`, `num_cells`... | `MAP_VERTS`, `MAP_CELLS`... (assembly-time constants) |
@@ -209,7 +219,8 @@ They have the same names as `pt_arith_tables`, except:
 
 `PT_` comes off: `PT_SCREEN_WIDTH` is `SCREEN_WIDTH`, `PT_CAM_HEIGHT` is
 `CAM_HEIGHT`, `PT_IN_FWD` is `IN_FWD`, `PT_MAX_VCACHE` is `MAX_VCACHE`,
-`PT_MAX_RECS` is `MAX_RECS`.
+`PT_MAX_RECS` is `MAX_RECS`, `PT_MAX_DEPTH` is `MAX_DEPTH`, `PT_MAX_KEPT` is
+`MAX_KEPT`.
 They're all in constants.6502. `POST_NEAR` and `POST_SCALE` name numbers the
 C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 
@@ -293,6 +304,29 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   middle (`bound_bottom`, at its middle) with no compare a column.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
+- **A child walk keeps only three bytes of its parent's.** The C's walk has
+  the child in a walk of its own, `cw`; the 6502 has one walk, in zero page,
+  and pushes the parent's `walk_vi`, `walk_tmax` and `walk_bmin` round the
+  child's. The rest comes back: `walk_x` is the side's end's column, the
+  window is the visit's (`visit_split_anglelo`, `visit_split_anglehi`, made
+  at its first visit, as the C now makes it too), and the parent goes on to its next side
+  from that side's start, as a later visit would. The C asserts all three.
+  That's 5 bytes of stack a level with the return, 75 at the cap.
+- **`process_edge` doesn't enter the child.** It returns with C set, the
+  child's visit in X and its extents in `enter.tmax` and `enter.bmin`, and
+  the walk saves itself and calls `enter`; through the last side, it calls
+  `enter` in its own place, as the C's tail call does, nothing saved.
+- **The depth counts down**, in `walk_levels`, from `MAX_DEPTH` - 1: past 0,
+  the child's cut off.
+- **Twins and shades are tables.** `portalc_mapasm` writes `side_twin`, where
+  the C searches the cell across's ring, and `shade_even` and `shade_odd`,
+  palette.c's catalogue.
+- **The walk leaves out sprites** (`inst_new`, `inst_clip`, `inst_hide`), and
+  the C's checks on side counts, a visit's columns running left to right,
+  and the window's range.
+- **The capture's split**: `capture_root` is capture.6502's, `capture`, which
+  walks, walk.6502's, so the checks that only want the capture's parts
+  needn't take the walk and the clips.
 
 ## Next
 
@@ -302,13 +336,9 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   3. ~~The plotters into T, and `record` with `toggle_end`.~~ Done.
   4. ~~The clips: `scan`, `clip_plain`, `clip_floor`, `clip_ceil`,
      `close_columns`.~~ Done.
-  5. The walk: `walk`, `process_edge`, `enter`, `descend`, the kept lines.
-     One thing to decide first: where a child walk's state goes, since the
-     `walk_` zero page holds one walk. Then check the clips' zero page
-     again: in their check, Baron lays some of their locals over the span,
-     the line and the extents, which nothing there reads after a clip; the
-     walk will.
-- The kept lines and the records stay as the C has them for now.
+  5. ~~The walk: `walk`, `process_edge`, `enter`, `descend`, the kept
+     lines.~~ Done.
+- The records stay as the C has them for now.
 - Then `update_camera`'s turn keys, the fill and the unplot. That's the
   first demo.
 - Later: sprites, then moving, collision and `pt_vcache_locate`.

@@ -7,6 +7,7 @@
 
 #include "arith.h"
 #include "map.h"
+#include "places.h"
 #include "render.h"
 #include "vcache.h"
 
@@ -23,40 +24,6 @@ static void comma(int *first)
     *first = 0;
 }
 
-// The camera's places, cell by cell: the centroid (the mean of its ring's vertices, truncated),
-// then 7/8 of the way from it to each vertex in turn, near the corners, where the view's right
-// edge can land on the cell's last side. test/capture.6502 makes the same.
-typedef struct place {
-    uint8_t cell;
-    uint16_t x, y;
-} place;
-
-static unsigned places(place *out)
-{
-    unsigned n = 0;
-    for (uint8_t cell = 1; cell < m.num_cells; cell++) {
-        const pt_cell *c = &m.cells[cell];
-        uint32_t sx = 0;
-        uint32_t sy = 0;
-        for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
-            sx += m.verts[pt_map_side(&m, s)->v].x;
-            sy += m.verts[pt_map_side(&m, s)->v].y;
-        }
-        uint32_t k = (uint32_t)(pt_map_ring_end(c) - c->first);
-        uint32_t cx = sx / k;
-        uint32_t cy = sy / k;
-        out[n++] = (place) {cell, (uint16_t)cx, (uint16_t)cy};
-        for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
-            pt_vertex v = m.verts[pt_map_side(&m, s)->v];
-            out[n++] = (place) {cell, (uint16_t)((cx + 7u * v.x) / 8),
-                                (uint16_t)((cy + 7u * v.y) / 8)};
-        }
-    }
-    for (unsigned i = 0; i < n; i++)
-        RC_ASSERT(pt_map_cell_contains(&m, out[i].cell, out[i].x, out[i].y));
-    return n;
-}
-
 int main(void)
 {
     pt_arith_init();
@@ -68,8 +35,8 @@ int main(void)
     // walked as the walk walks it, from the root side until a side ends at or past the portal's
     // right column, with the ends of each side that has columns and its lines at the cell's
     // ceiling and floor and the eye's height: as test/capture.6502 sums them
-    static place at[PT_MAX_CELLS + PT_MAX_SIDES];
-    unsigned n = places(at);
+    static place at[PT_MAX_PLACES];
+    unsigned n = places(&m, at);
     unsigned last = 0;    // frames whose walk reaches the eye's cell's last side, a turn on
     printf("{\n  \"frames\": [");
     int first = 1;
@@ -79,8 +46,8 @@ int main(void)
             pt_walk w = pt_render_root(&r, (uint8_t)a, at[p].cell);
             const pt_visit *vs = &r.visits[w.vi];
             comma(&first);
-            printf("[%u,%u,%u,%u,%u,%d,%d,%u,%u,", w.vi, w.x, w.tmax, w.bmin, w.wrap, w.u0, w.u1,
-                   w.c0, w.c1);
+            printf("[%u,%u,%u,%u,%u,%d,%d,%u,%u,", w.vi, w.x, w.tmax, w.bmin, w.split_angle, w.u0,
+                   w.u1, w.c0, w.c1);
             printf("%u,%u,%u,%u,%u,%d,%u,%d,", vs->cell, vs->side, vs->xr, vs->kept,
                    vs->hc.below, vs->hc.l, vs->hf.below, vs->hf.l);
             printf("%u,%u,%u,%u", r.eye_z, r.num_visits, r.num_kept, r.num_recs);
@@ -100,7 +67,7 @@ int main(void)
                             printf(",%u,%u,%u", L.y, L.g, L.rl);
                     }
                 }
-                turned |= w.u1 >= (int16_t)w.wrap;
+                turned |= w.u1 >= (int16_t)w.split_angle;
                 if (w.c1 >= vs->xr)
                     break;
                 pt_render_side_next(&r, &w);

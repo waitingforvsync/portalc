@@ -53,15 +53,16 @@ MACRO HEIGHT_OF
 ENDMACRO
 
 \\ Vertex X's signed screen angle in the walk's window (vert_to_screen_angle): from viewleft, and
-\\ a turn less, so negative, at or past walk_wrap.
+\\ a turn less, so negative, at or past walk_split_angle.
 \\
 \\ Inputs:
 \\     X: the vertex
 \\     angle: where its screen angle goes, two bytes
-\\     viewleft, walk_wrap: the view's left edge, and the window's split
+\\     viewleft, walk_split_angle: the view's left edge, and the window's split
 \\
 \\ Outputs:
-\\     angle: the screen angle, signed: walk_wrap - 1024 up to walk_wrap, negative left of the view
+\\     angle: the screen angle, signed: from walk_split_angle - 1024 up to it, negative left of
+\\         the view
 \\     X: the vertex's vertex cache entry
 \\     A: corrupted
 \\     Y: preserved
@@ -71,8 +72,8 @@ MACRO VERT_TO_SCREEN_ANGLE angle
     SEC
     LDA vc_anglo,X:SBC viewleft:STA angle
     LDA vc_anghi,X:SBC viewleft+1:AND #3:STA angle+1
-    LDA angle:CMP walk_wrap
-    LDA angle+1:SBC walk_wrap+1
+    LDA angle:CMP walk_split_angle
+    LDA angle+1:SBC walk_split_angle+1
     BCC done                            ; under the split
     LDA angle+1:SBC #4:STA angle+1      ; at or past it: a turn less (C set)
 .done

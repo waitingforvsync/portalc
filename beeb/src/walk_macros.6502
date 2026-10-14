@@ -1,0 +1,16 @@
+\\ walk_macros.6502 - the walk's macros.
+
+\\ A line's colour from two shades: their patterns EORed, a scanline at a time (pt_pattern_xor).
+\\
+\\ Inputs:
+\\     X, Y: the shades
+\\
+\\ Outputs:
+\\     pattern_even, pattern_odd: the colour
+\\     A: corrupted
+\\     X, Y: preserved
+
+MACRO PATTERN_XY
+    LDA shade_even,X:EOR shade_even,Y:STA pattern_even
+    LDA shade_odd,X:EOR shade_odd,Y:STA pattern_odd
+ENDMACRO

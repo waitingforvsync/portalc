@@ -1,5 +1,5 @@
-\\ capture.6502 - the capture: the walk through the cells, plotting their lines into T.
-\\ It only touches T, so it needn't wait for the buffer.
+\\ capture.6502 - the capture's setup and the walk's parts: visits, sides, their ends and lines.
+\\ The walk itself is walk.6502's. It only touches T, so it needn't wait for the buffer.
 
 \\ How far a line's offset from the screen's middle row runs to its top or bottom edge, and its
 \\ log's high byte; and the middle row, as a line's rows have it.
@@ -19,7 +19,7 @@ ZA_AUTO1 walk_vi                        ; the walk's visit
 ZA_AUTO1 walk_x                         ; where its next edge's span starts
 ZA_AUTO1 walk_tmax                      ; the bounds' extents over its portal: the lowest top row
 ZA_AUTO1 walk_bmin                      ; and the highest bottom row
-ZA_AUTO2 walk_wrap                      ; its window: screen angles at or past this are a turn less
+ZA_AUTO2 walk_split_angle               ; its window: screen angles at or past this are a turn less
 ZA_AUTO2 walk_u0                        ; its side's start's screen angle
 ZA_AUTO2 walk_u1                        ; and its end's
 ZA_AUTO1 walk_e0                        ; the start's vertex cache entry
@@ -68,20 +68,26 @@ SECTION Capture
 .visit_hflo SKIP MAX_VISITS+1           ; the floor's
     FITPAGE MAX_VISITS+1
 .visit_hfhi SKIP MAX_VISITS+1
+    FITPAGE MAX_VISITS+1
+.visit_split_anglelo SKIP MAX_VISITS+1  ; its window's split angle, made at its first visit
+    FITPAGE MAX_VISITS+1
+.visit_split_anglehi SKIP MAX_VISITS+1
 ENDSECTION
 
-\\ Capture the frame: ready its counts and the visit cache, then walk from the camera's cell. Only
-\\ the root walk's beginning, for now.
+\\ The frame's setup and its root walk (pt_render_root): the counts and the view readied, and the
+\\ camera's cell's visit made, the whole screen wide, its walk begun on the side the view starts on.
 \\
 \\ Inputs:
 \\     camx, camy, camangle, camcell: the camera
 \\
 \\ Outputs:
-\\     T: the frame's lines
-\\     num_recs and the records: what the unplot clears
-\\     toggle_end: where the fill can stop
+\\     viewleft, eye_z: the view
+\\     num_visits, num_kept, num_recs, toggle_end: the counts, no visits but the root's
+\\     walk_vi and the walk: the root walk, begun
+\\     the root visit: its side, window and right column
+\\     A, X, Y: corrupted
 
-.capture
+.capture_root
 {
     \\ the view, the eye's height and the counts: no visits, records or kept lines yet, and each
     \\ byte column toggled at row 0 at most, as lines off the top toggle it unrecorded
@@ -149,21 +155,24 @@ ENDSECTION
     LDA #0:STA walk_x:STA walk_tmax
     LDA #SCREEN_HEIGHT:STA walk_bmin
     CLC
-    LDA startangle:ADC #1:STA walk_wrap
-    LDA startangle+1:ADC #0:STA walk_wrap+1
+    LDA startangle:ADC #1:STA walk_split_angle
+    STA visit_split_anglelo,X
+    LDA startangle+1:ADC #0:STA walk_split_angle+1
+    STA visit_split_anglehi,X
+    JMP side_start
+}
 
-    \\ the side's start (side_start): its screen angle in the window, its entry and its column,
-    \\ then its end
+\\ The visit cache emptied, while the visits are still here: each clears its own cell's.
+\\
+\\ Inputs:
+\\     num_visits, visit_cell: the visits made
+\\
+\\ Outputs:
+\\     cell_visit: all 0
+\\     A, X, Y: corrupted
 
-    LDX side_v,Y
-    VERT_TO_SCREEN_ANGLE walk_u0
-    STX walk_e0
-    SCREEN_ANGLE_TO_COLUMN walk_u0
-    STA walk_c0
-    JSR side_end
-
-    \\ the visit cache emptied, while the visits are still here: each clears its own cell's
-
+.forget_visits
+{
     LDX num_visits
     DEX                                 ; the last visit made
     BEQ done
@@ -174,6 +183,29 @@ ENDSECTION
     BNE forget
 .done
     RTS
+}
+
+\\ Begin the walk on a side (side_start): its start's screen angle in the window, its vertex cache
+\\ entry and its column; then its end (side_end).
+\\
+\\ Inputs:
+\\     Y: the side
+\\     walk_vi, walk_split_angle: the walk's visit, and its window's split
+\\     viewleft: the view's left edge
+\\
+\\ Outputs:
+\\     walk_u0, walk_e0, walk_c0: the start's screen angle, vertex cache entry and column
+\\     walk_u1, walk_e1, walk_c1: the end's (side_end)
+\\     A, X, Y: corrupted
+
+.side_start
+{
+    LDX side_v,Y
+    VERT_TO_SCREEN_ANGLE walk_u0
+    STX walk_e0
+    SCREEN_ANGLE_TO_COLUMN walk_u0
+    STA walk_c0
+    JMP side_end
 }
 
 \\ On to the walk's next side clockwise (side_next): its start is the last one's end. Any lines kept
@@ -208,7 +240,7 @@ ENDSECTION
 \\
 \\ Inputs:
 \\     Y: the side
-\\     walk_vi, walk_u0, walk_wrap: the walk's visit, its side's start, and its window's split
+\\     walk_vi, walk_u0, walk_split_angle: the walk's visit, its side's start, and its split angle
 \\     viewleft: the view's left edge
 \\
 \\ Outputs:

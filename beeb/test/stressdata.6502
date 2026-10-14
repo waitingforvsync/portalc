@@ -1,0 +1,120 @@
+\\ stressdata.6502 - the stress scene (map.c's pt_stress_scene_init), for the walk's check:
+\\ as mapdata.6502. Made by portalc_mapasm --stress (make map): don't edit it.
+
+\\ Where the camera starts (camera.h), and the cell that holds it.
+
+CAM_START_X = 1756
+CAM_START_Y = 1536
+CAM_START_ANGLE = 128
+CAM_START_CELL = 0
+
+\\ The fields, an element an entry. Cell 0 (the outside) and sprite 0 (none) are there, unused.
+
+map_vert_x = {256, 256, 304, 304, 352, 352, 400, 400, 448, 448, 496, 496, 544, 544, 592, 592, 640, 640, 688, 688, 736, 736, 784, 784, 832, 832, 880, 880, 928, 928, 976, 976, 1024, 1024, 1072, 1072, 1096, 1192, 1192, 1096, 1240, 1240, 1240, 1240, 106}
+map_vert_y = {1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1216, 1024, 1088, 1152, 1216, 1024, 1088, 1152, 1216, 1120}
+map_cell_first = {0, 0, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49, 53, 57, 61, 65, 69, 75, 78, 82}
+map_cell_floorz = {0, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 75, 44, 49, 75}
+map_cell_ceilz = {0, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 46, 42, 42, 48, 70}
+map_cell_floor = {0, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 21, 23, 6, 21}
+map_cell_ceil = {0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 23}
+map_cell_sprite = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0}
+map_edge_angle = {0, 0, 92, 163, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 95, 0, 160, 0, 0, 104, 0, 0, 0, 151, 0}
+map_edge_colour = {0, 5, 5, 15, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 0, 5, 15, 3, 5, 15, 15, 32, 3, 32, 5, 15, 5, 15, 32, 5, 15, 5}
+map_edge_len8 = {24, 6, 22, 22, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 24, 6, 6, 3, 14, 8, 14, 3, 18, 10, 6, 8, 6, 10, 18}
+map_side_v = {2, 3, 1, 44, 0, 4, 5, 3, 2, 6, 7, 5, 4, 8, 9, 7, 6, 10, 11, 9, 8, 12, 13, 11, 10, 14, 15, 13, 12, 16, 17, 15, 14, 18, 19, 17, 16, 20, 21, 19, 18, 22, 23, 21, 20, 24, 25, 23, 22, 26, 27, 25, 24, 28, 29, 27, 26, 30, 31, 29, 28, 32, 33, 31, 30, 34, 35, 33, 32, 34, 36, 37, 38, 39, 35, 36, 40, 37, 37, 41, 42, 38, 38, 43, 39}
+map_side_edge = {0, 1, 2, 3, 4, 5, 6, 0, 7, 8, 9, 5, 10, 11, 12, 8, 13, 14, 15, 11, 16, 17, 18, 14, 19, 20, 21, 17, 22, 23, 24, 20, 25, 26, 27, 23, 28, 29, 30, 26, 31, 32, 33, 29, 34, 35, 36, 32, 37, 38, 39, 35, 40, 41, 42, 38, 43, 44, 45, 41, 46, 47, 48, 44, 49, 50, 51, 47, 52, 53, 54, 55, 56, 57, 50, 58, 59, 54, 60, 61, 62, 55, 63, 64, 56}
+map_side_adj = {2, 0, 0, 0, 0, 3, 0, 1, 0, 4, 0, 2, 0, 5, 0, 3, 0, 6, 0, 4, 0, 7, 0, 5, 0, 8, 0, 6, 0, 9, 0, 7, 0, 10, 0, 8, 0, 11, 0, 9, 0, 12, 0, 10, 0, 13, 0, 11, 0, 14, 0, 12, 0, 15, 0, 13, 0, 16, 0, 14, 0, 17, 0, 15, 0, 18, 0, 16, 0, 0, 19, 20, 21, 0, 17, 0, 0, 18, 0, 0, 0, 18, 0, 0, 18}
+map_side_anghi = {1, 2, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 0, 0, 1, 1, 2, 3, 0, 1, 2, 0, 1, 2, 3, 0, 2, 3}
+map_side_twin = {7, 0, 0, 0, 0, 11, 0, 0, 0, 15, 0, 5, 0, 19, 0, 9, 0, 23, 0, 13, 0, 27, 0, 17, 0, 31, 0, 21, 0, 35, 0, 25, 0, 39, 0, 29, 0, 43, 0, 33, 0, 47, 0, 37, 0, 51, 0, 41, 0, 55, 0, 45, 0, 59, 0, 49, 0, 63, 0, 53, 0, 67, 0, 57, 0, 74, 0, 61, 0, 0, 77, 81, 84, 0, 65, 0, 0, 70, 0, 0, 0, 71, 0, 0, 72}
+map_sprite_x = {0, 952, 1132}
+map_sprite_y = {0, 1120, 1120}
+map_sprite_art = {0, 0, 0}
+map_sprite_ls = {0, 2304, 4352}
+map_art_e = {0, 0, 90, 245, 0, 0, 0, 0}
+map_art_o = {0, 0, 165, 250, 0, 0, 0, 0}
+map_art0 = {4, 32, 40, 7, 10, 13, 16, 11, 233, 248, 123, 234, 249, 123, 234, 249, 11, 233, 248}
+map_shade_even = {0, 8, 5, 128, 11, 5, 15, 5, 136, 80, 135, 5, 80, 5, 90, 80, 176, 143, 53, 180, 90, 85, 80, 240, 85, 90, 95, 85, 248, 95, 187, 245, 191, 251, 255}
+map_shade_odd = {0, 2, 10, 32, 14, 160, 15, 90, 34, 160, 45, 170, 165, 95, 165, 170, 224, 47, 197, 225, 175, 170, 245, 240, 175, 245, 175, 250, 242, 250, 238, 250, 239, 254, 255}
+
+MAP_VERTS = LEN(map_vert_x)
+MAP_CELLS = LEN(map_cell_first)
+MAP_EDGES = LEN(map_edge_angle)
+MAP_SIDES = LEN(map_side_v)
+MAP_SPRITES = LEN(map_sprite_x)
+MAP_ARTS = LEN(map_art_e) DIV 8
+MAP_SHADES = LEN(map_shade_even)
+
+\\ The tables. A side's twin is the side across its portal, 0 for a wall. An art's patterns
+\\ are by art * 8 + colour code, 0 transparent; its data is by art_lo and art_hi. A shade's
+\\ patterns are palette.c's, the even scanlines' and the odd's.
+
+    FITPAGE MAP_VERTS
+.vert_xlo        EQUB LO(map_vert_x)
+    FITPAGE MAP_VERTS
+.vert_xhi        EQUB HI(map_vert_x)
+    FITPAGE MAP_VERTS
+.vert_ylo        EQUB LO(map_vert_y)
+    FITPAGE MAP_VERTS
+.vert_yhi        EQUB HI(map_vert_y)
+
+    FITPAGE MAP_CELLS+1
+.cell_first      EQUB map_cell_first, MAP_SIDES
+    FITPAGE MAP_CELLS
+.cell_floorz     EQUB map_cell_floorz
+    FITPAGE MAP_CELLS
+.cell_ceilz      EQUB map_cell_ceilz
+    FITPAGE MAP_CELLS
+.cell_floor      EQUB map_cell_floor
+    FITPAGE MAP_CELLS
+.cell_ceil       EQUB map_cell_ceil
+    FITPAGE MAP_CELLS
+.cell_sprite     EQUB map_cell_sprite
+
+    FITPAGE MAP_EDGES
+.edge_angle      EQUB map_edge_angle
+    FITPAGE MAP_EDGES
+.edge_colour     EQUB map_edge_colour
+    FITPAGE MAP_EDGES
+.edge_len8       EQUB map_edge_len8
+
+    FITPAGE MAP_SIDES
+.side_v          EQUB map_side_v
+    FITPAGE MAP_SIDES
+.side_edge       EQUB map_side_edge
+    FITPAGE MAP_SIDES
+.side_adj        EQUB map_side_adj
+    FITPAGE MAP_SIDES
+.side_anghi      EQUB map_side_anghi
+    FITPAGE MAP_SIDES
+.side_twin       EQUB map_side_twin
+
+    FITPAGE MAP_SPRITES
+.sprite_xlo      EQUB LO(map_sprite_x)
+    FITPAGE MAP_SPRITES
+.sprite_xhi      EQUB HI(map_sprite_x)
+    FITPAGE MAP_SPRITES
+.sprite_ylo      EQUB LO(map_sprite_y)
+    FITPAGE MAP_SPRITES
+.sprite_yhi      EQUB HI(map_sprite_y)
+    FITPAGE MAP_SPRITES
+.sprite_art      EQUB map_sprite_art
+    FITPAGE MAP_SPRITES
+.sprite_lslo     EQUB LO(map_sprite_ls)
+    FITPAGE MAP_SPRITES
+.sprite_lshi     EQUB HI(map_sprite_ls)
+
+    FITPAGE MAP_SHADES
+.shade_even      EQUB map_shade_even
+    FITPAGE MAP_SHADES
+.shade_odd       EQUB map_shade_odd
+
+    FITPAGE LEN(map_art_e)
+.art_pate        EQUB map_art_e
+    FITPAGE LEN(map_art_o)
+.art_pato        EQUB map_art_o
+    FITPAGE MAP_ARTS
+.art_lo          EQUB LO({art0})
+    FITPAGE MAP_ARTS
+.art_hi          EQUB HI({art0})
+    FITPAGE LEN(map_art0)
+.art0            EQUB map_art0

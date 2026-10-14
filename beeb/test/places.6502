@@ -1,0 +1,47 @@
+\\ test/places.6502 - the camera's places for the capture's and the walk's checks, and their
+\\ tables, made from whichever map is in.
+
+\\ The camera's places, cell by cell, as the C's tool takes them: the centroid (the mean of its
+\\ ring's vertices, truncated), then 7/8 of the way from it to each vertex in turn, near the
+\\ corners, where the view's right edge can land on the cell's last side.
+
+cell_bounds = CONCAT(map_cell_first, {MAP_SIDES})
+
+FUNCTION ring(c) = map_side_v[cell_bounds[c]..<cell_bounds[c+1]]
+FUNCTION centre(xs, c) = SUM(xs[ring(c)]) DIV LEN(ring(c))
+FUNCTION cell_places(xs, c) = CONCAT(centre(xs, c), (centre(xs, c)+7*xs[ring(c)]) DIV 8)
+
+FUNCTION places(xs, c)
+    IF c == MAP_CELLS
+        r = {}
+    ELSE
+        r = CONCAT(cell_places(xs, c), places(xs, c+1))
+    ENDIF
+= r
+
+FUNCTION place_cells(c)
+    IF c == MAP_CELLS
+        r = {}
+    ELSE
+        r = CONCAT(c, 0*ring(c)+c, place_cells(c+1))
+    ENDIF
+= r
+
+place_x = places(map_vert_x, 1)
+place_y = places(map_vert_y, 1)
+place_cell = place_cells(1)
+PLACES = LEN(place_cell)
+ASSERT PLACES <= 256, "test: the places are a byte's"
+
+\\ The places: each one's cell and position.
+
+    FITPAGE PLACES
+.t_placecell EQUB place_cell
+    FITPAGE PLACES
+.t_placexlo  EQUB LO(place_x)
+    FITPAGE PLACES
+.t_placexhi  EQUB HI(place_x)
+    FITPAGE PLACES
+.t_placeylo  EQUB LO(place_y)
+    FITPAGE PLACES
+.t_placeyhi  EQUB HI(place_y)

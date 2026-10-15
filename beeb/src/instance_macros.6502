@@ -1,0 +1,27 @@
+\\ instance_macros.6502 - the sprites' instances' macros.
+
+\\ A sprite's plotted size from its art's columns or rows (inst_new's pw and ph): spritescale's,
+\\ the size times the scale, 128 on, in whole pixels or pairs.
+\\
+\\ Inputs:
+\\     scale: the scale, 8.8, under 2^13 (zero page)
+\\     A: the art's columns or rows, to 32
+\\
+\\ Outputs:
+\\     A: the size's low byte
+\\     Y: its high byte, 0 to 2
+\\     X: corrupted
+
+MACRO PLOTTED_SIZE scale
+    ZA_AUTO1 middle                     ; local: the size times the scale's high byte: its low byte
+    ZA_AUTO1 high                       ; local: and its high
+
+    MULTIPLIER
+    LDY scale+1:MULTIPLY
+    STX middle:STA high
+    LDY scale:MULTIPLY                  ; X: the product's low byte, A: its middle's other part
+    CPX #128                            ; C: 128 on carries out of the low byte
+    ADC middle:TAX
+    LDA high:ADC #0:TAY
+    TXA
+ENDMACRO

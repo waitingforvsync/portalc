@@ -13,8 +13,11 @@ bool pt_testmaps_add_sprites(pt_map *m)
             sx += m->verts[pt_map_side(m, s)->v].x;
             sy += m->verts[pt_map_side(m, s)->v].y;
         }
-        m->sprites[m->num_sprites] = pt_map_sprite(m, (uint16_t)(sx / (pt_map_ring_end(c) - c->first)),
-                                                   (uint16_t)(sy / (pt_map_ring_end(c) - c->first)), 64, 0);
+        if (m->num_verts >= PT_MAX_VERTS)
+            return false;
+        m->verts[m->num_verts] = (pt_vertex) {.x = (uint16_t)(sx / (pt_map_ring_end(c) - c->first)),
+                                              .y = (uint16_t)(sy / (pt_map_ring_end(c) - c->first))};
+        m->sprites[m->num_sprites] = pt_map_sprite(m, m->num_verts++, 64, 0);
         m->cells[cells[i]].sprite = m->num_sprites++;
     }
     return pt_map_validate(m);

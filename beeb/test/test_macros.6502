@@ -32,3 +32,82 @@ MACRO LFSR random
 .stepped
     LDA random
 ENDMACRO
+
+\\ 0 to 64, from the LFSR's next step: its low 7 bits, less 64 past 64.
+\\
+\\ Inputs:
+\\     random: the LFSR
+\\
+\\ Outputs:
+\\     random: stepped
+\\     A: 0 to 64
+\\     X, Y: preserved
+
+MACRO UP_TO_64 random
+    LFSR random
+    AND #127:CMP #65:BCC done
+    SBC #64                             ; (C set)
+.done
+ENDMACRO
+
+\\ Sum the frame's instances, as walkref and captureref print them: the counts, the draw order,
+\\ then each instance's fields and each column's top, and its bottom where the top's not 0.
+\\
+\\ Inputs:
+\\     sum1, sum2: the sums
+\\     num_instances, num_order, the instances, the draw order, the clip pool
+\\
+\\ Outputs:
+\\     sum1, sum2: with them
+\\     A, X, Y: corrupted
+
+MACRO INSTANCE_SUMS sum1, sum2
+    ZA_AUTO2 rows                       ; local: an instance's rows in the pool
+    ZA_AUTO1 columns                    ; local: its columns
+
+    LDA num_instances:FLETCHER sum1, sum2
+    LDA num_order:FLETCHER sum1, sum2
+    LDX #0
+.order
+    CPX num_order:BEQ ordered
+    LDA draw_order,X:FLETCHER sum1, sum2
+    INX
+    JMP order
+.ordered
+    LDX #1
+.instance
+    CPX num_instances:BNE fields
+    JMP done
+.fields
+    FOR t = {instance_sprite, instance_scalelo, instance_scalehi, instance_xlo, instance_xhi}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    FOR t = {instance_ylo, instance_yhi, instance_logdepthlo, instance_logdepthhi, instance_x0}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    FOR t = {instance_x1, instance_pair0, instance_pair1, instance_cliplo, instance_cliphi}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    FOR t = {instance_columns, instance_whole}
+        LDA t,X:FLETCHER sum1, sum2
+    NEXT
+    CLC
+    LDA instance_cliplo,X:ADC #LO(clip_rows):STA rows
+    LDA instance_cliphi,X:ADC #HI(clip_rows):STA rows+1
+    LDA instance_x1,X:SEC:SBC instance_x0,X
+    STA columns
+    LDY #0
+.column
+    TYA:CLC:ADC columns:TAY
+    LDA (rows),Y:PHP                    ; the top
+    FLETCHER sum1, sum2
+    TYA:SEC:SBC columns:TAY
+    PLP:BEQ hidden
+    LDA (rows),Y:FLETCHER sum1, sum2    ; the bottom, where it shows
+.hidden
+    INY
+    CPY columns:BNE column
+    INX
+    JMP instance
+.done
+ENDMACRO

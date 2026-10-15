@@ -852,9 +852,8 @@ void pt_render_side_next(pt_render *r, pt_walk *w)
 // A cell's sprite as it's seen, at the cell's first visit: spritescale's
 // place for it, in logs as the lines are; 0 when it can't be seen (none,
 // beside or behind the eye, too near, too small, off the screen, or no room
-// left in the clip pool). The
-// base's centre is seen as a vertex is, from the eye in the middle of the
-// camera's unit square, and its depth's log is the length's less lsec of
+// left in the clip pool). The base's centre is a vertex, so its polar form
+// is the vertex cache's, and its depth's log is the length's less lsec of
 // its view angle.
 //   - The scale, 64 size / (h depth) in 8.8, is 2^(14 + log size - log h -
 //     log depth), the first three the sprite's own, made with the map.
@@ -881,15 +880,13 @@ static uint8_t inst_new(pt_render *r, uint8_t cell, pt_height hf)
     const pt_sprite *sp = &m->sprites[c->sprite];
     const pt_sprite_art *a = &m->arts[sp->art];
 
-    int16_t dx = pt_i16(2 * ((int32_t)sp->x - r->vc->x) - 1);
-    int16_t dy = pt_i16(2 * ((int32_t)sp->y - r->vc->y) - 1);
-    pt_polar pp = pt_polar_of(dx, dy);
-    uint16_t va = (uint16_t)((uint16_t)(pp.angle - r->cam4) & 1023u);
+    const pt_polar *pp = pt_vcache_vert(r->vc, m, sp->v);
+    uint16_t va = (uint16_t)((uint16_t)(pp->angle - r->cam4) & 1023u);
     if (va >= 256 && va < 768)
         return 0;    // beside or behind
     bool left = va >= 512;
     uint8_t i = left ? (uint8_t)~(uint8_t)va : (uint8_t)va;    // steps off straight ahead
-    int16_t ld = pt_i16((int32_t)pp.lr - 256 - pt_lsec16(i));
+    int16_t ld = pt_i16((int32_t)pp->lr - pt_lsec16(i));
     if (ld < PT_SPRITE_NEAR_L)
         return 0;
 
@@ -997,6 +994,22 @@ static void inst_hide(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr)
     uint8_t width = (uint8_t)(in->cx1 - in->cx0);
     memset(&r->clipmem[in->clip + width + (uint8_t)(c0 - in->cx0)], 0, (size_t)(c1 - c0));
     in->whole = false;
+}
+
+uint8_t pt_render_inst_new(pt_render *r, uint8_t cell, pt_height hf)
+{
+    return inst_new(r, cell, hf);
+}
+
+void pt_render_inst_clip(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr, uint8_t tmax,
+                         uint8_t bmin)
+{
+    inst_clip(r, ii, xl, xr, tmax, bmin);
+}
+
+void pt_render_inst_hide(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr)
+{
+    inst_hide(r, ii, xl, xr);
 }
 
 // ---- visits ----

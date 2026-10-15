@@ -227,6 +227,14 @@ pt_walk pt_render_root(pt_render *r, uint8_t angle, uint8_t cell);
 // are left.
 void pt_render_capture(pt_render *r, uint8_t angle, uint8_t cell);
 
+// A cell's sprite as it's seen (inst_new): its instance, or 0; and a visit's
+// rows in its columns over [xl, xr) (inst_clip), or none there (inst_hide),
+// for the tools' checks.
+uint8_t pt_render_inst_new(pt_render *r, uint8_t cell, pt_height hf);
+void pt_render_inst_clip(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr, uint8_t tmax,
+                         uint8_t bmin);
+void pt_render_inst_hide(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr);
+
 // The last frame's runs cleared out of T from the records, then row 0
 // (unplot), for the tools' checks: T is all 0 after.
 void pt_render_unplot(pt_render *r);

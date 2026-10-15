@@ -58,6 +58,8 @@ SECTION Capture
     FITPAGE MAX_VISITS+1
 .visit_side SKIP MAX_VISITS+1           ; the side its last walk stopped on
     FITPAGE MAX_VISITS+1
+.visit_instance SKIP MAX_VISITS+1       ; its cell's sprite's instance, 0 for none (from the first)
+    FITPAGE MAX_VISITS+1
 .visit_xr   SKIP MAX_VISITS+1           ; the right column of the portal last walked: 0 until then
     FITPAGE MAX_VISITS+1
 .visit_kept SKIP MAX_VISITS+1           ; its side's kept lines' entry, 0 for none
@@ -84,8 +86,9 @@ ENDSECTION
 \\ Outputs:
 \\     viewleft, eye_z: the view
 \\     num_visits, num_kept, num_recs, toggle_end: the counts, no visits but the root's
+\\     num_instances, num_order, clip_used: no instances but the root cell's sprite's, if it's seen
 \\     walk_vi and the walk: the root walk, begun
-\\     the root visit: its side, window and right column
+\\     the root visit: its side, window, right column and instance
 \\     A, X, Y: corrupted
 
 .capture_root
@@ -96,7 +99,7 @@ ENDSECTION
     VIEW_LEFT
     LDX camcell
     LDA cell_floorz,X:SEC:SBC #CAM_HEIGHT:STA eye_z
-    LDA #1:STA num_visits:STA num_kept
+    LDA #1:STA num_visits:STA num_kept:STA num_instances
     LDX #SCREEN_WIDTH/16-1              ; a quarter of the byte columns
 .ends
     STA toggle_end,X
@@ -105,7 +108,7 @@ ENDSECTION
     STA toggle_end+SCREEN_WIDTH*3/16,X
     DEX
     BPL ends
-    LDA #0:STA num_recs
+    LDA #0:STA num_recs:STA num_order:STA clip_used:STA clip_used+1
 
     \\ the root visit, the camera's cell's, the whole screen wide
 
@@ -163,6 +166,17 @@ ENDSECTION
     STA visit_split_anglelo,X
     LDA startangle+1:ADC #0:STA walk_split_angle+1
     STA visit_split_anglehi,X
+
+    \\ its sprite, if it's seen, over the whole screen, between the screen's edges
+
+    JSR instance_new
+    LDX walk_vi
+    LDY visit_instance,X:BEQ begin
+    LDA #SCREEN_WIDTH:STA span_x1
+    JSR instance_clip
+    LDX walk_vi
+.begin
+    LDY visit_side,X
     JMP side_start
 }
 

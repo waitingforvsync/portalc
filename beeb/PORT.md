@@ -64,10 +64,10 @@ ambitions.
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_render_capture` | `capture` (walk.6502): `capture_root`, `walk`, `forget_visits` | done, sprites aside: `portalc_walkref`, whole captures from the 146 places at 32 angles each; and `portalc_walk3ref`, the stress scene's 106 places, the depth capped at 3 |
-| `pt_render_root`, `frame`'s setup | `capture_root` (capture.6502) | done, sprites aside: `portalc_captureref`, from 146 places, each cell's centroid and near each of its corners |
+| `pt_render_capture` | `capture` (walk.6502): `capture_root`, `walk`, `forget_visits` | done, the sprites' instances too: `portalc_walkref`, whole captures from the 146 places at 32 angles each; and `portalc_walk3ref`, the stress scene's 106 places, the depth capped at 3 |
+| `pt_render_root`, `frame`'s setup | `capture_root` (capture.6502) | done: `portalc_captureref`, from 146 places, each cell's centroid and near each of its corners |
 | `pt_render_root_side`, `root_screen_angle` | inline in `capture_root` | done |
-| `root_walk` | inline in `capture_root` | done, sprites aside (`inst_new`, `inst_clip`) |
+| `root_walk` | inline in `capture_root` | done |
 | `visit_of` | `visit_of` | done |
 | `height_of`, `pt_render_height` | `HEIGHT_OF` | done: every z at every eye height |
 | `vert_to_screen_angle` | `VERT_TO_SCREEN_ANGLE` | done |
@@ -95,7 +95,7 @@ ambitions.
 | mode5.h's cursor | `MODE5_AT`, `MODE5_EOR` (and `MODE5_EOR_X`, the mask in X), `MODE5_DOWN`, `MODE5_UP`, `MODE5_NEXT` | done, in the plotters' checks |
 | `pt_mode5_zero`, and `pt_mode5_down`, `_up` for the unplot | `UNPLOT_ROW`, `UNPLOT_MOVE` | done, in the unplot's checks |
 | `pt_mode5_plot` | — | not ported: only `close_columns` uses it (step 4), and it never ran in the sweep |
-| `inst_new`, `inst_clip`, `inst_hide` | — | not started (sprites) |
+| `inst_new`, `inst_clip`, `inst_hide` | `instance_new`, `instance_clip`, `instance_hide` (instance.6502); `PLOTTED_SIZE` (instance_macros.6502), `inst_new`'s `pw` and `ph` | done: each frame's instances in the walks' checks (each column's top, and its bottom where the top isn't 0: a hidden column's bottom is the pool's leftovers, never read); and 1,024 cases of 3 to 6 made-up instances in the capture's, `portalc_captureref`, for the paths the walk never takes (a floor level with the eye or above it, the centre's offset saturating, the draw order, the pool full, a hide over no columns); and a near sprite on a floor far below the eye, its offset past 255 rows |
 
 ### After the capture
 
@@ -135,7 +135,7 @@ or two bytes of zero page.
 | `visits[i].hc` (`pt_height`) | `visit_hclo`, `visit_hchi`, with `below` in bit 7 of `hchi` |
 | `visits[i].hf` | `visit_hflo`, `visit_hfhi`, likewise |
 | `visits[i].split_angle` | `visit_split_anglelo`, `visit_split_anglehi` |
-| `visits[i].inst` | — (sprites) |
+| `visits[i].inst` | `visit_instance` |
 | `pt_walk.vi`, `.x`, `.tmax`, `.bmin`, `.split_angle` | `walk_vi`, `span_x0`, `walk_tmax`, `walk_bmin`, `walk_split_angle` |
 | `pt_walk.u0`, `.u1`, `.c0`, `.c1` | `walk_u0`, `walk_u1`, `walk_c0`, `walk_c1` |
 | — | `walk_e0`, `walk_e1`: the ends' vertex cache entries |
@@ -167,6 +167,17 @@ or two bytes of zero page.
 | the plotters' `gm` | `grad`; and `grad2`, `grad3`, `grad4`, `grad_less1` |
 | `pt_plot_steep`'s `gi`, `gf` | `grad_whole`; `gf` is `line_grad`'s low byte itself (`STEEP`'s `grad_fraction`) |
 | `f` | `fraction` (rising, 255 less it): `run_y` itself |
+
+### The sprites' instances
+
+| C | 6502 |
+|---|---|
+| `pt_inst.sprite`, `.place` (`scale`, `x`, `y`) | `instance_sprite`, `instance_scalelo`/`hi`, `instance_xlo`/`xhi`, `instance_ylo`/`yhi` |
+| `pt_inst.ld` | `instance_logdepthlo`, `instance_logdepthhi` |
+| `pt_inst.cx0`, `.cx1`, `.p0`, `.p1` | `instance_x0`, `instance_x1`, `instance_pair0`, `instance_pair1` |
+| `pt_inst.clip`, `.cols`, `.whole` | `instance_cliplo`/`hi`, `instance_columns`, `instance_whole` (1 or 0) |
+| `num_insts`, `order`, `num_order` | `num_instances`, `draw_order`, `num_order` |
+| `clipmem`, `clip_used` | `clip_rows`, `clip_used` |
 
 ### The clips
 
@@ -202,7 +213,7 @@ or two bytes of zero page.
 | `edges[i].angle`, `.colour`, `.len8` | `edge_angle`, `edge_colour`, `edge_len8` |
 | `sides[i].v`, `.edge`, `.adj`, `.anghi` | `side_v`, `side_edge`, `side_adj`, `side_anghi` |
 | `pt_map_ring_next(across, pt_map_twin(m, s))` | `side_entry`, made by `portalc_mapasm`: the side after the twin, where a walk through the portal begins; 0 for a wall |
-| `sprites[i].x`, `.y`, `.art`, `.ls` | `sprite_xlo` and so on, `sprite_art`, `sprite_lslo`, `sprite_lshi` |
+| `sprites[i].v`, `.art`, `.ls` | `sprite_v`, `sprite_art`, `sprite_lslo`, `sprite_lshi`: the base's centre a vertex of its own, so the vertex cache sees it (in the C too) |
 | `arts` | `art_pate`, `art_pato`, `art_lo`, `art_hi`, `art0`... |
 | `num_verts`, `num_cells`... | `MAP_VERTS`, `MAP_CELLS`... (assembly-time constants) |
 
@@ -223,7 +234,9 @@ They have the same names as `pt_arith_tables`, except:
 `PT_` comes off: `PT_SCREEN_WIDTH` is `SCREEN_WIDTH`, `PT_CAM_HEIGHT` is
 `CAM_HEIGHT`, `PT_IN_FWD` is `IN_FWD`, `PT_MAX_VCACHE` is `MAX_VCACHE`,
 `PT_MAX_RECS` is `MAX_RECS`, `PT_MAX_DEPTH` is `MAX_DEPTH`, `PT_MAX_KEPT` is
-`MAX_KEPT`.
+`MAX_KEPT`, `PT_MAX_SPRITES` is `MAX_SPRITES`, `PT_CLIP_POOL` is `CLIP_POOL`,
+`PT_SPRITE_NEAR_L` is `SPRITE_NEAR_L`; and `PT_MAX_INSTS`, in whole words, is
+`MAX_INSTANCES`.
 They're all in constants.6502. `POST_NEAR` and `POST_SCALE` name numbers the
 C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 
@@ -353,9 +366,20 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   where the portal does, at the same screen angle in the new window, so the
   parent's `walk_u0`, `walk_e0` and `walk_c0` stay, and only `side_end` runs.
   The C's `enter` does the same, and asserts the angle.
-- **The walk leaves out sprites** (`inst_new`, `inst_clip`, `inst_hide`), and
-  the C's checks on side counts, a visit's columns running left to right,
-  and the window's range.
+- **The walk leaves out the C's checks** on side counts, a visit's columns
+  running left to right, and the window's range.
+- **`instance_new` leaves out two of the C's cases** that can't happen: the
+  log of the centre's offset under 0 (it's at least 14 * 256 less the
+  largest lsec, 1,447), and the floor's offset's under 0 (at least 17 * 256,
+  the floor's least, less 12 * 256, the deepest). Its exps take their tight
+  bounds: the scale's `EXP2_16 13` (the map's sprites asserted to fit), the
+  far floor offset's rows `EXP2_16 12`, and `exp2_sat` for the centre's
+  offset, which saturates as the C's does, and the near floor offset. The
+  draw order compares depths' logs unsigned, as each is over
+  `SPRITE_NEAR_L`.
+- **A check with the capture has the instances and the clips too**, as
+  `capture_root` makes the root's instance, and `instance_clip` reads the
+  bounds.
 - **The capture's split**: `capture_root` is capture.6502's, `capture`, which
   walks, walk.6502's, so the checks that only want the capture's parts
   needn't take the walk and the clips.
@@ -378,7 +402,12 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   and 32% three or more (up to 165k); those average a 55.5k capture, a
   36.6k fill and a 10.9k unplot. Turning on the spot at the start, 66% of
   the angles take two vsyncs or fewer.
-- Later: sprites, then moving, collision and `pt_vcache_locate`.
+- Sprites, in three pieces, each with its check:
+  1. ~~The instances in the capture: `inst_new`, `inst_clip`, `inst_hide` and
+     the draw order.~~ Done.
+  2. The plotters: spritescale's engine and rebuild, as sprite.c clips them.
+  3. `sprites` in the frame, and a whole-frame check.
+- Later: moving, collision and `pt_vcache_locate`.
 - To revisit, if the cycles are wanted: a `side_v1` map table, each side's
   end vertex (`pt_map_side_v1`), written by `portalc_mapasm`. `side_end`
   would then be `LDX side_v1,Y`, instead of finding the next side through

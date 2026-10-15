@@ -87,7 +87,7 @@ RC_TEST(sprite, boulder)
     RC_CHECK(pt_sprite_width(a), ==, (uint8_t)14);
     RC_CHECK(pt_sprite_height(a), ==, (uint8_t)16);
     RC_CHECK(sp->size, ==, (uint16_t)128);
-    RC_CHECK_TRUE(pt_map_cell_contains(&m, 1, sp->x, sp->y));
+    RC_CHECK_TRUE(pt_map_cell_contains(&m, 1, m.verts[sp->v].x, m.verts[sp->v].y));
 
     // byte for byte the boulder Baron assembles for spritescale, crossover
     // and all (from its listing)

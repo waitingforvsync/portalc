@@ -98,8 +98,7 @@ int main(int argc, char **argv)
           m.sides[i].adj != 0
               ? pt_map_ring_next(&m.cells[m.sides[i].adj], pt_map_twin(&m, (uint8_t)i))
               : 0);
-    FIELD("sprite_x", m.num_sprites, m.sprites[i].x);
-    FIELD("sprite_y", m.num_sprites, m.sprites[i].y);
+    FIELD("sprite_v", m.num_sprites, m.sprites[i].v);
     FIELD("sprite_art", m.num_sprites, m.sprites[i].art);
     FIELD("sprite_ls", m.num_sprites, m.sprites[i].ls);
     FIELD("art_e", 8u * m.num_arts, m.arts[i / 8].pats[i % 8].e);
@@ -114,7 +113,7 @@ int main(int argc, char **argv)
 
     printf("\nMAP_VERTS = LEN(map_vert_x)\nMAP_CELLS = LEN(map_cell_first)\n"
            "MAP_EDGES = LEN(map_edge_angle)\nMAP_SIDES = LEN(map_side_v)\n"
-           "MAP_SPRITES = LEN(map_sprite_x)\nMAP_ARTS = LEN(map_art_e) DIV 8\n"
+           "MAP_SPRITES = LEN(map_sprite_v)\nMAP_ARTS = LEN(map_art_e) DIV 8\n"
            "MAP_SHADES = LEN(map_shade_even)\n\n");
 
     printf("\\\\ The tables. A portal's entry is the side after its twin, the side across it, "
@@ -150,10 +149,7 @@ int main(int argc, char **argv)
     table("side_anghi", "MAP_SIDES", "map_side_anghi");
     table("side_entry", "MAP_SIDES", "map_side_entry");
     printf("\n");
-    table("sprite_xlo", "MAP_SPRITES", "LO(map_sprite_x)");
-    table("sprite_xhi", "MAP_SPRITES", "HI(map_sprite_x)");
-    table("sprite_ylo", "MAP_SPRITES", "LO(map_sprite_y)");
-    table("sprite_yhi", "MAP_SPRITES", "HI(map_sprite_y)");
+    table("sprite_v", "MAP_SPRITES", "map_sprite_v");
     table("sprite_art", "MAP_SPRITES", "map_sprite_art");
     table("sprite_lslo", "MAP_SPRITES", "LO(map_sprite_ls)");
     table("sprite_lshi", "MAP_SPRITES", "HI(map_sprite_ls)");

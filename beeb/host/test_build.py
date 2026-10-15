@@ -154,6 +154,10 @@ def capture_expected(c):
         ('HEIGHT_OF s2', 't_height2', 0, 0, bytes(h2s)),
         ('lines s1', 't_lines1', 0, 0, bytes(l1s)),
         ('lines s2', 't_lines2', 0, 0, bytes(l2s)),
+        ('instances s1', 't_instances1', 0, 0, hex_sums(c['insts'])[0]),
+        ('instances s2', 't_instances2', 0, 0, hex_sums(c['insts'])[1]),
+        ('deep s1', 't_deep1', 0, 0, hex_sums([c['deep']])[0]),
+        ('deep s2', 't_deep2', 0, 0, hex_sums([c['deep']])[1]),
     ]
 
 

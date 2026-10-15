@@ -1,0 +1,513 @@
+\\ instance.6502 - the sprites seen (render.c's inst_new, inst_clip, inst_hide): where each goes on
+\\ the screen, its place in the draw order, and the rows each of its columns shows.
+
+ASSERT LO(SPRITE_NEAR_L) == 0, "instance_new: the nearest depth's log a whole 256"
+ASSERT LO(CLIP_POOL) == 0, "instance_new: the clip pool whole pages"
+ASSERT MAX(map_sprite_ls)-SPRITE_NEAR_L < 13*256, "instance_new: a scale under 2^13 (EXP2_16 13)"
+
+\\ The frame's instances, the draw order, and the clip pool's bytes taken.
+
+ZA_AUTO1 num_instances                  ; instances made, the null one included
+ZA_AUTO1 num_order                      ; instances in the draw order
+ZA_AUTO2 clip_used                      ; the clip pool's bytes taken
+
+\\ The instances, numbered from 1 (entry 0's bytes are unused): spritescale's place for each, its
+\\ depth, its columns and pairs, and its rows in the pool. Then the draw order, far to near, and the
+\\ pool: each instance's columns' bottom pairs, then their tops (pairs counted up from the bottom).
+
+SECTION Frame
+    FITPAGE MAX_INSTANCES
+.instance_sprite SKIP MAX_INSTANCES     ; the map's sprite
+    FITPAGE MAX_INSTANCES
+.instance_scalelo SKIP MAX_INSTANCES    ; screen pixels a source column, and pairs a row, 8.8
+    FITPAGE MAX_INSTANCES
+.instance_scalehi SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_xlo SKIP MAX_INSTANCES        ; the left pixel column, signed
+    FITPAGE MAX_INSTANCES
+.instance_xhi SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_ylo SKIP MAX_INSTANCES        ; the bottom pair, signed
+    FITPAGE MAX_INSTANCES
+.instance_yhi SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_logdepthlo SKIP MAX_INSTANCES ; 256 log2 of its depth
+    FITPAGE MAX_INSTANCES
+.instance_logdepthhi SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_x0 SKIP MAX_INSTANCES         ; the screen columns it covers, [x0, x1)
+    FITPAGE MAX_INSTANCES
+.instance_x1 SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_pair0 SKIP MAX_INSTANCES      ; the pairs it covers, [pair0, pair1), clamped to the screen
+    FITPAGE MAX_INSTANCES
+.instance_pair1 SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_cliplo SKIP MAX_INSTANCES     ; its rows' place in the pool
+    FITPAGE MAX_INSTANCES
+.instance_cliphi SKIP MAX_INSTANCES
+    FITPAGE MAX_INSTANCES
+.instance_columns SKIP MAX_INSTANCES    ; the columns its cell's visits have shown
+    FITPAGE MAX_INSTANCES
+.instance_whole SKIP MAX_INSTANCES      ; 1 if each showed all of it there, else 0
+    FITPAGE MAX_INSTANCES
+.draw_order SKIP MAX_INSTANCES
+.clip_rows  SKIP CLIP_POOL
+ENDSECTION
+
+\\ A cell's sprite as it's seen, at the cell's first visit (inst_new): spritescale's place for it,
+\\ in logs as the lines are, and its place in the draw order; none if it can't be seen.
+\\
+\\ Inputs:
+\\     X: the visit
+\\     camx, camy, camangle: the camera
+\\     num_instances, num_order, clip_used: the instances so far
+\\
+\\ Outputs:
+\\     visit_instance,X: the instance, or 0
+\\     num_instances, num_order, clip_used, the draw order, the pool: with the instance
+\\     A, X, Y: corrupted
+
+.instance_new
+{
+    ZA_AUTO1 visit                      ; local: the visit
+    ZA_AUTO1 sprite                     ; local: its cell's sprite
+    ZA_AUTO2 term                       ; local: a sum's low byte, held, or a pair of bytes
+
+    STX visit
+    LDY visit_cell,X
+    LDA cell_sprite,Y:BEQ none
+
+    \\ its base's centre, a vertex: its world angle and its distance's log, the vertex cache's. Its
+    \\ view angle, beside or behind and it can't be seen; its steps off straight ahead
+
+    ZA_AUTO2 view                       ; local: its view angle, 10 bits: 768 on, left of ahead
+    ZA_AUTO1 steps                      ; local: its steps off straight ahead
+
+    STA sprite:TAX
+    LDA sprite_v,X:TAX
+    VCACHE_VERT_TO_X
+    TXA:TAY                             ; (its entry)
+    SEC
+    LDA vc_anglo,Y:SBC camangle:STA view
+    LDA vc_anghi,Y:SBC camangle+1:AND #3:STA view+1
+    BEQ right                           ; within a quarter turn right of straight ahead
+    CMP #3:BNE none                     ; beside or behind
+    LDA view:EOR #&FF:TAX               ; left: its middle is ~view steps off
+    BCS ahead                           ; (always: C set by the compare)
+    ZA_UNREACHABLE
+.right
+    LDX view
+.ahead
+    STX steps
+
+    \\ its depth's log, its distance's less lsec of its steps: nearer than 32 units, not drawn
+
+    ZA_AUTO2 depth                      ; local: 256 log2 of its depth
+
+    SEC
+    LDA vc_logdistlo,Y:SBC lsec16lo,X:STA depth
+    LDA vc_logdisthi,Y:SBC lsec16hi,X:STA depth+1
+    BMI none
+    CMP #HI(SPRITE_NEAR_L):BCS near
+.none
+    LDX visit
+    LDA #0:STA visit_instance,X
+    RTS
+.near
+
+    \\ its scale, 2^(ls - its depth's log), ls its own (the map's): under 1/256, not drawn. As it's
+    \\ no nearer than SPRITE_NEAR_L, the log's under 13 * 256
+
+    ZA_AUTO2 scale                      ; local: its scale, 8.8
+
+    LDX sprite
+    SEC
+    LDA sprite_lslo,X:SBC depth:STA term
+    LDA sprite_lshi,X:SBC depth+1
+    BMI none
+    TAY:LDX term
+    EXP2_16 13
+    STA scale:STY scale+1
+
+    \\ its plotted width, and its left column: half that less its centre's, 64 + 64 tan v in 8.8,
+    \\ by v's log sine and lsec: 14 * 256 + log |sin v| + lsec, 1,447 to 5,721, its exp &FFFF from
+    \\ 16 * 256. With the width 2q + r, it's (16,384 + 128 (1 - r) +- the exp) DIV 256, less q
+
+    ZA_AUTO2 art                        ; local: its art
+    ZA_AUTO2 width                      ; local: its plotted width, to 512
+    ZA_AUTO2 left                       ; local: its left column, signed
+
+    LDX sprite:LDY sprite_art,X
+    LDA art_lo,Y:STA art
+    LDA art_hi,Y:STA art+1
+    LDY #0:LDA (art),Y                  ; its columns
+    PLOTTED_SIZE scale
+    STA width:STY width+1
+    LDX view:LDA view+1
+    LOG_SINE                            ; X: where -log |sin v| is in lsec16
+    SEC
+    LDA #LO(14*256):SBC lsec16lo,X:STA term
+    LDA #HI(14*256):SBC lsec16hi,X:STA term+1
+    LDX steps
+    CLC
+    LDA term:ADC lsec16lo,X:STA term
+    LDA term+1:ADC lsec16hi,X
+    LDX term
+    JSR exp2_sat                        ; A, Y: the offset of the centre from column 64, 8.8
+    STA term:STY term+1
+    LDA width:LSR A                     ; C: r
+    LDA #0:ROR A:EOR #&80               ; 128 (1 - r)
+    LDX view+1:BNE left_of
+    ADC term                            ; (C clear) right of ahead: + the offset
+    LDA #HI(16384):ADC term+1:STA left
+    LDA #0:ROL A:STA left+1
+    BCC halved                          ; (always: C clear)
+    ZA_UNREACHABLE
+.left_of
+    SEC:SBC term                        ; left of it: - the offset
+    LDA #HI(16384):SBC term+1:STA left
+    LDA #0:SBC #0:STA left+1
+.halved
+    LDA width+1:LSR A:STA term+1
+    LDA width:ROR A:STA term            ; q
+    SEC
+    LDA left:SBC term:STA left
+    LDA left+1:SBC term+1:STA left+1
+
+    \\ the columns it covers on the screen: none, and it's not drawn
+
+    ZA_AUTO1 x0                         ; local: its columns on the screen, [x0, x1)
+    ZA_AUTO1 x1
+
+    LDA left+1:BMI off_left
+    BNE to_none                         ; right of the screen
+    LDA left:CMP #SCREEN_WIDTH:BCS to_none
+    STA x0
+    BCC from                            ; (always)
+    ZA_UNREACHABLE
+.to_none
+    JMP none
+.off_left
+    LDA #0:STA x0
+.from
+    CLC
+    LDA left:ADC width:TAX
+    LDA left+1:ADC width+1
+    BMI to_none                         ; its right end left of the screen
+    BNE capped                          ; past 255
+    CPX #SCREEN_WIDTH+1:BCC ended
+.capped
+    LDX #SCREEN_WIDTH
+.ended
+    STX x1
+    CPX x0:BEQ to_none:BCC to_none      ; no columns
+
+    \\ its bottom pair: 32 rows up, less (below the eye) or more (above) R, the floor's row's offset
+    \\ at its depth, as the floor's lines have it: 2^l, l the height's log less the depth's, from
+    \\ 17 * 256 - 12 * 256 at least. Under 16 * 256, R is its whole rows and the half's carry (at
+    \\ 128 below, past it above); on, 2^(l - 8 * 256), under 2^12, whole rows. Level, R is 0
+
+    ZA_AUTO2 rows                       ; local: R
+    ZA_AUTO2 bottom                     ; local: its bottom pair, signed
+
+    LDA #0:STA rows:STA rows+1
+    LDX visit
+    LDA visit_hfhi,X:AND #&7F:ORA visit_hflo,X:BEQ offset
+    SEC
+    LDA visit_hflo,X:SBC depth:STA term
+    LDA visit_hfhi,X:AND #&7F:SBC depth+1
+    CMP #16:BCS whole_rows
+    LDX term
+    JSR exp2_sat                        ; A, Y: the offset, 8.8
+    STY rows
+    LDX visit:LDY visit_hfhi,X:BMI below
+    CMP #129                            ; above: C if the offset's fraction is past a half
+    BCS carried
+    BCC offset                          ; (always)
+    ZA_UNREACHABLE
+.below
+    CMP #128                            ; below: C if it's a half or more
+    BCC offset
+.carried
+    INC rows:BNE offset
+    INC rows+1
+    BNE offset                          ; (always)
+    ZA_UNREACHABLE
+.whole_rows
+    SBC #8:TAY                          ; (C set) 8 * 256 less
+    LDX term
+    EXP2_16 12
+    STA rows:STY rows+1
+.offset
+    LDX visit:LDA visit_hfhi,X:BMI less
+    CLC
+    LDA #32:ADC rows:STA bottom
+    LDA #0:ADC rows+1:STA bottom+1
+    JMP height
+.reject
+    JMP none
+.less
+    SEC
+    LDA #32:SBC rows:STA bottom
+    LDA #0:SBC rows+1:STA bottom+1
+
+    \\ the pairs it covers on the screen: none, and it's not drawn
+
+    ZA_AUTO1 pair0                      ; local: its pairs on the screen, [pair0, pair1)
+    ZA_AUTO1 pair1
+
+.height
+    LDA bottom+1:BMI under
+    BNE reject                          ; over the screen
+    LDA bottom:CMP #SCREEN_HEIGHT:BCS reject
+    STA pair0
+    BCC to_top                          ; (always)
+    ZA_UNREACHABLE
+.under
+    LDA #0:STA pair0
+.to_top
+    LDY #1:LDA (art),Y                  ; its rows
+    PLOTTED_SIZE scale
+    CLC
+    ADC bottom:TAX
+    TYA:ADC bottom+1
+    BMI reject                          ; its top under the screen
+    BNE topped                          ; past 255
+    CPX #SCREEN_HEIGHT+1:BCC top
+.topped
+    LDX #SCREEN_HEIGHT
+.top
+    STX pair1
+    TXA:BEQ reject                      ; its top at the screen's bottom
+
+    \\ room for its rows in the pool, two bytes a column: none, and it's not drawn
+
+    ZA_AUTO2 used                       ; local: the pool's bytes taken, with its
+
+    LDA x1:SEC:SBC x0
+    ASL A:STA term                      ; its rows' bytes
+    LDA #0:ROL A:STA term+1
+    CLC
+    LDA clip_used:ADC term:STA used
+    LDA clip_used+1:ADC term+1:STA used+1
+    CMP #HI(CLIP_POOL):BCC room
+    BNE full
+    LDA used:BEQ room                   ; (over by a little, otherwise)
+.full
+    JMP none
+.room
+
+    \\ the instance: its tops 0, as no visit shows it yet
+
+    ZA_AUTO2 tops                       ; local: where its tops go in the pool
+
+    LDY num_instances
+    LDA sprite:STA instance_sprite,Y
+    LDA scale:STA instance_scalelo,Y
+    LDA scale+1:STA instance_scalehi,Y
+    LDA left:STA instance_xlo,Y
+    LDA left+1:STA instance_xhi,Y
+    LDA bottom:STA instance_ylo,Y
+    LDA bottom+1:STA instance_yhi,Y
+    LDA depth:STA instance_logdepthlo,Y
+    LDA depth+1:STA instance_logdepthhi,Y
+    LDA x0:STA instance_x0,Y
+    LDA x1:STA instance_x1,Y
+    LDA pair0:STA instance_pair0,Y
+    LDA pair1:STA instance_pair1,Y
+    LDA clip_used:STA instance_cliplo,Y
+    LDA clip_used+1:STA instance_cliphi,Y
+    LDA #0:STA instance_columns,Y
+    LDA #1:STA instance_whole,Y
+    LSR term+1:ROR term                 ; its columns
+    CLC
+    LDA term:ADC clip_used:TAX
+    LDA #0:ADC clip_used+1:TAY          ; its tops' place in the pool
+    CLC
+    TXA:ADC #LO(clip_rows):STA tops
+    TYA:ADC #HI(clip_rows):STA tops+1
+    LDY term:DEY
+    LDA #0
+.unshown
+    STA (tops),Y
+    DEY
+    BPL unshown
+    LDA used:STA clip_used
+    LDA used+1:STA clip_used+1
+
+    \\ into the draw order by depth, far first: on past each nearer one. Every depth's log is over
+    \\ SPRITE_NEAR_L, so the compare can be unsigned
+
+    LDY num_instances
+    STY term                            ; (the new instance)
+    LDX num_order
+    INC num_order
+.shift
+    TXA:BEQ placed
+    DEX
+    LDY draw_order,X
+    LDA instance_logdepthlo,Y:LDY term:CMP instance_logdepthlo,Y
+    LDY draw_order,X
+    LDA instance_logdepthhi,Y:LDY term:SBC instance_logdepthhi,Y
+    BCS behind                          ; as far or further: it stays in front of the new one
+    LDA draw_order,X:STA draw_order+1,X
+    JMP shift
+.behind
+    INX
+.placed
+    TYA:STA draw_order,X
+    LDX visit:STA visit_instance,X
+    INC num_instances
+    RTS
+}
+
+\\ A visit's rows in its cell's sprite's columns over its span (inst_clip): each column's bottom
+\\ pair and top from the bounds, or from the screen's edges where the extents say so. A visit that
+\\ shows all of the sprite leaves it whole.
+\\
+\\ Inputs:
+\\     Y: the instance
+\\     span_x0, span_x1: the visit's columns
+\\     walk_tmax, walk_bmin: its extents
+\\     bound_top, bound_bottom: its bounds, where the extents don't say they're the screen's edges
+\\
+\\ Outputs:
+\\     the pool: the instance's rows there
+\\     instance_columns, instance_whole: the instance's
+\\     A, X, Y: corrupted
+
+.instance_clip
+{
+    ZA_AUTO1 first                      ; local: the first column it covers in the span
+    ZA_AUTO1 count                      ; local: the columns
+    ZA_AUTO2 bottoms                    ; local: where their bottoms go in the pool
+    ZA_AUTO2 tops                       ; local: and their tops
+
+    \\ its columns in the span, none and there's nothing to do
+
+    LDA span_x0:CMP instance_x0,Y:BCS from
+    LDA instance_x0,Y
+.from
+    STA first
+    LDA span_x1:CMP instance_x1,Y:BCC to
+    LDA instance_x1,Y
+.to
+    SEC:SBC first:BEQ done:BCS some
+.done
+    RTS
+.some
+    STA count
+    CLC:ADC instance_columns,Y:STA instance_columns,Y
+
+    \\ whole, if the bottom extent's under the sprite and the top's over it
+
+    LDA #SCREEN_HEIGHT:SEC:SBC walk_bmin
+    CMP instance_pair0,Y:BEQ under
+    BCS part
+.under
+    LDA #SCREEN_HEIGHT:SEC:SBC walk_tmax
+    CMP instance_pair1,Y:BCS whole
+.part
+    LDA #0:STA instance_whole,Y
+.whole
+
+    \\ where the rows go: from the first column, its tops its width on from its bottoms
+
+    LDA first:SEC:SBC instance_x0,Y
+    CLC:ADC instance_cliplo,Y:TAX
+    LDA instance_cliphi,Y:ADC #0
+    PHA
+    TXA:CLC:ADC #LO(clip_rows):STA bottoms
+    PLA:ADC #HI(clip_rows):STA bottoms+1
+    LDA instance_x1,Y:SEC:SBC instance_x0,Y
+    CLC:ADC bottoms:STA tops
+    LDA bottoms+1:ADC #0:STA tops+1
+
+    \\ the bottoms: pair 0, the screen's, or 64 less each column's bottom row (a bound's at most 64,
+    \\ so C stays set)
+
+    LDA first:CLC:ADC count:TAX
+    DEX                                 ; the last column
+    LDY count:DEY
+    LDA walk_bmin:CMP #SCREEN_HEIGHT:BNE bottom_rows
+    LDA #0
+.bottom_edge
+    STA (bottoms),Y
+    DEY
+    BPL bottom_edge
+    BMI to_tops                         ; (always)
+    ZA_UNREACHABLE
+.bottom_rows
+    SEC
+.bottom_row
+    LDA #SCREEN_HEIGHT:SBC bound_bottom,X:STA (bottoms),Y
+    DEX:DEY
+    BPL bottom_row
+
+    \\ the tops: 64, the screen's, or 64 less each column's top row
+
+.to_tops
+    LDA first:CLC:ADC count:TAX
+    DEX
+    LDY count:DEY
+    LDA walk_tmax:BNE top_rows
+    LDA #SCREEN_HEIGHT
+.top_edge
+    STA (tops),Y
+    DEY
+    BPL top_edge
+    RTS
+.top_rows
+    SEC
+.top_row
+    LDA #SCREEN_HEIGHT:SBC bound_top,X:STA (tops),Y
+    DEX:DEY
+    BPL top_row
+    RTS
+}
+
+\\ A sprite hidden over a span (inst_hide), a visit the walk won't follow after all: its tops there
+\\ 0, and it's no longer whole.
+\\
+\\ Inputs:
+\\     Y: the instance
+\\     span_x0, span_x1: the columns
+\\
+\\ Outputs:
+\\     the pool: the instance's tops there 0
+\\     instance_whole: the instance's
+\\     A, X, Y: corrupted
+
+.instance_hide
+{
+    ZA_AUTO1 first                      ; local: the first column it covers in the span
+    ZA_AUTO2 tops                       ; local: where their tops are in the pool
+
+    LDA span_x0:CMP instance_x0,Y:BCS from
+    LDA instance_x0,Y
+.from
+    STA first
+    LDA span_x1:CMP instance_x1,Y:BCC to
+    LDA instance_x1,Y
+.to
+    SEC:SBC first:BEQ done:BCC done
+    TAX                                 ; the columns
+    LDA #0:STA instance_whole,Y
+    LDA first:SEC:SBC instance_x0,Y     ; from the first column, its width on from its bottoms
+    CLC:ADC instance_x1,Y
+    SEC:SBC instance_x0,Y
+    CLC:ADC instance_cliplo,Y:STA tops
+    LDA instance_cliphi,Y:ADC #0:STA tops+1
+    CLC
+    LDA tops:ADC #LO(clip_rows):STA tops
+    LDA tops+1:ADC #HI(clip_rows):STA tops+1
+    TXA:TAY:DEY
+    LDA #0
+.hide
+    STA (tops),Y
+    DEY
+    BPL hide
+.done
+    RTS
+}

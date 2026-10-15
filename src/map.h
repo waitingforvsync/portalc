@@ -68,10 +68,11 @@ typedef struct pt_cell {
 } pt_cell;
 
 // A sprite standing on its cell's floor. It lies wholly inside the cell
-// (its width as a disc around the base), and below the cell's ceiling.
+// (its width as a disc around the base), and below the cell's ceiling. Its
+// base's centre is a vertex of its own, so the vertex cache sees it as it
+// sees a cell's corners.
 typedef struct pt_sprite {
-    uint16_t x;          // the base's centre, in world units
-    uint16_t y;
+    uint8_t v;           // the vertex at its base's centre
     uint16_t size;       // height in world units; the width follows the art's aspect
     uint8_t art;         // index into the map's art
     int16_t ls;          // 256 log2(64 * 256 size / h): its scale's log, 8.8,
@@ -148,9 +149,9 @@ void pt_stress_scene_init(pt_map *m);
 // false in release.
 bool pt_map_validate(const pt_map *m);
 
-// A sprite of art art in m, size units tall, its base's centre at (x, y),
+// A sprite of art art in m, size units tall, its base's centre at vertex v,
 // with its scale's log made (by the host, which builds maps).
-pt_sprite pt_map_sprite(const pt_map *m, uint16_t x, uint16_t y, uint16_t size, uint8_t art);
+pt_sprite pt_map_sprite(const pt_map *m, uint8_t v, uint16_t size, uint8_t art);
 
 // The signed distance of a point from the line of cell c's side s, s16.8:
 // positive on the cell's interior side.

@@ -45,9 +45,10 @@ SWRAM_END = &C000
 \\
 \\   Persist   for good: the vertex cache, cell_visit, the camera (441 of 512 bytes)
 \\   Frame     the capture to the unplot: the records, toggle_end, the sprites' instances, order and
-\\             clip rows (1,717 of 1,792)
+\\             clip rows (1,712 of 1,792). The records first, whole pages, or the instances' tables
+\\             push them onto pages of their own (instance.6502 comes after plot.6502)
 \\   Capture   the capture alone: the visits, top and bot (on a page), the kept lines (992 of 1,280,
-\\             192 of them padding). As it ends, the visits clear their cells' cell_visit
+\\             160 of them padding). As it ends, the visits clear their cells' cell_visit
 \\   Between   over Capture, everything outside the capture: the tick, the fill, the sprites, the
 \\             unplot
 \\   JunkTop   T's junk rows: the plotters' overruns land there, and nothing reads them. As

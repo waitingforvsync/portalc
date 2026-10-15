@@ -123,7 +123,11 @@ ENDSECTION
     \\ on its bottom rows, so the opening shows a flat colour
 
 .cut
-    LDX walk_vi:LDY visit_cell,X
+    LDX walk_vi:LDY visit_instance,X:BEQ shut
+    JSR instance_hide                   ; its sprite hidden there again
+    LDX walk_vi
+.shut
+    LDY visit_cell,X
     LDX cell_ceil,Y
     LDA cell_floor,Y:TAY
     JSR pattern_xy
@@ -341,7 +345,8 @@ ENDSECTION
 }
 
 \\ Enter the child (enter): its walk in the walk's place over the span. A first visit makes its
-\\ window and begins after the twin; a later one resumes on its side. Then on past the span's start.
+\\ window and its sprite's instance, and begins after the twin; a later one resumes on its side.
+\\ Then on past the span's start, and its sprite's rows over the span.
 \\
 \\ Inputs:
 \\     X: the child's visit
@@ -351,7 +356,8 @@ ENDSECTION
 \\
 \\ Outputs:
 \\     walk_vi and the walk: the child's, on its first side ending right of span_x0
-\\     visit_side, visit_xr, visit_split_anglelo, visit_split_anglehi: the child's visit's
+\\     visit_side, visit_xr, visit_split_anglelo, visit_split_anglehi, visit_instance: its visit's
+\\     num_instances, num_order, clip_used, the instances, the draw order, the pool: its sprite's
 \\     A, X, Y: corrupted
 
 .enter
@@ -381,6 +387,8 @@ ENDSECTION
     LDA side_entry,Y:STA visit_side,X:TAY
     STX walk_vi
     JSR side_end
+    LDX walk_vi
+    JSR instance_new                    ; its cell's sprite, if it's seen
     JMP step
 
     \\ a later visit: in its window, on its side
@@ -401,6 +409,9 @@ ENDSECTION
 .stepped
     LDX walk_vi
     LDA span_x1:STA visit_xr,X
+    LDY visit_instance,X:BEQ done
+    JMP instance_clip                   ; its sprite's rows over the span
+.done
     RTS
 }
 

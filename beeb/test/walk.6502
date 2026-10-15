@@ -14,9 +14,9 @@ SECTION TestResults
 .t_t2       SKIP PLACES
 ENDSECTION
 
-\\ From each place, at each angle, the whole capture: each frame's counts, records, toggle_end and
-\\ visits, summed by place; T's sums after the unplot clears the first frame; and T's after the
-\\ place's other frames.
+\\ From each place, at each angle, the whole capture: each frame's counts, records, toggle_end,
+\\ visits and sprites' instances, summed by place; T's sums after the unplot clears the first
+\\ frame; and T's after the place's other frames.
 \\
 \\ Inputs:
 \\     none
@@ -76,6 +76,10 @@ ENDSECTION
     INX
     JMP visits
 .visited
+
+    \\ the sprites' instances
+
+    INSTANCE_SUMS sum1, sum2
 
     \\ the first frame cleared out of T again
 

@@ -1,9 +1,11 @@
 \\ test/capture.6502 - make test's check of the capture: its setup, root walk and the eye's cell's
-\\ sides from places in each cell, made-up lines, and HEIGHT_OF, for host/test_build.py.
+\\ sides from places in each cell, made-up lines, HEIGHT_OF and made-up instances, for test_build.
 
 INCLUDE "places.6502"
 
 LINES_HEIGHT = 17*256+31                ; the made-up lines' height's log (captureref's)
+INSTANCE_GROUPS = 64                    ; groups of made-up instance cases, a pair of sums each
+INSTANCE_CASES = 16                     ; the cases in a group
 
 SECTION TestResults
 .t_capture1 SKIP PLACES                 ; the capture's Fletcher sums, by the camera's place
@@ -12,6 +14,10 @@ SECTION TestResults
 .t_height2  SKIP &100
 .t_lines1   SKIP &100                   ; the made-up lines', by the start's place on the grid
 .t_lines2   SKIP &100
+.t_instances1 SKIP INSTANCE_GROUPS      ; the made-up instances', by group
+.t_instances2 SKIP INSTANCE_GROUPS
+.t_deep1    SKIP 1                      ; the deep floor's instances'
+.t_deep2    SKIP 1
 ENDSECTION
 
 \\ From each place, at every angle: the capture's setup and root walk, then the eye's cell walked
@@ -25,6 +31,8 @@ ENDSECTION
 \\     t_capture1, t_capture2: the capture's sums, by the camera's place
 \\     t_height1, t_height2: HEIGHT_OF's, by the eye's height
 \\     t_lines1, t_lines2: the made-up lines', by the start's place on the grid
+\\     t_instances1, t_instances2: the made-up instances', by group
+\\     t_deep1, t_deep2: the deep floor's instances'
 
 .test_capture
 {
@@ -186,5 +194,275 @@ ENDSECTION
     BEQ lined
     JMP lines
 .lined
+    JMP test_instances
+}
+
+\\ Made-up instances of the first cell's sprite that has one, for the paths the walk never takes,
+\\ as captureref makes them, its made-up values the next steps of a 16-bit Galois LFSR. A group's
+\\ cases share made-up bounds, each column's top then bottom, 0 to 64. A case starts with 0, 192,
+\\ 384 or 576 of the pool's bytes taken, and makes 3 to 6 instances (6 when they're near), each from
+\\ a made-up camera: an offset from the sprite, each part a signed byte times the case's 1, 2, 4 or
+\\ 8; its facing, made up 1 in 4 times, else the sprite's angle from it, give or take a signed byte
+\\ over 8, 4, 2 or 1; and the cell's floor's height as it's seen from an eye a signed byte over 4
+\\ (shifted) from it. Then each instance clipped over a made-up span, [x, x + 0 to 127) cut at 128,
+\\ with made-up extents, and the first hidden over another: each instance made (or 0), then the
+\\ instances, summed by group.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_instances1, t_instances2: their sums, by group
+
+.test_instances
+{
+    ZA_AUTO2 random                     ; local: the LFSR
+    ZA_AUTO1 cell                       ; local: the first cell with a sprite
+    ZA_AUTO1 vertex                     ; local: its sprite's base's centre
+    ZA_AUTO1 group                      ; local: the group
+    ZA_AUTO1 case                       ; local: the case in it
+    ZA_AUTO1 shifts                     ; local: the case's offsets' shifts, 0 to 3
+    ZA_AUTO1 calls                      ; local: the instances to make, to go
+    ZA_AUTO1 instance                   ; local: the instance to clip
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #LO(&ACE1):STA random
+    LDA #HI(&ACE1):STA random+1
+    LDX #0
+.find
+    INX
+    LDA cell_sprite,X:BEQ find
+    STX cell
+    TAX:LDA sprite_v,X:STA vertex
+    LDA #0:STA group
+
+    \\ the group's bounds
+
+.each_group
+    LDX #0
+.bounds
+    UP_TO_64 random:STA bound_top,X
+    UP_TO_64 random:STA bound_bottom,X
+    INX
+    BPL bounds                          ; to 127
+    LDA #0:STA case:STA sum1:STA sum2
+
+    \\ the case: the pool taken, the offsets' shifts, and the instances to make
+
+.each_case
+    LDA #1:STA num_instances
+    LDA #0:STA num_order
+    LFSR random
+    AND #3:TAX
+    LDA t_pools_lo,X:STA clip_used
+    LDA t_pools_hi,X:STA clip_used+1
+    LFSR random
+    AND #3:STA shifts
+    LDA #6
+    LDX shifts:BNE more
+    BEQ called                          ; (always)
+    ZA_UNREACHABLE
+.more
+    LFSR random
+    AND #3:CLC:ADC #3
+.called
+    STA calls
+
+    \\ an instance: the camera, its offset from the sprite a signed byte each way, shifted, the
+    \\ vertex cache emptied as it's moved
+
+    ZA_AUTO2 offset                     ; local: a part of the offset
+
+.each_call
+    FOR coordinate = 0..1
+        LFSR random
+        STA offset
+        ASL A:LDA #0:SBC #0:EOR #&FF:STA offset+1   ; the sign, extended
+        LDX shifts:BEQ shifted
+    .shift
+        ASL offset:ROL offset+1
+        DEX
+        BNE shift
+    .shifted
+        LDX vertex
+        CLC
+        IF coordinate == 0
+            LDA vert_xlo,X:ADC offset:STA camx
+            LDA vert_xhi,X:ADC offset+1:STA camx+1
+        ELSE
+            LDA vert_ylo,X:ADC offset:STA camy
+            LDA vert_yhi,X:ADC offset+1:STA camy+1
+        ENDIF
+    NEXT
+    JSR vcache_reset
+
+    \\ its facing: made up, or the sprite's angle from it, give or take
+
+    LFSR random
+    AND #3:BNE aimed
+    LFSR random
+    STA camangle
+    LFSR random
+    AND #3:STA camangle+1
+    JMP faced
+.aimed
+    LFSR random
+    LDX shifts
+.halve
+    CPX #3:BEQ halved
+    CMP #&80:ROR A
+    INX
+    BNE halve                           ; (always)
+    ZA_UNREACHABLE
+.halved
+    STA offset
+    ASL A:LDA #0:SBC #0:EOR #&FF:STA offset+1
+    LDX vertex
+    VCACHE_VERT_TO_X
+    CLC
+    LDA vc_anglo,X:ADC offset:STA camangle
+    LDA vc_anghi,X:ADC offset+1:AND #3:STA camangle+1
+
+    \\ the floor's height, from an eye near it; and the instance
+
+.faced
+    LFSR random
+    CMP #&80:ROR A
+    CMP #&80:ROR A
+    LDX cell
+    CLC:ADC cell_floorz,X:STA eye_z
+    LDA cell_floorz,X
+    HEIGHT_OF
+    STA visit_hfhi+1
+    STX visit_hflo+1
+    LDA cell:STA visit_cell+1
+    LDX #1
+    JSR instance_new
+    LDA visit_instance+1:FLETCHER sum1, sum2
+    DEC calls
+    BEQ clip
+    JMP each_call
+
+    \\ each instance clipped over a made-up span with made-up extents; the first hidden over another
+
+.clip
+    LDA #1:STA instance
+.each_clip
+    LDA instance:CMP num_instances:BEQ hide
+    LFSR random
+    AND #127:STA span_x0
+    LFSR random
+    AND #127:CLC:ADC span_x0
+    CMP #SCREEN_WIDTH+1:BCC clip_ended
+    LDA #SCREEN_WIDTH
+.clip_ended
+    STA span_x1
+    UP_TO_64 random:STA walk_tmax
+    UP_TO_64 random:STA walk_bmin
+    LDY instance
+    JSR instance_clip
+    INC instance
+    JMP each_clip
+.hide
+    LDA num_instances:CMP #2:BCC sum
+    LFSR random
+    AND #127:STA span_x0
+    LFSR random
+    AND #127:CLC:ADC span_x0
+    CMP #SCREEN_WIDTH+1:BCC hide_ended
+    LDA #SCREEN_WIDTH
+.hide_ended
+    STA span_x1
+    LDY #1
+    JSR instance_hide
+.sum
+    INSTANCE_SUMS sum1, sum2
+    INC case
+    LDA case:CMP #INSTANCE_CASES:BEQ grouped
+    JMP each_case
+.grouped
+    LDX group
+    LDA sum1:STA t_instances1,X
+    LDA sum2:STA t_instances2,X
+    INC group
+    LDA group:CMP #INSTANCE_GROUPS:BEQ done
+    JMP each_group
+.done
+    JMP test_deep
+}
+
+\\ A near sprite on a floor far below the eye, as captureref has it: the camera 33 to 40 units
+\\ straight ahead of it (west), facing it, the eye 14 to 21 steps over the floor. Its offset is
+\\ past 255 rows, in whole rows, and leaves a sprite this tall on the screen, which the made-up
+\\ cases all but miss: each instance made (or 0), then the instances, summed.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_deep1, t_deep2: their sums
+
+.test_deep
+{
+    ZA_AUTO1 cell                       ; local: the first cell with a sprite
+    ZA_AUTO1 vertex                     ; local: its sprite's base's centre
+    ZA_AUTO1 distance                   ; local: the camera's from it, west
+    ZA_AUTO1 rise                       ; local: the eye's over the floor, in steps
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDX #0
+.find
+    INX
+    LDA cell_sprite,X:BEQ find
+    STX cell
+    TAX:LDA sprite_v,X:STA vertex
+    LDA #0:STA sum1:STA sum2
+    LDA #33:STA distance
+.each_distance
+    LDA #14:STA rise
+.each_rise
+    LDA #1:STA num_instances
+    LDA #0:STA num_order:STA clip_used:STA clip_used+1
+    LDX vertex
+    SEC
+    LDA vert_xlo,X:SBC distance:STA camx
+    LDA vert_xhi,X:SBC #0:STA camx+1
+    LDA vert_ylo,X:STA camy
+    LDA vert_yhi,X:STA camy+1
+    JSR vcache_reset
+    LDX vertex
+    VCACHE_VERT_TO_X
+    LDA vc_anglo,X:STA camangle
+    LDA vc_anghi,X:STA camangle+1
+    LDX cell
+    LDA cell_floorz,X:SEC:SBC rise:STA eye_z
+    LDA cell_floorz,X
+    HEIGHT_OF
+    STA visit_hfhi+1
+    STX visit_hflo+1
+    LDA cell:STA visit_cell+1
+    LDX #1
+    JSR instance_new
+    LDA visit_instance+1:FLETCHER sum1, sum2
+    INSTANCE_SUMS sum1, sum2
+    INC rise
+    LDA rise:CMP #22:BEQ risen
+    JMP each_rise
+.risen
+    INC distance
+    LDA distance:CMP #41:BEQ done
+    JMP each_distance
+.done
+    LDA sum1:STA t_deep1
+    LDA sum2:STA t_deep2
     RTS
 }
+
+\\ The pool's bytes a case starts with taken.
+
+    FITPAGE 4
+.t_pools_lo EQUB LO({0, 192, 384, 576})
+    FITPAGE 4
+.t_pools_hi EQUB HI({0, 192, 384, 576})

@@ -26,6 +26,44 @@ static void hex(const uint8_t *b, unsigned n)
         printf("%02X", b[i]);
 }
 
+// The frame's instances: the counts, the draw order, then each one's fields and each column's
+// top, and its bottom if the top's not 0 (a column with a top of 0 shows nothing, so its bottom
+// isn't read, and the pool's leftovers there differ between the C and the Beeb).
+static void insts(void)
+{
+    uint8_t head[2] = {r.num_insts, r.num_order};
+    hex(head, sizeof head);
+    hex(r.order, r.num_order);
+    for (unsigned i = 1; i < r.num_insts; i++) {
+        const pt_inst *in = &r.insts[i];
+        uint8_t f[17] = {in->sprite,
+                         (uint8_t)in->place.scale,
+                         (uint8_t)(in->place.scale >> 8),
+                         (uint8_t)in->place.x,
+                         (uint8_t)((uint16_t)in->place.x >> 8),
+                         (uint8_t)in->place.y,
+                         (uint8_t)((uint16_t)in->place.y >> 8),
+                         (uint8_t)in->ld,
+                         (uint8_t)((uint16_t)in->ld >> 8),
+                         in->cx0,
+                         in->cx1,
+                         in->p0,
+                         in->p1,
+                         (uint8_t)in->clip,
+                         (uint8_t)(in->clip >> 8),
+                         in->cols,
+                         in->whole};
+        hex(f, sizeof f);
+        unsigned w = (unsigned)(in->cx1 - in->cx0);
+        for (unsigned c = 0; c < w; c++) {
+            const uint8_t *row = &r.clipmem[in->clip + c];
+            hex(&row[w], 1);
+            if (row[w] != 0)
+                hex(row, 1);    // its bottom, only where it shows something
+        }
+    }
+}
+
 int main(void)
 {
     pt_arith_init();
@@ -37,9 +75,10 @@ int main(void)
     pt_vcache_init(&vc);
     pt_render_init(&r, &m, &vc);
 
-    // whole captures from each place, at each angle: each frame's counts, records, toggle_end and
-    // visits; T after the first frame's unplot clears it; and T after the place's other frames,
-    // the junk rows too
+    // whole captures from each place, at each angle: each frame's counts, records, toggle_end,
+    // visits and sprites' instances (each one's place, depth, columns, pairs, clip and its columns'
+    // rows); T after the first frame's unplot clears it; and T after the place's other frames, the
+    // junk rows too
     static place at[PT_MAX_PLACES];
     static uint8_t cleared[sizeof r.tmem];
     unsigned n = places(&m, at);
@@ -64,6 +103,7 @@ int main(void)
                 uint8_t v[4] = {vs->cell, vs->side, vs->xr, vs->kept};
                 hex(v, sizeof v);
             }
+            insts();
             if (a == 0) {
                 pt_render_unplot(&r);
                 memcpy(cleared, r.tmem, sizeof cleared);

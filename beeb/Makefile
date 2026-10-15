@@ -13,10 +13,12 @@
 #   make test_clip       the clips, likewise
 #   make test_walk       the walk, the whole capture, likewise; and test_walk3
 #                        over the stress scene, its depth capped at 3
-#   make test_fill       the fill, likewise: each test/CHECK_portal.6502,
-#                        built with -D TEST=TRUE
-#   make map      remake src/mapdata.6502 from the C's demo scene, and
-#                 test/stressdata.6502 from its stress scene
+#   make test_fill       the fill, likewise
+#   make test_sprite     the sprite plotters, likewise: each
+#                        test/CHECK_portal.6502, built with -D TEST=TRUE
+#   make map      remake src/mapdata.6502 from the C's demo scene,
+#                 test/stressdata.6502 from its stress scene, and
+#                 test/spritedata.6502, the sprite check's arts
 #   make clean
 #
 # A running b2 is driven through its HTTP API on port 48075: reset into the
@@ -34,7 +36,7 @@ B2_WIN = b2
 
 SRC = boot.6502 portal.6502
 DEPS = $(SRC) $(wildcard src/*.6502) $(wildcard test/*.6502)
-CHECKS = arith vcache capture plot clip walk walk3 fill
+CHECKS = arith vcache capture plot clip walk walk3 fill sprite
 
 all: $(BUILD)/portal.ssd
 
@@ -76,6 +78,8 @@ map:
 	cmake --build $(CBUILD) --target portalc_mapasm
 	$(CBUILD)/src/portalc_mapasm > src/mapdata.6502
 	$(CBUILD)/src/portalc_mapasm --stress > test/stressdata.6502
+	cmake --build $(CBUILD) --target portalc_spriteref
+	$(CBUILD)/src/portalc_spriteref --arts > test/spritedata.6502
 
 clean:
 	rm -rf $(BUILD)

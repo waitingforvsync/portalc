@@ -65,11 +65,10 @@ RC_TEST(sprite, format)
     static pt_sprite_art a;
     pt_sprite_encode(&a, rows, pal);
 
-    // the header (the crossover: 3 rows ending a run in the one group of 3
-    // rows, 320 * 3 / 3, at most 255), the column offsets, then the runs
-    // bottom up: column 0 is 2 to row 0 and 1 to row 2; column 1 is 2 to
-    // row 1 and 0 to row 2
-    static const uint8_t want[] = {2, 3, 255, 5, 7, 0 << 3 | 2, 2 << 3 | 1, 1 << 3 | 2, 2 << 3 | 0};
+    // the header (the crossover from the plotters' work: the rebuild up to
+    // half size), the column offsets, then the runs bottom up: column 0 is 2
+    // to row 0 and 1 to row 2; column 1 is 2 to row 1 and 0 to row 2
+    static const uint8_t want[] = {2, 3, 128, 5, 7, 0 << 3 | 2, 2 << 3 | 1, 1 << 3 | 2, 2 << 3 | 0};
     for (uint8_t i = 0; i < sizeof want; i++)
         RC_CHECK(a.data[i], ==, want[i]);
 }
@@ -89,8 +88,9 @@ RC_TEST(sprite, boulder)
     RC_CHECK(sp->size, ==, (uint16_t)128);
     RC_CHECK_TRUE(pt_map_cell_contains(&m, 1, m.verts[sp->v].x, m.verts[sp->v].y));
 
-    // byte for byte the boulder Baron assembles for spritescale, crossover
-    // and all (from its listing)
+    // byte for byte the boulder Baron assembles for spritescale (from its
+    // listing), bar the crossover: its density rule's 250 (&FA), where the
+    // plotters' work makes it 255, the rebuild all the way to 1x
     static const uint8_t baron[] = {
         0x0E, 0x10, 0xFA, 0x11, 0x15, 0x1B, 0x22, 0x2A, 0x31, 0x36, 0x3F, 0x43, 0x4A, 0x52, 0x56,
         0x61, 0x66, 0x20, 0x42, 0x5B, 0x78, 0x00, 0x09, 0x10, 0x3A, 0x6B, 0x78, 0x00, 0x09, 0x2A,
@@ -101,7 +101,7 @@ RC_TEST(sprite, boulder)
         0x3C, 0x43, 0x4C, 0x53, 0x5C, 0x6B, 0x78, 0x00, 0x09, 0x20, 0x5B, 0x78, 0x30, 0x4B, 0x78,
     };
     for (uint8_t i = 0; i < sizeof baron; i++)
-        RC_CHECK(a->data[i], ==, baron[i]);
+        RC_CHECK(a->data[i], ==, i == 2 ? (uint8_t)255 : baron[i]);
 
     // no other cell has one
     for (uint8_t c = 2; c < m.num_cells; c++)

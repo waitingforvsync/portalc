@@ -15,6 +15,7 @@ INCLUDE "src/walk_macros.6502"
 INCLUDE "src/fill_macros.6502"
 INCLUDE "src/unplot_macros.6502"
 INCLUDE "src/instance_macros.6502"
+INCLUDE "src/sprite_macros.6502"
 INCLUDE "src/entry_macros.6502"
 
 SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
@@ -38,8 +39,9 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
 
 .maincode_image
     SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
-        INCLUDE "src/mapdata.6502"
+        INCLUDE "src/sprite.6502"
         INCLUDE "src/irq.6502"
+        INCLUDE "src/mapdata.6502"
     ENDSECTION
 
     INCLUDE "src/entry.6502"

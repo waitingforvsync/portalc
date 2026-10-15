@@ -34,24 +34,155 @@
 
 // ---- the format ----
 
-// The crossover: the stretch engine's work grows with the rows on which
-// some column of a group of four ends a run (ends that line up share an
-// event), the rebuild's doesn't, and they meet at about 1.25 times that
-// density (Baron's calibration): 320 times the ends over the groups' rows,
-// at most 255.
-static uint8_t crossover(const char *const rows[], uint8_t w, uint8_t h)
+// The crossover: the scale below which the per-pair rebuild costs less
+// than the stretch engine. The rebuild pays for every pair of a strip's
+// four slots, filled or not; the engine for its columns, their runs' ends
+// and the stretches between. So each plotter's work on the art is counted
+// at every scale under 1x, as the 6502 does it, the sprite whole on the
+// screen at each of a byte's four pixel alignments, and priced in cycles:
+// prices fitted to the 6502 plotters on the cycle-exact model (159 arts,
+// every eighth scale under 1x, 2026-10-15; within 2% of their cycles on
+// average). The crossover is the scale that makes the sum over all the
+// scales least, the rebuild under it and the engine from it: 0 if the
+// engine always wins, 255 if the rebuild does.
+
+// What a plotter does at a scale, over its strips.
+typedef struct pt_sprite_work {
+    uint16_t strips;                    // strips, and their columns tracked
+    uint16_t tracked;
+    uint16_t masked, solid, skipped;    // pairs: some slots keeping the
+                                        // background, none, all
+    uint16_t fetches, swallows;         // runs taken, and runs shrunk away
+    uint16_t calls;                     // the engine's handler calls, times
+                                        // its columns
+    uint16_t masked_stretches, solid_stretches, skipped_stretches;
+} pt_sprite_work;
+
+// Each thing's price in cycles, by plotter: 0 for what a plotter doesn't
+// do. The sprite, its rows and its columns are the setup's, which each
+// plotter walks on with its own share.
+typedef struct pt_sprite_prices {
+    uint16_t sprite, row, column;
+    uint16_t strip, tracked, masked, solid, skipped, fetch, swallow, call;
+    uint16_t masked_stretch, solid_stretch, skipped_stretch;
+} pt_sprite_prices;
+
+static const pt_sprite_prices rebuild_prices = {
+    .sprite = 262, .row = 35, .column = 37, .strip = 261, .masked = 123, .solid = 108,
+    .skipped = 63, .fetch = 66, .swallow = 31};
+static const pt_sprite_prices engine_prices = {
+    .sprite = 348, .row = 32, .column = 44, .strip = 76, .tracked = 71, .masked = 50, .solid = 31,
+    .fetch = 92, .swallow = 82, .call = 15, .masked_stretch = 27, .solid_stretch = 39,
+    .skipped_stretch = 12};
+
+static uint32_t price(const pt_sprite_prices *p, const pt_sprite_work *k, uint8_t w, uint8_t h)
 {
-    uint16_t ends = 0;
-    for (uint8_t g = 0; g < w; g = (uint8_t)(g + 4)) {
-        for (uint8_t i = 0; i < h; i++) {    // row i, up from the bottom
-            bool any = i == h - 1;
-            for (uint8_t c = g; c < w && c < g + 4 && !any; c++)
-                any = rows[h - 1 - i][c] != rows[h - 2 - i][c];
-            ends = (uint16_t)(ends + any);
+    return p->sprite + (uint32_t)p->row * h + (uint32_t)p->column * w +
+           (uint32_t)p->strip * k->strips + (uint32_t)p->tracked * k->tracked +
+           (uint32_t)p->masked * k->masked + (uint32_t)p->solid * k->solid +
+           (uint32_t)p->skipped * k->skipped + (uint32_t)p->fetch * k->fetches +
+           (uint32_t)p->swallow * k->swallows + (uint32_t)p->call * k->calls +
+           (uint32_t)p->masked_stretch * k->masked_stretches +
+           (uint32_t)p->solid_stretch * k->solid_stretches +
+           (uint32_t)p->skipped_stretch * k->skipped_stretches;
+}
+
+// The work at scale s (under 1x, so a column is a pixel at most), the
+// first strip's first x slots padding; false if nothing's on the screen,
+// when neither plotter runs. The row edges are setup's, the bottom pair 0;
+// the column walk findcol's.
+static bool work(const char *const rows[], uint8_t w, uint8_t h, uint8_t s, uint8_t x,
+                 pt_sprite_work *k)
+{
+    uint8_t py[PT_SPRITE_MAX_ROWS + 1];
+    for (uint8_t i = 0; i <= h; i++)
+        py[i] = (uint8_t)((128u + (uint16_t)(i * s)) >> 8);
+    uint8_t top = py[h];
+    uint8_t slots[3 + PT_SPRITE_MAX_COLS];    // each slot's column, w for padding
+    uint8_t n = 0;
+    while (n < x)
+        slots[n++] = w;
+    uint16_t xacc = 128;
+    for (uint8_t c = 0; c < w; c++) {
+        uint16_t next = (uint16_t)(xacc + s);
+        if ((next >> 8) != (xacc >> 8))
+            slots[n++] = c;
+        xacc = next;
+    }
+    if (top == 0 || n == x)
+        return false;
+    *k = (pt_sprite_work) {0};
+    for (uint8_t st = 0; st < n; st = (uint8_t)(st + 4)) {
+        uint8_t code[4][PT_SCREEN_HEIGHT] = {{0}};    // each slot's colour by pair, 0 if none
+        bool ends[PT_SCREEN_HEIGHT] = {false};         // the run ends: the engine's events
+        uint8_t tracked = 0;
+        for (uint8_t i = 0; i < 4 && st + i < n; i++) {
+            uint8_t c = slots[st + i];
+            if (c == w)
+                continue;
+            tracked++;
+            for (uint8_t r = 0, first = 0; r < h; r++) {
+                char ch = rows[h - 1 - r][c];
+                if (r != h - 1 && ch == rows[h - 2 - r][c])
+                    continue;
+                if (py[first] == py[r + 1]) {
+                    k->swallows++;
+                } else {
+                    k->fetches++;
+                    if (py[r + 1] < top)
+                        ends[py[r + 1]] = true;
+                }
+                memset(&code[i][py[first]], ch - '0', (size_t)(py[r + 1] - py[first]));
+                first = (uint8_t)(r + 1);
+            }
+        }
+        k->strips++;
+        k->tracked = (uint16_t)(k->tracked + tracked);
+        for (uint8_t p = 0; p < top; p++) {
+            bool any = code[0][p] || code[1][p] || code[2][p] || code[3][p];
+            bool all = code[0][p] && code[1][p] && code[2][p] && code[3][p];
+            bool begins = p == 0 || ends[p];
+            if (begins)
+                k->calls = (uint16_t)(k->calls + tracked);
+            if (all) {
+                k->solid++;
+                k->solid_stretches = (uint16_t)(k->solid_stretches + begins);
+            } else if (any) {
+                k->masked++;
+                k->masked_stretches = (uint16_t)(k->masked_stretches + begins);
+            } else {
+                k->skipped++;
+                k->skipped_stretches = (uint16_t)(k->skipped_stretches + begins);
+            }
         }
     }
-    uint32_t t = 320u * ends / ((uint32_t)((w + 3) / 4) * h);
-    return t > 255 ? (uint8_t)255 : (uint8_t)t;
+    return true;
+}
+
+static uint8_t crossover(const char *const rows[], uint8_t w, uint8_t h)
+{
+    uint32_t rebuild[256] = {0}, engine[256] = {0};
+    uint32_t total = 0;    // all the engine's: the sum with the crossover 0
+    for (unsigned s = 1; s < 256; s++) {
+        for (uint8_t x = 0; x < 4; x++) {
+            pt_sprite_work k;
+            if (!work(rows, w, h, (uint8_t)s, x, &k))
+                continue;
+            rebuild[s] += price(&rebuild_prices, &k, w, h);
+            engine[s] += price(&engine_prices, &k, w, h);
+        }
+        total += engine[s];
+    }
+    uint32_t least = total;
+    uint8_t t = 0;
+    for (unsigned s = 1; s < 256; s++) {
+        total = total - engine[s] + rebuild[s];    // the rebuild under s + 1
+        if (total < least) {
+            least = total;
+            t = (uint8_t)(s == 255 ? 255 : s + 1);
+        }
+    }
+    return t;
 }
 
 void pt_sprite_encode(pt_sprite_art *a, const char *const rows[], const uint8_t pal[7])
@@ -115,8 +246,8 @@ typedef struct pt_sprite_setup {
     uint8_t sx0;                           // the first on-screen pixel column
     uint8_t strips;                        // byte columns from there to the right edge
     uint8_t c0, rem0;                      // the column walk's start: the first
-    uint16_t xacc0;                        // column with pixels on screen, those
-                                           // pixels, and the edge accumulator
+    uint8_t xf0;                           // column with pixels on screen, those
+                                           // pixels, and its edge's fraction
 } pt_sprite_setup;
 
 // plot_setup: the row edges, and where the column walk starts; false when
@@ -128,10 +259,10 @@ typedef struct pt_sprite_setup {
 // rows run to thousands of pairs) storing 0s, and counting k0; on it, a
 // two-byte add, since the top byte is 0 and the pair under 64 so nothing
 // carries out, and CMP #64 : BCS top leaves the carry clear for the next
-// ADC; past the top, 64s. The column accumulator is spritescale's 16 bits:
-// only its whole byte's differences count, and a column is under 256
-// pixels wide. The walk is spritescale's poscol, the pixels hanging off the
-// left 16 bits.
+// ADC; past the top, 64s. Only the column edge's fraction is kept, where
+// spritescale keeps 16 bits: a column's pixels are the scale's whole part,
+// and 1 more when the fraction carries. The walk is spritescale's poscol,
+// the pixels hanging off the left 16 bits.
 static bool setup(pt_sprite_setup *s, const pt_sprite_art *a, pt_sprite_place p)
 {
     s->spr = a->data;
@@ -165,14 +296,14 @@ static bool setup(pt_sprite_setup *s, const pt_sprite_art *a, pt_sprite_place p)
     // the first column with pixels on screen: past the shrunk away, and
     // those hanging off the left, whole columns and then part of one
     uint8_t c = 0;
-    uint16_t xacc = 128;
+    uint8_t xf = 128;
     uint8_t rem = 0;
     for (;; c++) {
         if (c == s->wid)
             return false;    // every column shrunk or clipped away
-        uint8_t prev = (uint8_t)(xacc >> 8);
-        xacc = (uint16_t)(xacc + p.scale);
-        rem = (uint8_t)((uint8_t)(xacc >> 8) - prev);
+        uint16_t edge = (uint16_t)(xf + (p.scale & 255));
+        xf = (uint8_t)edge;
+        rem = (uint8_t)((p.scale >> 8) + (edge >> 8));
         if (rem == 0)
             continue;
         if (lclip == 0)
@@ -185,26 +316,26 @@ static bool setup(pt_sprite_setup *s, const pt_sprite_art *a, pt_sprite_place p)
     }
     s->c0 = c;
     s->rem0 = rem;
-    s->xacc0 = xacc;
+    s->xf0 = xf;
     return true;
 }
 
 // The column walk's state.
 typedef struct pt_sprite_walk {
-    uint8_t c;        // the source column being assigned
-    uint8_t rem;      // its pixels not yet assigned
-    uint16_t xacc;    // its right edge, 8.8, wrapping
-    uint8_t slot;     // the slot being filled, 0..3
+    uint8_t c;       // the source column being assigned
+    uint8_t rem;     // its pixels not yet assigned
+    uint8_t xf;      // its right edge's fraction
+    uint8_t slot;    // the slot being filled, 0..3
 } pt_sprite_walk;
 
-// findcol: column c's width from the edge accumulator, a zero-width column
-// (shrunk away) passed for the next; false when the sprite runs out first.
+// findcol: column c's width from its edge, a zero-width column (shrunk
+// away) passed for the next; false when the sprite runs out first.
 static bool findcol(const pt_sprite_setup *s, pt_sprite_walk *w)
 {
     for (; w->c != s->wid; w->c++) {
-        uint8_t prev = (uint8_t)(w->xacc >> 8);
-        w->xacc = (uint16_t)(w->xacc + s->scale);
-        w->rem = (uint8_t)((uint8_t)(w->xacc >> 8) - prev);
+        uint16_t edge = (uint16_t)(w->xf + (s->scale & 255));
+        w->xf = (uint8_t)edge;
+        w->rem = (uint8_t)((s->scale >> 8) + (edge >> 8));
         if (w->rem != 0)
             return true;
     }
@@ -295,10 +426,11 @@ static uint8_t classify(const pt_sprite_setup *s, pt_sprite_clip clip, uint8_t b
 //   STA (scr),Y : DEY : STA (scr),Y : DEY : BMI adjust : DEX : BNE
 // 23 cycles a pair against 29, picked once a stretch (LDA data_odd : CMP
 // data_even : BNE solidloop); and a skip needn't step the pointer at all,
-// as pairs are counted from the screen's bottom: the next pair's cursor is
-// two lookups (LDX cnt : LDY pairy,X : LDA pairpage,X : ORA drawpage),
-// about 17 cycles against skiploop's 41, the same tables placing each
-// strip's start.
+// as pairs are counted from the screen's bottom: the next pair's cursor
+// comes from the pair, its odd scanline s = 127 - 2p at s AND 7 in block
+// s >> 3 (ASL A : EOR #127 : TAX : AND #7 : TAY : LDA shr3,X : ORA base),
+// about 23 cycles against skiploop's 41, the same placing each strip's
+// start.
 static void stretch(uint8_t *fb, uint8_t bc, uint8_t from, uint8_t to, uint8_t mask, uint8_t de,
                     uint8_t dodd)
 {
@@ -384,6 +516,19 @@ static uint8_t nearest(const pt_sprite_engine *e, uint8_t lim)
     return lim;
 }
 
+// A clipped strip's next event: the nearest slot's, the last of those at
+// the same pair (the 6502's CMP : BCC), or the strip's end if none.
+static uint8_t nearest_event(const uint8_t ev[4], uint8_t end, uint8_t *slot)
+{
+    for (uint8_t i = 0; i < 4; i++) {
+        if (ev[i] <= end) {
+            end = ev[i];
+            *slot = i;
+        }
+    }
+    return end;
+}
+
 // The composed state empty, and every column's first run fetched at the
 // strip's first pair (its cp there).
 static void strip_begin(pt_sprite_engine *e, uint8_t start)
@@ -423,19 +568,19 @@ static void strip_engine(uint8_t *fb, pt_sprite_engine *e, uint8_t bc, const pt_
 // (run_over). Its slots open, their columns' current colours merged in, at
 // the bottoms of their windows, and close, blanked, at the tops; those shut
 // to begin with are taken out of their columns' masks, so the runs never
-// write them. The events are a short list per strip, sorted, and the next
-// one's pair is a fifth value in the handler's min, the strip's end its
-// sentinel; at stretchdone, CMP nextev rather than ph. An event goes before
-// a run change at the same pair (they commute), and an opening reads its
-// column's colour from the run byte before idx: no colour kept a column.
+// write them. Each slot keeps its next event (its opening, then its
+// closing, but not one at the strip's end, which would never come and
+// would only slow the 6502's search), and the nearest is a fifth value in
+// the handler's min, the strip's end its sentinel; at stretchdone, CMP
+// nextev rather than ph. An event goes before a run change at the same pair
+// (they commute), and an opening reads its column's colour from the run
+// byte before idx: no colour kept a column.
 static void strip_engine_clip(uint8_t *fb, pt_sprite_engine *e, uint8_t bc, uint8_t covered,
                               const pt_sprite_win *wn)
 {
-    // the events: a slot and its opening (bit 7) or closing, by pair
-    uint8_t evp[8];
-    uint8_t evs[8];
-    uint8_t nev = 0;
+    uint8_t ev[4];    // each slot's next event's pair, 0xFF if none
     for (uint8_t i = 0; i < 4; i++) {
+        ev[i] = 0xFF;
         if ((covered & slotbits_[i]) == 0)
             continue;
         uint8_t lo = wn->lo[i];
@@ -444,31 +589,17 @@ static void strip_engine_clip(uint8_t *fb, pt_sprite_engine *e, uint8_t bc, uint
             e->t[e->own[i]].colmask &= (uint8_t)~slotbits_[i];    // shut to begin with
         if (lo >= hi)
             continue;    // and for good
-        if (lo > wn->start) {
-            evp[nev] = lo;
-            evs[nev++] = (uint8_t)(0x80 | i);
-        }
-        if (hi < wn->end) {
-            evp[nev] = hi;
-            evs[nev++] = i;
-        }
-    }
-    for (uint8_t i = 1; i < nev; i++) {
-        for (uint8_t j = i; j > 0 && evp[j - 1] > evp[j]; j--) {
-            uint8_t tp = evp[j];
-            evp[j] = evp[j - 1];
-            evp[j - 1] = tp;
-            uint8_t ts = evs[j];
-            evs[j] = evs[j - 1];
-            evs[j - 1] = ts;
-        }
+        if (lo > wn->start)
+            ev[i] = lo;
+        else if (hi < wn->end)
+            ev[i] = hi;
     }
 
     for (uint8_t k = 0; k < e->n; k++)
         e->t[k].idx = run_over(e->s, e->t[k].idx, wn->start);
     strip_begin(e, wn->start);
-    uint8_t ev = 0;
-    uint8_t nextev = nev != 0 ? evp[0] : wn->end;
+    uint8_t slot = 0;
+    uint8_t nextev = nearest_event(ev, wn->end, &slot);
     for (;;) {
         for (uint8_t k = 0; k < e->n; k++)
             if (e->t[k].cp == e->cnt)
@@ -477,20 +608,20 @@ static void strip_engine_clip(uint8_t *fb, pt_sprite_engine *e, uint8_t bc, uint
         stretch(fb, bc, e->cnt, next, e->mask, e->de, e->dodd);
         e->cnt = next;
         while (e->cnt == nextev) {
-            if (ev == nev)
+            if (nextev == wn->end)
                 return;
-            uint8_t i = (uint8_t)(evs[ev] & 3);
-            uint8_t bit = slotbits_[i];
-            pt_sprite_track *t = &e->t[e->own[i]];
-            if (evs[ev] & 0x80) {
+            uint8_t bit = slotbits_[slot];
+            pt_sprite_track *t = &e->t[e->own[slot]];
+            if (ev[slot] == wn->lo[slot]) {
+                ev[slot] = wn->hi[slot] < wn->end ? wn->hi[slot] : (uint8_t)0xFF;
                 t->colmask |= bit;
                 merge(e, bit, (uint8_t)(e->s->spr[(uint8_t)(t->idx - 1u)] & 7));
             } else {
+                ev[slot] = 0xFF;
                 t->colmask &= (uint8_t)~bit;
                 merge(e, bit, 0);
             }
-            ev++;
-            nextev = ev < nev ? evp[ev] : wn->end;
+            nextev = nearest_event(ev, wn->end, &slot);
         }
     }
 }
@@ -532,7 +663,7 @@ void pt_sprite_plot_engine(uint8_t *fb, const pt_sprite_art *a, pt_sprite_place 
     if (!setup(&s, a, p))
         return;
     pt_sprite_engine e = {.s = &s};
-    pt_sprite_walk w = {.c = s.c0, .rem = s.rem0, .xacc = s.xacc0, .slot = (uint8_t)(s.sx0 & 3)};
+    pt_sprite_walk w = {.c = s.c0, .rem = s.rem0, .xf = s.xf0, .slot = (uint8_t)(s.sx0 & 3)};
     uint8_t bc = (uint8_t)(s.sx0 >> 2);
     for (uint8_t strips = s.strips;;) {
         assign(&s, &w, &e);
@@ -562,7 +693,6 @@ typedef struct pt_sprite_slot {
                        // its window's opening or closing
     uint8_t ce, co;    // its run's even and odd patterns, masked to the slot
     uint8_t cm;        // the slot's bit if it shows the background, else 0
-    uint8_t hi;        // a clipped strip's: the top of the slot's window
 } pt_sprite_slot;
 
 static void dummy(pt_sprite_slot *sl, uint8_t i)
@@ -649,7 +779,6 @@ static void strip_rebuild_clip(uint8_t *fb, const pt_sprite_setup *s, pt_sprite_
         uint8_t idx = sl[i].idx;
         dummy(&sl[i], i);
         sl[i].idx = idx;
-        sl[i].hi = wn->hi[i];
         if (wn->lo[i] < wn->hi[i])
             sl[i].ev = wn->lo[i];
     }
@@ -658,12 +787,12 @@ static void strip_rebuild_clip(uint8_t *fb, const pt_sprite_setup *s, pt_sprite_
             pt_sprite_slot *q = &sl[i];
             if (x != q->ev)
                 continue;
-            if (x == q->hi) {
+            if (x == wn->hi[i]) {
                 dummy(q, i);
                 continue;
             }
             uint8_t end = afetch(s, q, i, x, true);
-            q->ev = end < q->hi ? end : q->hi;
+            q->ev = end < wn->hi[i] ? end : wn->hi[i];
         }
         rebuild_pair(fb, bc, x, sl);
     }
@@ -676,7 +805,7 @@ void pt_sprite_plot_rebuild(uint8_t *fb, const pt_sprite_art *a, pt_sprite_place
     pt_sprite_setup s;
     if (!setup(&s, a, p))
         return;
-    pt_sprite_walk w = {.c = s.c0, .xacc = s.xacc0};
+    pt_sprite_walk w = {.c = s.c0, .xf = s.xf0};
     uint8_t lead = (uint8_t)(s.sx0 & 3);    // the first strip's padding slots
     bool exhausted = false;
     uint8_t bc = (uint8_t)(s.sx0 >> 2);

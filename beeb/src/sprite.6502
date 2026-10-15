@@ -1,0 +1,756 @@
+\\ sprite.6502 - the sprites over the fill (sprite.c): spritescale's art drawn by its two plotters,
+\\ the stretch engine and the per-pair rebuild, clipped to the pairs each screen column shows.
+
+\\ The sprite being plotted (sprite.c's setup's): its art, its rows' edges and its column walk.
+
+ZA_AUTO2 art_data                       ; its art's data, in spritescale's format
+ZA_AUTO1 art_colours                    ; its colours' place in art_pate and art_pato: art * 8
+ZA_AUTO1 art_end                        ; its columns + 3: past its last column's index byte
+ZA_AUTO1 top_pair                       ; its top edge's pair, 0 to 64
+ZA_AUTO1 under8                         ; 8 times its first source row on the screen
+ZA_AUTO1 first_pixel                    ; its first pixel column on the screen
+ZA_AUTO1 strips_left                    ; byte columns from the strip to the screen's right edge
+ZA_AUTO1 source_column                  ; the column walk: the column being assigned, + 3
+ZA_AUTO1 source_pixels                  ; its pixels not yet assigned
+ZA_AUTO1 source_edge                    ; its right edge's fraction
+ZA_AUTO2 screen                         ; the cursor: the strip's block, its page as it goes up
+
+\\ A strip's windows (sprite.c's pt_sprite_win): each covered slot's, and the pairs it runs over.
+
+ZA_AUTO 4, window_bottom                ; each slot's first pair shown
+ZA_AUTO 4, window_top                   ; and the pair past its last
+ZA_AUTO1 strip_start                    ; the strip's first pair
+ZA_AUTO1 strip_end                      ; and the pair past its last
+
+\\ The stretch engine's strip: its tracked columns, and its composed state.
+
+ZA_AUTO 4, track_next                   ; each tracked column's next run byte
+ZA_AUTO 4, track_end                    ; the pair its run ends at
+ZA_AUTO 4, track_slots                  ; the slots it shows, less any the clip has shut
+ZA_AUTO1 strip_pair                     ; the pair reached
+ZA_AUTO1 strip_mask                     ; the slots keeping the background
+ZA_AUTO1 strip_even                     ; the even scanlines' data
+ZA_AUTO1 strip_odd                      ; and the odd's
+ZA_AUTO1 strip_uncovered                ; the slots the first tracked column doesn't show
+ZA_AUTO1 next_event                     ; the next clip event's pair: the strip's end if none
+
+\\ The rebuild's strip: its four slots.
+
+ZA_AUTO 4, slot_next                    ; each slot's next run byte
+ZA_AUTO 4, slot_event                   ; the pair of its next event: &FF on a dummy
+ZA_AUTO 4, slot_even                    ; its run's patterns, masked to the slot
+ZA_AUTO 4, slot_odd
+ZA_AUTO 4, slot_mask                    ; its bit if it keeps the background, else 0
+
+\\ Each source row's bottom edge's pair, clamped to the screen, and the top edge's.
+
+SECTION Between
+.row_edge   SKIP 33
+ENDSECTION
+
+\\ Plot a sprite into the buffer not on show (pt_sprite_plot): its row edges and where the column
+\\ walk starts (setup), then the per-pair rebuild under its art's crossover, else the stretch
+\\ engine. Nothing when it's off the screen.
+\\
+\\ Inputs:
+\\     art, scale, x, y: the art, its scale (8.8, to 16x), its left pixel column and bottom pair
+\\         (signed, the pair counted up from the screen's bottom)
+\\     bottoms, tops, x0: the clip: each column's first pair shown and the pair past its last, from
+\\         column x0 (hi <= lo shows none), for every column the sprite covers
+\\     whole: non-zero if every column it covers shows all of it
+\\     base: the buffer's page
+\\
+\\ Outputs:
+\\     the buffer: the sprite
+\\     A, X, Y: corrupted
+
+.sprite_plot
+{
+    ZA_AUTO1 art                        ; in: the art, under 32
+    ZA_AUTO2 scale                      ; in: screen pixels a source column, and pairs a row, 8.8
+    ZA_AUTO2 x                          ; in: the left pixel column, signed
+    ZA_AUTO2 y                          ; in: the bottom pair, signed
+    ZA_AUTO2 bottoms                    ; in: the clip's first pairs shown
+    ZA_AUTO2 tops                       ; in: and the pairs past their last
+    ZA_AUTO1 x0                         ; in: the clip's first column
+    ZA_AUTO1 whole                      ; in: non-zero: every column shows all of it
+    ZA_AUTO1 height                     ; local: the art's rows
+
+    LDX art
+    LDA art_lo,X:STA art_data
+    LDA art_hi,X:STA art_data+1
+    TXA:ASL A:ASL A:ASL A:STA art_colours
+    LDY #0:LDA (art_data),Y
+    ADC #3:STA art_end                  ; (C clear: the art's under 32)
+    INY:LDA (art_data),Y:STA height
+
+    \\ each row edge's pair, round(k scale) up from the bottom pair, clamped: under the screen (a
+    \\ three-byte add) 0, counting the last such edge; on it (a two-byte add: the top byte's 0 and
+    \\ the pair under 64, so nothing carries out) itself; past it 64
+
+    ZA_AUTO 3, edge                     ; local: the edge, 16.8 signed, the half in
+
+    LDA #128:STA edge
+    LDA y:STA edge+1
+    LDA y+1:STA edge+2
+    LDX #0:STX under8
+.under
+    LDA edge+2:BMI below
+    BNE over                            ; past 255
+    LDA edge+1:BNE on
+.below
+    LDA #0:STA row_edge,X
+    STX under8                          ; the last edge at the screen's bottom or under it
+    CPX height:BEQ edged
+    CLC
+    LDA edge:ADC scale:STA edge
+    LDA edge+1:ADC scale+1:STA edge+1
+    LDA edge+2:ADC #0:STA edge+2
+    INX
+    JMP under
+.on_next
+    LDA edge:ADC scale:STA edge         ; (C clear)
+    LDA edge+1:ADC scale+1:STA edge+1   ; (C clear after)
+    INX
+.on
+    CMP #SCREEN_HEIGHT:BCS over
+    STA row_edge,X
+    CPX height:BNE on_next              ; (C clear under it)
+    BEQ edged                           ; (always)
+    ZA_UNREACHABLE
+.over
+    LDA #SCREEN_HEIGHT
+.over_next
+    STA row_edge,X
+    CPX height:BEQ edged
+    INX
+    BNE over_next                       ; (always)
+    ZA_UNREACHABLE
+.edged
+    LDA row_edge,X:STA top_pair
+    LDA under8:ASL A:ASL A:ASL A:STA under8
+    LDA row_edge:CMP top_pair:BNE across
+.nothing
+    RTS                                 ; wholly under or over the screen, or right of it
+.across
+
+    \\ its first column on the screen, and the column walk to its first with pixels there: past
+    \\ those shrunk away, and the pixels hanging off the left, whole columns and then part of one.
+    \\ A column's pixels are the scale's whole part, and 1 more if the edge's fraction carries
+
+    ZA_AUTO2 hang                       ; local: the pixels off the left, still to pass
+
+    LDA x+1:BMI off_left
+    BNE nothing                         ; right of the screen
+    LDA x:BMI nothing
+    STA first_pixel
+    LDA #0:STA hang:STA hang+1
+    BEQ walk                            ; (always)
+    ZA_UNREACHABLE
+.off_left
+    SEC
+    LDA #0:SBC x:STA hang
+    LDA #0:SBC x+1:STA hang+1
+    LDA #0:STA first_pixel
+.walk
+    LDA first_pixel:LSR A:LSR A
+    EOR #&FF:SEC:ADC #SCREEN_WIDTH/4:STA strips_left
+    LDA #3:STA source_column
+    LDA #128:STA source_edge
+.column
+    LDA source_column:CMP art_end
+    BEQ nothing                         ; (C clear after: the column's under the end)
+    LDA source_edge:ADC scale:STA source_edge
+    LDA scale+1:ADC #0:STA source_pixels
+    BEQ next_column                     ; shrunk away
+    LDA hang+1:BNE pass
+    LDA hang:BEQ positioned
+    CMP source_pixels:BCC partial
+.pass
+    SEC
+    LDA hang:SBC source_pixels:STA hang
+    LDA hang+1:SBC #0:STA hang+1
+.next_column
+    INC source_column
+    JMP column
+.partial
+    EOR #&FF:SEC:ADC source_pixels:STA source_pixels    ; its pixels on the screen
+.positioned
+
+    \\ the plotter: the rebuild under the art's crossover, else on into the engine. The strips'
+    \\ pairs are the sprite's, unless a strip's classed
+
+    LDA row_edge:STA strip_start
+    LDA top_pair:STA strip_end
+    LDA scale+1:BNE engine
+    LDY #2:LDA scale:CMP (art_data),Y:BCS engine    ; at the crossover or over it
+    JMP sprite_rebuild
+.engine
+}
+
+\\ The stretch engine (pt_sprite_plot_engine): a strip at a time, its slots assigned to the source
+\\ columns, each column's runs tracked up the strip, stretches written between their ends. A clean
+\\ strip is spritescale's; a clipped one has the clip's events among the runs' ends.
+\\
+\\ Inputs:
+\\     as sprite_plot's, after its setup
+\\
+\\ Outputs:
+\\     the buffer: the sprite
+\\     A, X, Y: corrupted
+
+.sprite_engine
+{
+    ZA_AUTO1 slot                       ; local: the strip's first slot, 0 to 3
+    ZA_AUTO1 tracked                    ; local: the tracked columns, less 1
+    ZA_AUTO1 handlers                   ; local: 4 under 1x (the swallowing set), else 0
+    ZA_AUTO2 handler                    ; local: the strip's change handler
+    ZA_AUTO 4, owner                    ; local: each slot's tracked column
+    ZA_AUTO 4, event_at                 ; local: each slot's next clip event's pair, &FF if none
+    ZA_AUTO1 next_slot                  ; local: the next event's slot
+
+    LDA first_pixel:AND #3:STA slot
+    LDA first_pixel:AND #&FC:ASL A:STA screen
+    LDA #0
+    LDX sprite_plot.scale+1:BNE zoomed
+    LDA #4
+.zoomed
+    STA handlers
+    ZA_DISCARD track_next, track_end, track_slots, owner, event_at
+
+    \\ the strip's slots, each source column taking them while its pixels last (striploop): the
+    \\ slot in Y, the column's slots building in A
+
+.strip
+    LDX #&FF
+    LDY slot
+.new_column
+    INX
+    STY slot
+    LDY source_column
+    LDA (art_data),Y
+    STA track_next,X:ZA_INDEXEDBY 0..3
+    LDY slot
+    LDA #0
+.advance
+    ORA mode5_pixel,Y                   ; the column takes the slot
+    STX owner,Y:ZA_INDEXEDBY 0..3
+    DEC source_pixels:BEQ used
+    INY:CPY #4:BNE advance
+    STA track_slots,X:ZA_INDEXEDBY 0..3 ; on into the next strip
+    BEQ assigned                        ; (always)
+    ZA_UNREACHABLE
+.used
+    STA track_slots,X:ZA_INDEXEDBY 0..3
+    INC source_column
+    JSR find_column:BEQ assigned        ; no more
+    INY:CPY #4:BNE new_column
+.assigned
+    LDA #0:STA slot
+    STX tracked
+    TXA:ORA handlers:TAY
+    LDA change_lo,Y:STA handler
+    LDA change_hi,Y:STA handler+1
+
+    \\ its windows: hidden, clean or clipped; clean throughout if the clip says so
+
+    LDA sprite_plot.whole:BNE clean
+    LDA #0
+.cover
+    ORA track_slots,X:ZA_INDEXEDBY 0..3
+    DEX
+    BPL cover
+    JSR strip_window
+    BEQ next_strip
+    LSR A:BCC clipped
+.clean
+
+    \\ clean: each column on past its runs under the screen
+
+    LDA strip_end:STA next_event        ; no events
+    LDA under8:BNE pass_under
+    JMP begin                           ; none under it
+.pass_under
+    LDX tracked
+.columns_on
+    LDY track_next,X:ZA_INDEXEDBY 0..3
+.run_under
+    LDA (art_data),Y:CMP under8:BCS on_screen
+    SAME_PAGE on_screen
+    INY
+    BNE run_under                       ; (always)
+    SAME_PAGE run_under
+    ZA_UNREACHABLE
+.on_screen
+    STY track_next,X:ZA_INDEXEDBY 0..3
+    DEX
+    BPL columns_on
+    JMP begin
+.next_strip
+    LDA screen:ADC #7:STA screen        ; (C set by the compare that got here)
+    DEC strips_left:BEQ done
+    LDA source_column:CMP art_end:BEQ done
+    JMP strip
+.done
+    RTS
+
+    \\ clipped: a slot opens at the bottom of its window and closes at its top, out of its column's
+    \\ slots while it's shut; each slot's next event kept, the nearest next. None at the strip's end
+    \\ (it never comes, and it costs NEAREST_EVENT). Each column starts on the run over the strip's
+    \\ first pair
+
+    ZA_AUTO1 column                     ; local: a tracked column
+
+.clipped
+    LDX #3
+.slot_events
+    LDA #&FF:STA event_at,X:ZA_INDEXEDBY 0..3       ; none, unless it opens or closes
+    LDA strip_window.covered:AND mode5_pixel,X:BEQ no_events
+    LDA window_bottom,X:ZA_INDEXEDBY 0..3
+    CMP window_top,X:ZA_INDEXEDBY 0..3
+    BCS shut                            ; it shows none: shut for good
+    CMP strip_start:BNE opens
+    LDA window_top,X:ZA_INDEXEDBY 0..3:CMP strip_end:BCS no_events     ; open to the end
+    STA event_at,X:ZA_INDEXEDBY 0..3    ; open from the start, it closes
+    BCC no_events                       ; (always)
+    ZA_UNREACHABLE
+.opens
+    STA event_at,X:ZA_INDEXEDBY 0..3    ; it opens later, shut till then
+.shut
+    LDY owner,X:ZA_INDEXEDBY 0..3       ; out of its column's slots
+    LDA mode5_pixel,X:EOR #&FF
+    AND track_slots,Y:ZA_INDEXEDBY 0..3
+    STA track_slots,Y:ZA_INDEXEDBY 0..3
+.no_events
+    DEX
+    BPL slot_events
+    NEAREST_EVENT event_at, next_slot
+
+    \\ each column on past the runs ending at or under the strip's first pair
+
+    LDA tracked:STA column
+.columns_over
+    LDX column
+    LDY track_next,X:ZA_INDEXEDBY 0..3
+.run_over
+    LDA (art_data),Y:TAX
+    LDA shr3,X:TAX
+    LDA row_edge+1,X:CMP strip_start
+    BEQ past:BCS over
+.past
+    INY
+    BNE run_over                        ; (always)
+    SAME_PAGE run_over
+    ZA_UNREACHABLE
+.over
+    LDX column
+    STY track_next,X:ZA_INDEXEDBY 0..3
+    DEC column
+    BPL columns_over
+
+    \\ the strip begun: every column's first run fetched at its first pair, the composed state
+    \\ empty, the cursor there
+
+.begin
+    LDA strip_start:STA strip_pair
+    LDX tracked
+.ends
+    STA track_end,X:ZA_INDEXEDBY 0..3
+    DEX
+    BPL ends
+    LDA #&FF:STA strip_mask
+    LDA #0:STA strip_even:STA strip_odd
+    LDA track_slots:EOR #&FF:STA strip_uncovered
+    LDA strip_start
+    SCREEN_AT
+    JMP (handler)
+    ZA_CANJUMP change1, change2, change3, change4, swallow1, swallow2, swallow3, swallow4
+
+    \\ the stretch to the pair the handler reached (X + 1 pairs): read, mask and write; with no
+    \\ slot keeping the background, stores alone, one byte for both scanlines when they match;
+    \\ with every slot keeping it, nothing, the cursor put at the pair
+
+.stretch
+    LDA strip_mask:BEQ solid
+    CMP #&FF:BEQ skip
+.pairs
+    LDA (screen),Y:AND strip_mask:ORA strip_odd:STA (screen),Y
+    DEY
+    LDA (screen),Y:AND strip_mask:ORA strip_even:STA (screen),Y
+    DEY
+    BMI pairs_up
+    SAME_PAGE pairs_up
+.pairs_on
+    DEX
+    BPL pairs
+    SAME_PAGE pairs
+    BMI stretched                       ; (always)
+    ZA_UNREACHABLE
+.pairs_up
+    DEC screen+1:LDY #7
+    BNE pairs_on                        ; (always)
+    SAME_PAGE pairs_on
+    ZA_UNREACHABLE
+.skip
+    LDA strip_pair
+    SCREEN_AT
+    LDA strip_pair:CMP next_event:BEQ events_due
+    JMP (handler)
+    ZA_CANJUMP change1, change2, change3, change4, swallow1, swallow2, swallow3, swallow4
+.solid
+    LDA strip_odd:CMP strip_even:BNE solid_pairs
+.solid_one
+    STA (screen),Y
+    DEY
+    STA (screen),Y
+    DEY
+    BMI solid_one_up
+    SAME_PAGE solid_one_up
+.solid_one_on
+    DEX
+    BPL solid_one
+    SAME_PAGE solid_one
+    BMI stretched                       ; (always)
+    ZA_UNREACHABLE
+.solid_one_up
+    DEC screen+1:LDY #7
+    BNE solid_one_on                    ; (always)
+    SAME_PAGE solid_one_on
+    ZA_UNREACHABLE
+.solid_pairs
+    LDA strip_odd:STA (screen),Y
+    DEY
+    LDA strip_even:STA (screen),Y
+    DEY
+    BMI solid_up
+    SAME_PAGE solid_up
+.solid_on
+    DEX
+    BPL solid_pairs
+    SAME_PAGE solid_pairs
+.stretched
+    LDA strip_pair:CMP next_event:BEQ events_due
+    JMP (handler)
+    ZA_CANJUMP change1, change2, change3, change4, swallow1, swallow2, swallow3, swallow4
+.solid_up
+    DEC screen+1:LDY #7
+    BNE solid_on                        ; (always)
+    SAME_PAGE solid_on
+    ZA_UNREACHABLE
+
+    \\ the events at the pair: an opening merges its column's colour into its slot, from the run
+    \\ byte before its next, and the slot's closing (if any) is next; a closing blanks it. None
+    \\ left: the strip's done
+
+    ZA_AUTO1 scanline                   ; local: the cursor's
+    ZA_AUTO1 bit                        ; local: the event's slot's bit
+
+.events_due
+    LDA next_event:CMP strip_end:BNE event_due
+    JMP next_strip
+.event_due
+    STY scanline
+    LDX next_slot
+    LDA mode5_pixel,X:STA bit
+    LDY owner,X:ZA_INDEXEDBY 0..3       ; its column
+    LDA event_at,X:ZA_INDEXEDBY 0..3
+    CMP window_bottom,X:ZA_INDEXEDBY 0..3:BNE closing
+    LDA window_top,X:ZA_INDEXEDBY 0..3:CMP strip_end:BCC closes   ; its closing next
+    LDA #&FF
+.closes
+    STA event_at,X:ZA_INDEXEDBY 0..3
+    LDA bit:ORA track_slots,Y:ZA_INDEXEDBY 0..3
+    STA track_slots,Y:ZA_INDEXEDBY 0..3
+    LDA track_next,Y:ZA_INDEXEDBY 0..3
+    TAY:DEY                             ; the run byte before its next
+    LDA (art_data),Y
+    AND #7:BEQ blank
+    ORA art_colours:TAY
+    LDA art_pate,Y
+    EOR strip_even:AND bit:EOR strip_even:STA strip_even
+    LDA art_pato,Y
+    EOR strip_odd:AND bit:EOR strip_odd:STA strip_odd
+    LDA strip_mask:ORA bit:EOR bit:STA strip_mask
+    JMP merged
+.closing
+    LDA #&FF:STA event_at,X:ZA_INDEXEDBY 0..3
+    LDA bit:EOR #&FF:AND track_slots,Y:ZA_INDEXEDBY 0..3
+    STA track_slots,Y:ZA_INDEXEDBY 0..3
+.blank
+    LDA strip_even:ORA bit:EOR bit:STA strip_even
+    LDA strip_odd:ORA bit:EOR bit:STA strip_odd
+    LDA strip_mask:ORA bit:STA strip_mask
+.merged
+    NEAREST_EVENT event_at, next_slot
+    LDY scanline
+    LDA strip_pair:CMP next_event:BNE resume
+    JMP events_due                      ; another at the pair
+.resume
+    LDX tracked:BNE handle              ; one column's handler fetches unasked: only at its end
+    LDA track_slots:EOR #&FF:STA strip_uncovered
+    LDA track_end:CMP strip_pair:BEQ handle
+    CMP next_event:BCC nearest          ; (C clear: the pairs less 1)
+    LDA next_event:CLC
+.nearest
+    TAX
+    SBC strip_pair
+    STX strip_pair:TAX
+    JMP stretch
+.handle
+    JMP (handler)
+    ZA_CANJUMP change1, change2, change3, change4, swallow1, swallow2, swallow3, swallow4
+
+    \\ the change handlers, by the tracked columns; the second set swallowing runs shrunk away
+
+.change1
+    CHANGES 1, FALSE, stretch
+.change2
+    CHANGES 2, FALSE, stretch
+.change3
+    CHANGES 3, FALSE, stretch
+.change4
+    CHANGES 4, FALSE, stretch
+.swallow1
+    CHANGES 1, TRUE, stretch
+.swallow2
+    CHANGES 2, TRUE, stretch
+.swallow3
+    CHANGES 3, TRUE, stretch
+.swallow4
+    CHANGES 4, TRUE, stretch
+
+.change_lo
+    EQUB LO(change1), LO(change2), LO(change3), LO(change4)
+    EQUB LO(swallow1), LO(swallow2), LO(swallow3), LO(swallow4)
+.change_hi
+    EQUB HI(change1), HI(change2), HI(change3), HI(change4)
+    EQUB HI(swallow1), HI(swallow2), HI(swallow3), HI(swallow4)
+}
+
+\\ A strip's windows (sprite.c's classify): each covered slot's, the clip's pairs clamped to the
+\\ sprite's, and the pairs the strip runs over. Hidden if it shows none; clean if every slot shows
+\\ all of the sprite; clipped otherwise.
+\\
+\\ Inputs:
+\\     A: the slots covered
+\\     screen: the strip's block, its byte column * 8
+\\     sprite_plot.bottoms, .tops, .x0: the clip
+\\     row_edge, top_pair: the sprite's pairs
+\\
+\\ Outputs:
+\\     A: 0 hidden, 1 clean, 2 clipped, Z set if hidden, C set if hidden
+\\     covered: the slots covered
+\\     window_bottom, window_top: each covered slot's window
+\\     strip_start, strip_end: the strip's pairs
+\\     X, Y: corrupted
+
+.strip_window
+{
+    ZA_AUTO1 covered                    ; out: the slots covered
+    ZA_AUTO1 clean                      ; local: 1 while every slot shows all of the sprite
+
+    ZA_DISCARD window_bottom, window_top
+    STA covered
+    LDA #SCREEN_HEIGHT:STA strip_start
+    LDA #0:STA strip_end
+    LDA #1:STA clean
+    LDA screen:LSR A                    ; the strip's first column
+    SEC:SBC sprite_plot.x0:TAY          ; its place in the clip
+    LDX #0
+.slot
+    LDA covered:AND mode5_pixel,X:BEQ next
+    LDA (sprite_plot.bottoms),Y:CMP row_edge:BCS bottom
+    LDA row_edge
+.bottom
+    STA window_bottom,X:ZA_INDEXEDBY 0..3
+    LDA (sprite_plot.tops),Y:CMP top_pair:BCC top
+    LDA top_pair
+.top
+    STA window_top,X:ZA_INDEXEDBY 0..3
+    LDA window_bottom,X:ZA_INDEXEDBY 0..3:CMP row_edge:BNE part
+    LDA window_top,X:ZA_INDEXEDBY 0..3:CMP top_pair:BEQ all
+.part
+    LDA #0:STA clean
+.all
+    LDA window_bottom,X:ZA_INDEXEDBY 0..3
+    CMP window_top,X:ZA_INDEXEDBY 0..3
+    BCS next                            ; it shows none
+    CMP strip_start:BCS started
+    STA strip_start
+.started
+    LDA window_top,X:ZA_INDEXEDBY 0..3:CMP strip_end:BCC next
+    STA strip_end
+.next
+    INY
+    INX
+    CPX #4:BNE slot
+    LDA strip_start:CMP strip_end:BCS hidden
+    LDA clean:BEQ clipped
+    RTS                                 ; (A 1)
+.clipped
+    LDA #2
+    RTS
+.hidden
+    LDA #0
+    RTS
+}
+
+\\ The column walk on to the next column with pixels (findcol): its pixels the scale's whole part,
+\\ and 1 more if the edge's fraction carries; those shrunk away passed.
+\\
+\\ Inputs:
+\\     source_column, source_edge: the column (+ 3), and the fraction of the edge before it
+\\     art_end, sprite_plot.scale: past the art's columns (+ 3), and the scale
+\\
+\\ Outputs:
+\\     Z: set if the art ran out of columns first
+\\     source_column, source_edge, source_pixels: the column with pixels, its edge and its pixels
+\\     A: corrupted
+\\     X, Y: preserved
+
+.find_column
+{
+.column
+    LDA source_column:CMP art_end
+    BEQ done                            ; (C clear after: the column's under the end)
+    LDA source_edge:ADC sprite_plot.scale:STA source_edge
+    LDA sprite_plot.scale+1:ADC #0:STA source_pixels
+    BNE done                            ; (Z clear) pixels
+    INC source_column
+    BNE column                          ; (always)
+    ZA_UNREACHABLE
+.done
+    RTS
+}
+
+\\ The per-pair rebuild (pt_sprite_plot_rebuild), under 1x: a strip at a time, four slots, each a
+\\ source column or a dummy, the strip's byte rebuilt every pair. A clipped strip's slots open and
+\\ close at their windows as more of their own events.
+\\
+\\ Inputs:
+\\     as sprite_plot's, after its setup
+\\
+\\ Outputs:
+\\     the buffer: the sprite
+\\     A, X, Y: corrupted
+
+.sprite_rebuild
+{
+    ZA_AUTO1 lead                       ; local: the first strip's padding slots
+    ZA_AUTO1 exhausted                  ; local: non-zero once the columns run out
+    ZA_AUTO1 covered                    ; local: the slots with columns
+    ZA_AUTO1 pair                       ; local: the pair being rebuilt
+    ZA_AUTO1 scanline                   ; local: the cursor's, round the fetches
+
+    LDA first_pixel:AND #3:STA lead
+    LDA first_pixel:AND #&FC:ASL A:STA screen
+    LDA #0:STA exhausted
+    ZA_DISCARD slot_next, slot_event, slot_even, slot_odd, slot_mask
+
+    \\ the strip's four slots: the padding, then a surviving column each (each a pixel at most),
+    \\ then past the sprite
+
+.strip
+    LDA #0:STA covered
+    FOR n = 0..3
+        IF n < 3                        ; (the padding's 3 slots at most)
+            LDA lead:BEQ real
+            DEC lead
+            JMP dummy
+        ENDIF
+    .real
+        IF n > 0                        ; (no strip's begun with the columns run out)
+            LDA exhausted:BNE dummy
+        ENDIF
+        LDY source_column
+        LDA (art_data),Y:STA slot_next+n
+        LDA covered:ORA #&88>>n:STA covered
+        INC source_column
+        JSR find_column:BNE next
+        INC exhausted
+        BNE next                        ; (always)
+        ZA_UNREACHABLE
+    .dummy
+        REBUILD_DUMMY n
+    .next
+    NEXT
+    LDA sprite_plot.whole:BNE clean     ; clean throughout
+    LDA covered
+    JSR strip_window
+    BNE shown
+    JMP next_strip
+.shown
+    LSR A:BCS clean
+    JMP clipped
+
+    \\ clean: each slot on past its runs under the screen, fetching at the first pair
+
+.clean
+    FOR n = 0..3
+        LDA covered:AND #&88>>n:BEQ skipped
+        LDA under8:BEQ fetches          ; none under it
+        LDY slot_next+n
+    .run_under
+        LDA (art_data),Y:CMP under8:BCS on_screen
+        SAME_PAGE on_screen
+        INY
+        BNE run_under                   ; (always)
+        SAME_PAGE run_under
+        ZA_UNREACHABLE
+    .on_screen
+        STY slot_next+n
+    .fetches
+        LDA strip_start:STA slot_event+n
+    .skipped
+    NEXT
+    LDA strip_start
+    SCREEN_AT
+    LDX strip_start
+.clean_pair
+    STX pair:STY scanline
+    FOR n = 0..3
+        CPX slot_event+n:BNE fetched
+        REBUILD_FETCH n, FALSE, pair
+    .fetched
+    NEXT
+    LDY scanline
+    REBUILD_PAIR clean_pair, next_strip
+
+.next_strip
+    LDA screen:ADC #7:STA screen        ; (C set by the compare that got here)
+    DEC strips_left:BEQ done
+    LDA exhausted:BNE done
+    JMP strip
+.done
+    RTS
+
+    \\ clipped: each slot a dummy until its window opens, where it fetches the run over it, and a
+    \\ dummy for good at its window's top
+
+.clipped
+    FOR n = 0..3
+        LDA covered:AND #&88>>n:BEQ skipped
+        REBUILD_DUMMY n
+        LDA window_bottom+n:CMP window_top+n:BCS skipped
+        STA slot_event+n
+    .skipped
+    NEXT
+    LDA strip_start
+    SCREEN_AT
+    LDX strip_start
+.clipped_pair
+    STX pair:STY scanline
+    FOR n = 0..3
+        CPX slot_event+n:BNE event_done
+        CPX window_top+n:BNE fetch
+        REBUILD_DUMMY n
+        JMP event_done
+    .fetch
+        REBUILD_FETCH n, TRUE, pair
+    .event_done
+    NEXT
+    LDY scanline
+    REBUILD_PAIR clipped_pair, to_next
+.to_next
+    JMP next_strip
+}

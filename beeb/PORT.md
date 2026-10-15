@@ -102,7 +102,11 @@ ambitions.
 | C | 6502 | State |
 |---|---|---|
 | `pt_mode5_fill` (mode5.c), with `frame`'s start colour | `fill` (fill.6502), the camera cell's ceiling's colour, then on into `fill_colour`: `FILL_COLUMNS` (fill_macros.6502) through each screen's blocks, `FILL_BODY` and `FILL_TAIL` | done: 64 made-up frames, every end into each screen, half from a cell's ceiling, `portalc_fillref` |
-| `pt_sprite_plot` (sprite.c) | `sprites` (sprites.6502) | stub |
+| `pt_sprite_plot` (sprite.c): `setup` | `sprite_plot` (sprite.6502): the row edges in three parts (under the screen, on it, over it), the column walk to the first column on the screen, the strips' pairs the sprite's (a whole sprite's are never classed), then the plotter by the art's crossover, on into the engine | done: 1,024 made-up sprites, `portalc_spriteref`: a sixteenth to 16x, every other under 1x (an eighth of those 1x itself, a quarter at the right edge), those over 4x far off the screen one way (left, right, or over it, past 255 pairs); eight kinds of clip, held from varied first columns; eight arts (the demo scene's, the stress scene's, five made up and one made for swallowing) |
+| `pt_sprite_plot_engine`: `assign`, `strip_engine`, `strip_engine_clip`, `fetch`, `nearest`, `nearest_event`, `stretch` | `sprite_engine`: the strip's slots, the clean strip's runs under the screen, the clipped strip's events (each slot's next, `NEAREST_EVENT`), the stretch and `events_due`; the handlers `change1` to `change4` and `swallow1` to `swallow4`, from `CHANGES` and `CHANGE_COLUMN` (sprite_macros.6502) | done, in the plotters' check: every instruction run and each branch both ways, counted on the cycle-exact model |
+| `pt_sprite_plot_rebuild`: `strip_rebuild`, `strip_rebuild_clip`, `afetch`, `dummy`, `rebuild_pair` | `sprite_rebuild`; `REBUILD_FETCH`, `REBUILD_DUMMY`, and `REBUILD_PAIR`, inline in each strip's pair loop | done, in the plotters' check: every instruction run and each branch both ways |
+| `classify`, `findcol` | `strip_window`, `find_column` | done, in the plotters' check |
+| the sprite pass in `frame` | `sprites` (sprites.6502) | stub |
 | `unplot` (render.c), with `pt_render_unplot` for the checks | `unplot` (unplot.6502), each record through `unplot_flat`, `unplot_shallow` or `unplot_steep`, then row 0 | done: the plotters' made-up runs cleared at each gradient, `portalc_plotref`; and each place's first frame in the walks' checks |
 | `pt_unplot_shallow`, `pt_unplot_steep` (plot.c), with `unpart_`, `unbyte_` | `UNPLOT_SHALLOW`, `UNPLOT_STEEP` (unplot_macros.6502), with `UNPLOT_PART` and `UNPLOT_BYTES` | done, in the unplot's checks |
 
@@ -179,6 +183,29 @@ or two bytes of zero page.
 | `num_insts`, `order`, `num_order` | `num_instances`, `draw_order`, `num_order` |
 | `clipmem`, `clip_used` | `clip_rows`, `clip_used` |
 
+### The sprite plotters
+
+| C | 6502 |
+|---|---|
+| `pt_sprite_place.scale`, `.x`, `.y` | `sprite_plot.scale`, `.x`, `.y` |
+| `pt_sprite_clip.lo`, `.hi`, `.x0`, `.whole` | `sprite_plot.bottoms`, `.tops`, `.x0`, `.whole`; no `x1` |
+| `pt_sprite_setup.spr`, `.pal` | `art_data`; `art_colours`, the art's place in `art_pate` and `art_pato` (art * 8) |
+| `.wid`, `.hgt` | `art_end` (the width + 3: past the last column's index byte), `sprite_plot.height` |
+| `.py`, `.ph`, `.k0x8` | `row_edge` (in `Between`), `top_pair`, `under8` |
+| `.sx0`, `.strips` | `first_pixel`, `strips_left` |
+| `.c0`, `.rem0`, `.xf0`, and `pt_sprite_walk.c`, `.rem`, `.xf` | `source_column` (the column + 3: its index byte's place), `source_pixels`, `source_edge` (the edge's fraction): one walk, from the setup on |
+| `pt_sprite_walk.slot` | `sprite_engine.slot`; the rebuild's `lead`, its first strip's padding |
+| `pt_sprite_win.lo`, `.hi`, `.start`, `.end` | `window_bottom`, `window_top`, `strip_start`, `strip_end` |
+| `pt_sprite_track.idx`, `.cp`, `.colmask` | `track_next`, `track_end`, `track_slots` |
+| `pt_sprite_engine.n`, `.own` | `sprite_engine.tracked` (one less), `sprite_engine.owner` |
+| `pt_sprite_engine.cnt`, `.mask`, `.de`, `.dodd` | `strip_pair`, `strip_mask`, `strip_even`, `strip_odd` |
+| — | `strip_uncovered`: the slots the first tracked column doesn't show, the one-column handlers' mask |
+| `strip_engine_clip`'s `ev`, `nextev`, `slot` | `sprite_engine.event_at`, `next_event`, `sprite_engine.next_slot` |
+| `pt_sprite_slot.idx`, `.ev`, `.ce`, `.co`, `.cm` | `slot_next`, `slot_event`, `slot_even`, `slot_odd`, `slot_mask` |
+| `slotbits_` | `mode5_pixel` (plot.6502's) |
+| `pt_mode5_at` for a pair | `SCREEN_AT`: pair p's odd scanline is the column's s = 127 - 2p, at s AND 7 in block `shr3`[s] |
+| a run byte's row, `b >> 3` | `shr3` (in the tables) |
+
 ### The clips
 
 | C | 6502 |
@@ -228,6 +255,7 @@ They have the same names as `pt_arith_tables`, except:
 | `lsx` | only the loader's, in `Scratch`, to make `lsec16` |
 | `rpost` | `rpost`, which is `rpostmem` - 32: it starts at index 32 |
 | — | `trowhi`: row y's page in T |
+| — | `shr3`: b DIV 8, a sprite run byte's row (and `SCREEN_AT`'s block) |
 
 ### Constants
 
@@ -377,6 +405,21 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   offset, which saturates as the C's does, and the near floor offset. The
   draw order compares depths' logs unsigned, as each is over
   `SPRITE_NEAR_L`.
+- **The one-column handlers fetch unasked.** As spritescale's do, `change1`
+  and `swallow1` take the column's next run whenever they're entered, and
+  set the data to its pattern under the column's slots and the mask to
+  `strip_uncovered`, with no merges. A transparent run sets the mask to &FF
+  and leaves the data: under &FF nothing writes it, a clip event then can
+  only blank a slot, and the next fetch writes it whole.
+  An event between the column's ends would have them fetch early, so
+  `events_due` goes straight to the stretch when there's one column and its
+  run doesn't end at the pair. The C tests each column's end every time.
+- **The rebuild skips two tests it can't need**: the padding at the last
+  slot (it's 3 slots at most), and the columns running out at the first (no
+  strip begins once they have).
+- **`sprite_plot` has no `x1`.** It reads the clip for each covered slot,
+  from the sprite's first column on the screen to its last; the caller
+  holds the clip for every column the sprite covers, as the C asserts.
 - **A check with the capture has the instances and the clips too**, as
   `capture_root` makes the root's instance, and `instance_clip` reads the
   bounds.
@@ -405,9 +448,48 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - Sprites, in three pieces, each with its check:
   1. ~~The instances in the capture: `inst_new`, `inst_clip`, `inst_hide` and
      the draw order.~~ Done.
-  2. The plotters: spritescale's engine and rebuild, as sprite.c clips them.
+  2. ~~The plotters: spritescale's engine and rebuild, as sprite.c clips
+     them.~~ Done, and gone over once for speed: a review against
+     spritescale, all of it taken bar a second copy of the stretch loops.
+     On the cycle-exact model the demo's boulder (14 by 16), whole and
+     mid-screen, now takes 3.9k cycles at a quarter size, 17.3k at 1x, 22.4k
+     at 2x, 35.3k at 4x and 68.4k at 8x (112 by 64), 6 to 16% less than
+     before. Classed against a full clip it's 10 to 19% more, and a ragged
+     clip (bottoms and tops changing column to column) up to 1.75 times as
+     much. Against spritescale itself (Baron's example, its boulder and
+     creature whole, the same pixels drawn) it's 10 to 21% faster under 1x,
+     2 to 3% from 1x to 3x, and 8% at 4x. The arts' runs set the price: at
+     1x half the boulder's time goes on its runs' changes, and at a quarter
+     size on runs passed as they shrink away.
+
+     The crossover isn't spritescale's density rule any more (320 times the
+     run ends over the groups' rows), which kept the creature off the
+     rebuild from 0.79x though it was cheaper all the way to 1x, and put
+     narrow arts on the rebuild that the engine beat at every scale.
+     `crossover` (sprite.c) counts what each plotter does at every scale
+     under 1x and prices it: over 259 arts its pick costs 0.03% more than
+     the best, where the old rule's cost 1 to 2.2% more, and up to 22% on
+     a narrow art.
+
+     The code is 4,319 bytes. `shr3` is made by `make_tables`, the tables a
+     page lower to fit (&3A00), and `MainCode` has 3,991 bytes left.
+     `mode5_pixel` is plot.6502's; the sprite check has a copy, as it
+     doesn't assemble plot.6502.
   3. `sprites` in the frame, and a whole-frame check.
 - Later: moving, collision and `pt_vcache_locate`.
+- To revisit, if the cycles are wanted: two copies of the stretch loops,
+  one going on to the handler and one, for the stretch to a clip event or
+  the strip's end, to `events_due`. The handler's `CMP next_event` then
+  picks the copy, and `.stretched` goes: 8 to 11 cycles a stretch, 2.8% of
+  the boulder at 1x, for 194 bytes. Left out for the bytes.
+- To revisit when the plotters change: `crossover`'s prices. They were
+  fitted to these plotters by timing both, forced (the art's crossover byte
+  0 or 255), at every eighth scale under 1x for 159 arts on the cycle-exact
+  model, and least-squaring `work`'s counts against the cycles.
+- To revisit: the capture's check steps its LFSR once a value (`LFSR`,
+  `UP_TO_64`), so each value is the last one shifted a bit. Stepping a byte
+  a value, as the sprite check does, would spread its cases; all its
+  answers change, so it waits for a reason to touch that check.
 - To revisit, if the cycles are wanted: a `side_v1` map table, each side's
   end vertex (`pt_map_side_v1`), written by `portalc_mapasm`. `side_end`
   would then be `LDX side_v1,Y`, instead of finding the next side through

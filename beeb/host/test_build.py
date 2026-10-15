@@ -10,7 +10,7 @@ import b2
 from test_tables import symbols
 
 USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot, clip, walk, '
-         'walk3 or fill; its build, its symbols, and the C\'s answers)')
+         'walk3, fill or sprite; its build, its symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -224,6 +224,15 @@ def fill_expected(c):
     ]
 
 
+def sprite_expected(c):
+    """The sprite plotters' sums: each made-up sprite's screen after it."""
+    screen1, screen2 = hex_sums(c['screens'])
+    return [
+        ('sprite s1', 't_sums1', 0, 0, screen1),
+        ('sprite s2', 't_sums2', 0, 0, screen2),
+    ]
+
+
 def arith_expected(c):
     """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
     answer's input, the answers)."""
@@ -263,7 +272,7 @@ def arith_expected(c):
 
 EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
             'plot': plot_expected, 'clip': clip_expected, 'walk': walk_expected,
-            'walk3': walk_expected, 'fill': fill_expected}
+            'walk3': walk_expected, 'fill': fill_expected, 'sprite': sprite_expected}
 
 
 def main():

@@ -31,3 +31,16 @@ MACRO FITPAGE_FROM offset, size
         SKIP &100-((P%+offset) AND &FF)
     ENDIF
 ENDMACRO
+
+\\ Check that the branch just assembled stays on its page when taken: across one, it costs a cycle.
+\\ For the hot loops' branches.
+\\
+\\ Inputs:
+\\     target: where it branches to
+\\
+\\ Outputs:
+\\     none: an error if it crosses
+
+MACRO SAME_PAGE target
+    ASSERT HI(target) == HI(P%), "a hot branch crosses a page"
+ENDMACRO

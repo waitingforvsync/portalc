@@ -1,0 +1,283 @@
+\\ sprite_macros.6502 - the sprite plotters' macros (sprite.c): the stretch engine's run changes and
+\\ handlers, and the per-pair rebuild's fetches and pairs, on sprite.6502's file-scope state.
+
+\\ The cursor at a strip's pair (sprite.c's pt_mode5_at): pair p's odd scanline is the column's
+\\ scanline s = 127 - 2p, at s AND 7 in block s DIV 8.
+\\
+\\ Inputs:
+\\     A: the pair, under 64
+\\     screen, base: the strip's block, and the buffer's page
+\\
+\\ Outputs:
+\\     screen+1, Y: the cursor
+\\     A, X: corrupted
+
+MACRO SCREEN_AT
+    ASL A:EOR #127:TAX                  ; s: 2p is 126 at most
+    AND #7:TAY
+    LDA shr3,X:ORA base:STA screen+1
+ENDMACRO
+
+\\ A tracked column's next run (sprite.c's fetch), merged into the strip's composed state under the
+\\ slots it shows: x = x EOR ((x EOR new) AND the slots); a transparent run blanks them and keeps
+\\ the background there. Under 1x, a run shrunk away to nothing (ending at the pair it's fetched
+\\ at) is swallowed.
+\\
+\\ Inputs:
+\\     k: the tracked column, 0 to 3
+\\     swallow: TRUE under 1x
+\\     track_next+k, track_slots+k: its next run byte, and the slots it shows
+\\     strip_pair, strip_mask, strip_even, strip_odd: the strip's pair and composed state
+\\
+\\ Outputs:
+\\     track_next+k: on past the run
+\\     track_end+k: the pair the run ends at
+\\     strip_mask, strip_even, strip_odd: with the run merged in
+\\     A, X, Y: corrupted
+
+MACRO CHANGE_COLUMN k, swallow
+.fetch
+    LDY track_next+k
+    LDA (art_data),Y
+    INC track_next+k
+    TAX
+    AND #7:BEQ transparent
+    ORA art_colours:TAY
+    LDA art_pate,Y
+    EOR strip_even:AND track_slots+k:EOR strip_even:STA strip_even
+    LDA art_pato,Y
+    EOR strip_odd:AND track_slots+k:EOR strip_odd:STA strip_odd
+    LDA strip_mask:ORA track_slots+k:EOR track_slots+k:STA strip_mask
+    JMP ended
+.transparent
+    LDA strip_even:ORA track_slots+k:EOR track_slots+k:STA strip_even
+    LDA strip_odd:ORA track_slots+k:EOR track_slots+k:STA strip_odd
+    LDA strip_mask:ORA track_slots+k:STA strip_mask
+.ended
+    LDY shr3,X                          ; the run's last row
+    LDA row_edge+1,Y:STA track_end+k    ; the pair it ends at
+    IF swallow
+        CMP strip_pair:BEQ fetch        ; shrunk away: the next
+    ENDIF
+ENDMACRO
+
+\\ A stretch engine strip's change handler (spritescale's changes1 to changes4), for n tracked
+\\ columns: each whose run ends at the pair reached takes its next, then the pairs to the nearest
+\\ end, or the next clip event, go to the stretch. With one column there's nothing else to keep:
+\\ its data is the pattern under its slots, its mask the slots it doesn't show, or all of them (a
+\\ clip event then only blanks a slot, and the next fetch writes the data whole); and it's only
+\\ entered at its run's end (an event elsewhere goes round it), so it fetches unasked.
+\\
+\\ Inputs:
+\\     n: the tracked columns, 1 to 4
+\\     swallow: TRUE under 1x
+\\     stretch: the stretch it goes on to
+\\     Y: the cursor's scanline
+\\     track_next, track_end, track_slots: the tracked columns
+\\     strip_pair, strip_uncovered, next_event: the pair reached, the slots none shows, the next
+\\         event's pair (the strip's end, if there are none)
+\\
+\\ Outputs:
+\\     strip_pair: the stretch's end
+\\     X: its pairs, less 1
+\\     strip_mask, strip_even, strip_odd: the composed state
+\\     Y: preserved
+\\     on to stretch
+
+MACRO CHANGES n, swallow, stretch
+    ZA_AUTO1 scanline                   ; local: the cursor's
+
+    STY scanline
+    IF n == 1
+    .fetch
+        LDY track_next
+        LDA (art_data),Y
+        INC track_next
+        TAX
+        AND #7:BEQ transparent
+        ORA art_colours:TAY
+        LDA art_pate,Y:AND track_slots:STA strip_even
+        LDA art_pato,Y:AND track_slots:STA strip_odd
+        LDA strip_uncovered:STA strip_mask
+        JMP ended
+    .transparent
+        LDA #&FF:STA strip_mask         ; (the data's left: nothing writes it under &FF)
+    .ended
+        LDY shr3,X
+        LDA row_edge+1,Y:STA track_end
+        IF swallow
+            CMP strip_pair:BEQ fetch
+        ENDIF
+    ELSE
+        LDA strip_pair
+        FOR k = 0..<n
+            CMP track_end+k:BNE unchanged
+            CHANGE_COLUMN k, swallow
+            IF k < n-1
+                LDA strip_pair
+            ENDIF
+        .unchanged
+        NEXT
+        LDA track_end
+        FOR k = 1..<n
+            CMP track_end+k:BCC lower
+            LDA track_end+k
+        .lower
+        NEXT
+    ENDIF
+    CMP next_event:BCC nearest          ; (C clear: the pairs less 1)
+    LDA next_event:CLC
+.nearest
+    TAY
+    SBC strip_pair:TAX
+    STY strip_pair
+    LDY scanline
+    JMP stretch
+ENDMACRO
+
+\\ A clipped engine strip's next clip event: the nearest of its slots', or the strip's end if none.
+\\
+\\ Inputs:
+\\     event_at: each slot's next event's pair, &FF if none
+\\     strip_end: the strip's end
+\\
+\\ Outputs:
+\\     next_event: the event's pair
+\\     slot: its slot, if there's one
+\\     A, X: corrupted
+
+MACRO NEAREST_EVENT event_at, slot
+    LDA strip_end
+    FOR k = 0..3
+        CMP event_at+k:BCC @+
+        LDA event_at+k:LDX #k
+    .@
+    NEXT
+    STA next_event:STX slot
+ENDMACRO
+
+\\ A rebuild slot's next run (sprite.c's afetch): its end, swallowing runs shrunk away to the pair
+\\ (and, in a clipped strip, the runs under it, at the slot's opening), and its patterns masked to
+\\ the slot, or for a transparent run, the slot's bit kept.
+\\
+\\ Inputs:
+\\     n: the slot, 0 to 3
+\\     under: TRUE in a clipped strip
+\\     pair: the caller's copy of the pair
+\\     X: the pair
+\\     slot_next+n: its next run byte
+\\     window_top+n: in a clipped strip, the pair past the slot's window
+\\
+\\ Outputs:
+\\     slot_next+n: on past the run
+\\     slot_event+n: the pair the run ends at; in a clipped strip, the window's top if nearer
+\\     slot_even+n, slot_odd+n, slot_mask+n: its patterns and mask
+\\     X: preserved
+\\     A, Y: corrupted
+
+MACRO REBUILD_FETCH n, under, pair
+.fetch
+    LDY slot_next+n
+    LDA (art_data),Y
+    INC slot_next+n
+    TAY                                 ; the run byte
+    LDX shr3,Y
+    LDA row_edge+1,X                    ; the pair it ends at
+    CMP pair:BEQ fetch                  ; shrunk away
+    IF under
+        BCC fetch                       ; under the slot's window
+        CMP window_top+n:BCC ends       ; the nearer of its end and the window's top
+        LDA window_top+n
+    .ends
+    ENDIF
+    STA slot_event+n
+    TYA:AND #7:BEQ transparent
+    ORA art_colours:TAY
+    LDA art_pate,Y:AND #&88>>n:STA slot_even+n
+    LDA art_pato,Y:AND #&88>>n:STA slot_odd+n
+    LDA #0:STA slot_mask+n
+    BEQ fetched                         ; (always)
+    ZA_UNREACHABLE
+.transparent
+    STA slot_even+n:STA slot_odd+n      ; (A 0)
+    LDA #&88>>n:STA slot_mask+n
+.fetched
+    LDX pair
+ENDMACRO
+
+\\ A dummy rebuild slot (sprite.c's dummy): padding before the sprite, past it, or shut by the
+\\ clip. It never fetches and keeps the background.
+\\
+\\ Inputs:
+\\     n: the slot, 0 to 3
+\\
+\\ Outputs:
+\\     slot_event+n, slot_even+n, slot_odd+n, slot_mask+n: a dummy's
+\\     A: corrupted
+
+MACRO REBUILD_DUMMY n
+    LDA #&FF:STA slot_event+n
+    LDA #0:STA slot_even+n:STA slot_odd+n
+    LDA #&88>>n:STA slot_mask+n
+ENDMACRO
+
+\\ One rebuilt pair (sprite.c's rebuild_pair): the four slots ORed together, the data straight onto
+\\ the screen's byte under the mask; then the cursor up a pair, and on to the next pair.
+\\
+\\ Inputs:
+\\     loop, done: the pair loop, and where the strip's end goes
+\\     X, Y: the pair, and the cursor's scanline
+\\     slot_even, slot_odd, slot_mask, strip_end: the slots, and the strip's end
+\\
+\\ Outputs:
+\\     X, Y: the next pair's
+\\     A: corrupted
+\\     on to loop, or done at the strip's end (C set)
+
+MACRO REBUILD_PAIR loop, done
+    ZA_AUTO1 mask                       ; local: the pair's composed mask
+
+    LDA slot_mask:ORA slot_mask+1:ORA slot_mask+2:ORA slot_mask+3
+    BEQ solid                           ; every slot opaque
+    SAME_PAGE solid
+    CMP #&FF:BEQ skip                   ; none
+    SAME_PAGE skip
+    STA mask
+    LDA (screen),Y:AND mask
+    ORA slot_odd:ORA slot_odd+1:ORA slot_odd+2:ORA slot_odd+3
+    STA (screen),Y
+    DEY
+    LDA (screen),Y:AND mask
+    ORA slot_even:ORA slot_even+1:ORA slot_even+2:ORA slot_even+3
+    STA (screen),Y
+    DEY
+    BMI up
+    SAME_PAGE up
+    INX
+    CPX strip_end:BEQ done
+    JMP loop
+.solid
+    LDA slot_odd:ORA slot_odd+1:ORA slot_odd+2:ORA slot_odd+3
+    STA (screen),Y
+    DEY
+    LDA slot_even:ORA slot_even+1:ORA slot_even+2:ORA slot_even+3
+    STA (screen),Y
+    DEY
+    BMI up
+    SAME_PAGE up
+    INX
+    CPX strip_end:BEQ done
+    JMP loop
+.skip
+    DEY:DEY
+    BMI up
+    SAME_PAGE up
+    INX
+    CPX strip_end:BEQ done
+    JMP loop
+.up
+    DEC screen+1:LDY #7
+    INX
+    CPX strip_end:BEQ done
+    JMP loop
+ENDMACRO

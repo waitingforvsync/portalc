@@ -7,8 +7,8 @@
 \\   &0400  Frame, then Persist: free once the loader has read !BOOT's bank
 \\   &0D00  NMIs: claimed from the filing system, then left alone
 \\   &0E00  Capture, with Between over it; the loader's Scratch before that
-\\   &1300  main RAM's code
-\\   &3B00  the tables, made by the loader
+\\   &1300  main RAM's code: the sprite plotters first, so their pages don't move with the map
+\\   &3A00  the tables, made by the loader
 \\   &4E00  T's top junk row. The loader runs here first (or higher),
 \\          PORTAL loading under it, &1200 at the lowest
 \\   &4F00  T, the line buffer: 16 character rows
@@ -30,8 +30,8 @@ WORKSPACE_END = &0D00
 CAPTURE_ORG = &0E00
 SCRATCH_ORG = &0E00
 MAINCODE_ORG = &1300
-MAINCODE_END = &3B00
-TABLES_ORG = &3B00
+MAINCODE_END = &3A00
+TABLES_ORG = &3A00
 T_ORG = &4F00                           ; T proper
 T_JUNK_TOP = T_ORG-&100                 ; overruns off its top
 T_JUNK_BOT = T_ORG+&1000                ; and off its bottom

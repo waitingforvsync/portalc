@@ -23,6 +23,7 @@ SECTION Tables
 .sq1hi      SKIP &200
 .sq2lo      SKIP &200                   ; (i-255)*(i-255)/4
 .sq2hi      SKIP &200
+.shr3       SKIP &100                   ; b DIV 8: a sprite run byte's row
 .rpostmem   SKIP RPOST_END-RPOST_START  ; POST_SCALE / d2, by d2 / 8
 .trowhi     SKIP SCREEN_HEIGHT+1        ; row y's page in T, to the junk row's
 ENDSECTION
@@ -220,6 +221,15 @@ LOG_STEP = ROUND(-256*log2(PI/1024))    ; 2137.2, for lsec16: a step's angle, it
     STA trowhi,X
     DEX
     BPL trows
+
+    \\ shr3
+
+    LDX #0
+.shifts
+    TXA:LSR A:LSR A:LSR A
+    STA shr3,X
+    INX
+    BNE shifts
     RTS
 }
 

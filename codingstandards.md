@@ -169,6 +169,15 @@ The rest:
 - An index that's one short (as it came out of the sum that made it)
   stays as it is: fold the one into the address, `LDA table+1,X`, never an
   `INX` first.
+- A hot loop's branches (taken each pair, each run) are followed by
+  `SAME_PAGE target` (macros.6502), which fails the build if the branch
+  crosses a page when taken, a cycle each time. Fix one by moving code, not
+  padding: sprite.6502's routines are ordered so its pair loops fit. Code
+  with these asserts goes first in its section, before data whose size
+  changes (`MainCode` starts with the sprite plotters, the map after), so
+  the map doesn't move it. A forward branch round a long block (a
+  handler's column change, more than a page in all) can't always be kept
+  on a page, and costs a cycle a call at most: it goes unguarded.
 - Never a base before the table, `table-1,X`, unless `FITPAGE_FROM` puts
   the base on the table's page (`exp2_skip-8,Y`): with the table on a page
   boundary, the base is on the page before, and every access pays the
@@ -195,6 +204,14 @@ The rest:
 - A table that's read indexed keeps to one page, as a page crossing costs
   a cycle: `FITPAGE` before it (`src/macros.6502`), or an `ASSERT` where
   its place is fixed.
+- A table of any size is made by the loader, `make_tables` (tables.6502),
+  in the `Tables` section, not assembled into the code: `shr3`, `trowhi`.
+  A handful of bytes stays by its code as `EQUB`s (plot.6502's
+  `mode5_pixel`, which the sprite plotters read too; the sprite check,
+  which doesn't assemble plot.6502, has its own copy). Before adding a
+  table, see whether arithmetic on one there does it: `SCREEN_AT` gets a
+  pair's cursor from `shr3`, for 6 cycles more than two 65-byte tables,
+  used once a strip and once a skipped stretch.
 - Tables are sized by the map's caps (`MAX_VERTS`, `src/constants.6502`),
   never by a literal or the demo map's counts: bigger maps are coming.
 - Workspace comes from the virtual sections in `src/memory.6502`, claimed
@@ -226,7 +243,8 @@ The rest:
   instances, each place's first frame unplotted, against `portalc_walkref`,
   and `make test_walk3`, over the stress scene with the depth capped at 3,
   against `portalc_walk3ref`; `make test_fill`, the fill against
-  `portalc_fillref`.
+  `portalc_fillref`; `make test_sprite`, the sprite plotters against
+  `portalc_spriteref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
@@ -239,7 +257,13 @@ The rest:
   ("never finished"), which is a fail too, but one that shows a difference
   says where. A fast path that hands what it rejects to a slower, exact one
   can't be broken by making it stricter: break it laxly, letting through
-  what it should catch.
+  what it should catch. Some can't show even then, as what they let
+  through is handled exactly further on (the engine's clip events at the
+  strip's end, which never come, are kept out of `NEAREST_EVENT` only to
+  save it work): measure one of those on the cycle-exact model instead,
+  and keep it only if it pays. A macro expanded at several sites with the
+  same arguments (`REBUILD_PAIR`, in two pair loops) is broken at each site
+  alone, through a broken copy of it called there.
 - Made-up cases mustn't repeat with the cases' own structure: a value
   stepped by 5 over 16 cases a line comes round to the same place each
   line, and whole combinations (a kind of clip with a kind of span) never
@@ -247,6 +271,16 @@ The rest:
   the bounds' edges), and the rest from an LFSR stepped once a case, the
   same in the C and the 6502 (`LFSR`, test_macros.6502); then count in the
   C which paths the cases reach before trusting the check.
+- Step the LFSR a byte (eight steps) for each made-up value, as the sprite
+  check's `random_byte` does. One step leaves the low byte the last one
+  shifted a bit, as the taps (&B400) miss it: values drawn one after
+  another move together (a sprite's x with its y), and whole cases come
+  round again.
+- Count the 6502's paths too, on the cycle-exact model: every instruction
+  run, every branch taken both ways. Code unrolled by a macro or a `FOR`
+  (a handler per column count, a copy per slot) can leave one copy unreached,
+  which the C's count can't see. A branch that never falls through is
+  either an `(always)` or a test the 6502 can drop.
 - A path the demo scene never takes is checked over the C's stress scene
   (`test/stressdata.6502`, which `make map` makes), and a cap it never
   meets with the cap lowered: a variant of the check, as

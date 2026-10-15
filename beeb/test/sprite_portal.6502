@@ -1,0 +1,31 @@
+\\ test/sprite_portal.6502 - make test_sprite's PORTAL: the sprite plotters' check, with the engine
+\\ it needs: the plotters and the interrupt's base, the check's own arts for the map's.
+
+INCLUDE "../src/memory.6502"
+INCLUDE "../src/constants.6502"
+INCLUDE "../src/macros.6502"
+INCLUDE "../src/arith_macros.6502"
+INCLUDE "../src/tables_macros.6502"
+INCLUDE "../src/sprite_macros.6502"
+INCLUDE "../src/entry_macros.6502"
+INCLUDE "test_macros.6502"
+
+check = test_sprite
+
+SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+entry, filename = "PORTAL", guard = PORTAL_END
+.swramcode_image
+    SECTION SwramCode, org = SWRAM_ORG, guard = SWRAM_END
+        INCLUDE "test.6502"
+        INCLUDE "sprite.6502"
+    ENDSECTION
+
+.maincode_image
+    SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
+        INCLUDE "../src/sprite.6502"
+        INCLUDE "../src/irq.6502"
+        INCLUDE "spritedata.6502"
+    ENDSECTION
+
+    INCLUDE "../src/entry.6502"
+    INCLUDE "../src/tables.6502"
+ENDSECTION

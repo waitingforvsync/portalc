@@ -35,8 +35,8 @@ typedef struct pt_sprite_art {
 
 // Encode art from rows of colour codes, top row first and NULL-terminated,
 // one character per column ('0' transparent, '1'..'7' the palette), with
-// the crossover worked out as Baron's sprite macro does, and the palette's
-// patterns.
+// the crossover worked out from both plotters' work on it at each scale,
+// and the palette's patterns.
 void pt_sprite_encode(pt_sprite_art *a, const char *const rows[], const uint8_t pal[7]);
 
 static inline uint8_t pt_sprite_width(const pt_sprite_art *a)

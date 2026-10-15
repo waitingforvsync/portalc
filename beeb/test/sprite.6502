@@ -1,0 +1,353 @@
+\\ test/sprite.6502 - make test's check of the sprite plotters: made-up sprites over made-up
+\\ screens, each screen summed after, for host/test_build.py.
+
+CASES = 1024                            ; made-up sprites, into screen A and B by turns
+
+SECTION TestResults
+.t_sums1    SKIP CASES                  ; each case's screen's sums
+.t_sums2    SKIP CASES
+.t_bottoms  SKIP SCREEN_WIDTH           ; the case's clip: each column's first pair shown
+.t_tops     SKIP SCREEN_WIDTH           ; and the pair past its last
+ENDSECTION
+
+\\ Made-up sprites, as spriteref makes them, each made-up value a 32-bit Galois LFSR's next byte: an
+\\ art; a scale, 256 to 511 shifted up 0 to 7 then down 4, and a left column and a bottom pair,
+\\ signed bytes halved, the column 16 on, but over 4x one far off, the column a signed byte times 4,
+\\ 16 on, or the pair a signed byte, 256 on; or, every other, under 1x, a scale 32 to 222 (an eighth
+\\ of them 1x itself), a column -16 to 142 (a quarter of them 128 less 0 to 15) and a pair -16 to
+\\ 47; a clip, held from the sprite's first column on the screen less 0 to 15; and the screen made
+\\ up from a byte, each one its offset's low byte EOR its high EOR that byte. Each plotted, and the
+\\ screen summed.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_sums1, t_sums2: each case's screen's sums
+
+.test_sprite
+{
+    ZA_AUTO 4, random                   ; local: the LFSR
+    ZA_AUTO2 case                       ; local: the case, 0 to 1023
+    ZA_AUTO1 term                       ; local: a sum's part
+    ZA_AUTO1 sum1                       ; local: the sum of the screen's bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #LO(&ACE1):STA random
+    LDA #HI(&ACE1):STA random+1
+    LDA #0:STA random+2:STA random+3
+    LDA #0:STA case:STA case+1
+
+    \\ the art, its scale and place
+
+.each_case
+    JSR random_byte
+    AND #7:STA sprite_plot.art
+    LDA case:LSR A:BCS general
+    JSR random_byte                     ; under 1x
+    AND #127:STA term
+    JSR random_byte
+    AND #63:CLC:ADC term:ADC #32
+    STA sprite_plot.scale
+    LDA #0:STA sprite_plot.scale+1
+    LDA term:CMP #16:BCS sized
+    LDA #0:STA sprite_plot.scale        ; 1x itself
+    LDA #1:STA sprite_plot.scale+1
+.sized
+    JSR random_byte
+    AND #127:STA term
+    JSR random_byte
+    AND #31:TAY                         ; (Y: 0 to 31)
+    LDA case:AND #6:CMP #4:BNE spread
+    TYA:AND #15:EOR #&FF:SEC:ADC #128   ; a quarter at the right edge: 128 less 0 to 15
+    STA sprite_plot.x
+    LDA #0:STA sprite_plot.x+1
+    BEQ placed_small                    ; (always)
+    ZA_UNREACHABLE
+.spread
+    TYA:CLC:ADC term                    ; (0 to 158)
+    SEC:SBC #16:STA sprite_plot.x
+    LDA #0:SBC #0:STA sprite_plot.x+1   ; (the borrow its sign)
+.placed_small
+    JSR random_byte
+    AND #63:SEC:SBC #16:STA sprite_plot.y
+    LDA #0:SBC #0:STA sprite_plot.y+1
+    JMP clip
+.general
+    JSR random_byte
+    STA sprite_plot.scale
+    LDA #1:STA sprite_plot.scale+1      ; 256 on
+    JSR random_byte
+    AND #7:STA term:TAX                 ; (term: the shift)
+    BEQ shifted
+.shift
+    ASL sprite_plot.scale:ROL sprite_plot.scale+1
+    DEX
+    BNE shift
+.shifted
+    FOR i = 1..4
+        LSR sprite_plot.scale+1:ROR sprite_plot.scale
+    NEXT
+    LDA term:CMP #6:LDA #0:BCC far_set
+    JSR random_byte                     ; over 4x: one far off
+    AND #1:ORA #2                       ; 2 the column, 3 the pair
+.far_set
+    STA term                            ; (term: which, 1 less, or 0)
+    JSR random_byte
+    LDX term:CPX #2:BEQ far_x
+    CMP #&80:ROR A
+    CLC:ADC #16:STA sprite_plot.x
+    ASL A:LDA #0:SBC #0:EOR #&FF:STA sprite_plot.x+1    ; the sign, extended
+    JMP placed
+.far_x
+    STA sprite_plot.x
+    ASL A:LDA #0:SBC #0:EOR #&FF:STA sprite_plot.x+1
+    FOR i = 1..2
+        ASL sprite_plot.x:ROL sprite_plot.x+1
+    NEXT
+    LDA sprite_plot.x:CLC:ADC #16:STA sprite_plot.x
+    LDA sprite_plot.x+1:ADC #0:STA sprite_plot.x+1
+.placed
+    JSR random_byte
+    LDX term:CPX #3:BEQ far_y
+    CMP #&80:ROR A:STA sprite_plot.y
+    ASL A:LDA #0:SBC #0:EOR #&FF:STA sprite_plot.y+1
+    JMP clip
+.far_y
+    STA sprite_plot.y
+    ASL A:LDA #0:SBC #0:EOR #&FF        ; the sign, extended
+    CLC:ADC #1:STA sprite_plot.y+1      ; 256 on
+
+    \\ the clip, by its kind
+
+    ZA_AUTO1 kind                       ; local: the clip's kind
+    ZA_AUTO1 low                        ; local: a made-up bottom
+    ZA_AUTO1 high                       ; local: and top
+    ZA_AUTO1 span                       ; local: a sloping clip's tops' height over its bottoms
+    ZA_AUTO2 slope                      ; local: and its slope, 8ths, extended
+    ZA_AUTO2 edge                       ; local: and its bottom, 8ths
+
+.clip
+    JSR random_byte
+    AND #7:STA kind
+    CMP #2:BCS kinds
+    LDA #0:STA low                      ; whole, or full
+    LDA #SCREEN_HEIGHT:STA high
+    JMP even_fill
+.kinds
+    BNE not_even
+    JSR up_to_64                        ; even, inside small sprites as the ragged
+    LSR A:LSR A:STA low
+    JSR up_to_64
+    LSR A:CLC:ADC #16:STA high
+.even_fill
+    LDX #SCREEN_WIDTH-1
+.even
+    LDA low:STA t_bottoms,X
+    LDA high:STA t_tops,X
+    DEX
+    BPL even
+    JMP clipped
+.not_even
+    CMP #4:BCC sloping
+    JMP not_sloping
+.sloping
+    JSR up_to_64
+    STA edge
+    LDA #0:STA edge+1
+    FOR i = 1..3
+        ASL edge:ROL edge+1
+    NEXT
+    JSR random_byte
+    STA slope
+    ASL A:LDA #0:SBC #0:EOR #&FF:STA slope+1
+    JSR up_to_64:STA span
+    LDX #0
+.slope_column
+    LDA edge+1:BMI slope_under
+    STA high:LDA edge                   ; (high: the edge's high byte, for the shifts)
+    FOR i = 1..3
+        LSR high:ROR A
+    NEXT
+    LDY high:BNE slope_over
+    CMP #SCREEN_HEIGHT+1:BCC slope_bottom
+.slope_over
+    LDA #SCREEN_HEIGHT
+    BNE slope_bottom                    ; (always)
+    ZA_UNREACHABLE
+.slope_under
+    LDA #0
+.slope_bottom
+    STA t_bottoms,X
+    CLC:ADC span
+    CMP #SCREEN_HEIGHT+1:BCC slope_top
+    LDA #SCREEN_HEIGHT
+.slope_top
+    STA t_tops,X
+    CLC
+    LDA edge:ADC slope:STA edge
+    LDA edge+1:ADC slope+1:STA edge+1
+    INX
+    BPL slope_column                    ; to 127
+    JMP clipped
+.not_sloping
+    BNE not_noisy
+    LDX #0                              ; noisy
+.noisy
+    JSR up_to_64:STA t_bottoms,X
+    JSR up_to_64:STA t_tops,X
+    INX
+    BPL noisy
+    JMP clipped
+.not_noisy
+    CMP #6:BCS not_gappy
+    LDX #0                              ; gappy
+.gappy
+    JSR random_byte
+    AND #3:TAY                          ; 0: a gap
+    LDA #0:STA t_bottoms,X
+    TYA:BEQ gap
+    LDA #SCREEN_HEIGHT
+.gap
+    STA t_tops,X
+    INX
+    BPL gappy
+    JMP clipped
+.not_gappy
+    BNE ragged
+    LDX #0                              ; noisy and gappy
+.noisy_gappy
+    JSR random_byte
+    AND #3:BNE noise
+    STA t_bottoms,X:STA t_tops,X
+    BEQ noisy_gappy_next                ; (always)
+    ZA_UNREACHABLE
+.noise
+    JSR up_to_64:STA t_bottoms,X
+    JSR up_to_64:STA t_tops,X
+.noisy_gappy_next
+    INX
+    BPL noisy_gappy
+    JMP clipped
+.ragged
+    LDX #0                              ; ragged
+.ragged_column
+    JSR up_to_64
+    LSR A:LSR A:STA t_bottoms,X
+    JSR up_to_64
+    LSR A:CLC:ADC #16:STA t_tops,X
+    INX
+    BPL ragged_column
+
+    \\ the screen, made up; the sprite plotted; the screen summed
+
+    ZA_AUTO1 seed                       ; local: the screen's made-up byte
+    ZA_AUTO1 page                       ; local: a page of it, EOR the byte
+
+.clipped
+    LDA kind:BEQ whole_clip
+    LDA #0
+    BEQ whole_set                       ; (always)
+    ZA_UNREACHABLE
+.whole_clip
+    LDA #1
+.whole_set
+    STA sprite_plot.whole
+    JSR random_byte
+    AND #15:STA term                    ; (term: the clip's first column, back from the sprite's)
+    LDA sprite_plot.x+1:BMI x0_zero
+    BNE x0_edge
+    LDA sprite_plot.x:BPL x0_first
+.x0_edge
+    LDA #SCREEN_WIDTH-1
+.x0_first
+    SEC:SBC term:BCS x0_set
+.x0_zero
+    LDA #0
+.x0_set
+    STA sprite_plot.x0
+    CLC
+    LDA #LO(t_bottoms):ADC sprite_plot.x0:STA sprite_plot.bottoms
+    LDA #HI(t_bottoms):ADC #0:STA sprite_plot.bottoms+1
+    CLC
+    LDA #LO(t_tops):ADC sprite_plot.x0:STA sprite_plot.tops
+    LDA #HI(t_tops):ADC #0:STA sprite_plot.tops+1
+    JSR random_byte
+    STA seed
+    LDA case:LSR A
+    LDA #HI(SCREEN_A):BCC screen
+    LDA #HI(SCREEN_B)
+.screen
+    STA base
+    STA fill+2
+    LDX #0
+.fill_page
+    TXA:EOR seed:STA page
+    LDY #0
+.fill_byte
+    TYA:EOR page
+.fill
+    STA &FF00,Y                         ; (the operand's high byte the page)
+    INY
+    BNE fill_byte
+    INC fill+2
+    INX
+    CPX #HI(SCREEN_B-SCREEN_A):BNE fill_page
+    JSR sprite_plot
+    LDA base:STA sum_byte+2
+    LDA #0:STA sum1:STA sum2:TAY
+    LDX #HI(SCREEN_B-SCREEN_A)
+.sum_byte
+    LDA &FF00,Y:FLETCHER sum1, sum2
+    INY
+    BNE sum_byte
+    INC sum_byte+2
+    DEX
+    BNE sum_byte
+    ZA_AUTO2 sums                       ; local: the case's place in t_sums1
+
+    CLC
+    LDA #LO(t_sums1):ADC case:STA sums
+    LDA #HI(t_sums1):ADC case+1:STA sums+1
+    LDY #0
+    LDA sum1:STA (sums),Y
+    LDA sums+1:ADC #HI(CASES):STA sums+1    ; (C clear) its place in t_sums2
+    LDA sum2:STA (sums),Y
+    INC case:BNE next
+    INC case+1
+.next
+    LDA case+1:CMP #HI(CASES):BEQ done
+    JMP each_case
+.done
+    RTS
+
+    \\ the LFSR's next byte, eight steps on (taps &80200003); and 0 to 64 from it, its low 7 bits
+    \\ less 64 past 64. X and Y preserved
+
+    ZA_AUTO1 steps                      ; local: the steps to go
+
+.random_byte
+    LDA #8:STA steps
+.step
+    LSR random+3:ROR random+2:ROR random+1:ROR random
+    BCC stepped
+    LDA random+3:EOR #&80:STA random+3
+    LDA random+2:EOR #&20:STA random+2
+    LDA random:EOR #&03:STA random
+.stepped
+    DEC steps
+    BNE step
+    LDA random
+    RTS
+.up_to_64
+    JSR random_byte
+    AND #127:CMP #65:BCC up
+    SBC #64                             ; (C set)
+.up
+    RTS
+}
+
+\\ plot.6502's table, which the plotters read: this check doesn't assemble plot.6502.
+
+    FITPAGE 4
+.mode5_pixel EQUB &88, &44, &22, &11

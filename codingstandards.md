@@ -232,19 +232,21 @@ The rest:
 
 ### Checking
 
-- What the C has, the 6502 matches byte for byte, and `make test` checks
-  it in b2: `make test_tables`, the loader's tables against
-  `portalc_tables`; `make test_arith`, the macros against
-  `portalc_arithref`; `make test_vcache`, the vertex cache against
-  `portalc_vcacheref`; `make test_capture`, the capture, made-up instances
-  too, against `portalc_captureref`; `make test_plot`, the plotters and the
+- What the C has, the 6502 matches byte for byte, and `make test` checks it
+  in b2: `make test_tables`, the loader's tables against `portalc_tables`;
+  `make test_arith`, the macros against `portalc_arithref`;
+  `make test_vcache`, the vertex cache against `portalc_vcacheref`;
+  `make test_capture`, the capture, made-up instances too (and drawn),
+  against `portalc_captureref`; `make test_plot`, the plotters and the
   unplot against `portalc_plotref`; `make test_clip`, the clips against
   `portalc_clipref`; `make test_walk`, whole captures with their sprites'
   instances, each place's first frame unplotted, against `portalc_walkref`,
   and `make test_walk3`, over the stress scene with the depth capped at 3,
   against `portalc_walk3ref`; `make test_fill`, the fill against
   `portalc_fillref`; `make test_sprite`, the sprite plotters against
-  `portalc_spriteref`.
+  `portalc_spriteref`; `make test_frame`, whole frames, sprites drawn,
+  against `portalc_frameref`, and `make test_frame3`, over the stress scene,
+  against `portalc_frame3ref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it
@@ -290,6 +292,10 @@ The rest:
 - After breaking on purpose, restore and rebuild before measuring or
   replaying anything: a build left from the last break measures the break.
 - Sums are Fletcher's, mod 255 (`FLETCHER`, a carry out added back in).
+  The C tool prints its answers and `host/test_build.py` sums them, unless
+  they're too many to print (a screen a frame, in `frameref`, or a case, in
+  `captureref`'s drawn instances): then the tool sums them itself, as
+  `FLETCHER` does.
   Mod 256, a byte that's the same in every frame of a row of 256 adds
   nothing, so an error in it can't show.
 

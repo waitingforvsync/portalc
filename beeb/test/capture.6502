@@ -16,6 +16,8 @@ SECTION TestResults
 .t_lines2   SKIP &100
 .t_instances1 SKIP INSTANCE_GROUPS      ; the made-up instances', by group
 .t_instances2 SKIP INSTANCE_GROUPS
+.t_drawn1   SKIP INSTANCE_GROUPS        ; and the screens they're drawn into
+.t_drawn2   SKIP INSTANCE_GROUPS
 .t_deep1    SKIP 1                      ; the deep floor's instances'
 .t_deep2    SKIP 1
 ENDSECTION
@@ -32,6 +34,7 @@ ENDSECTION
 \\     t_height1, t_height2: HEIGHT_OF's, by the eye's height
 \\     t_lines1, t_lines2: the made-up lines', by the start's place on the grid
 \\     t_instances1, t_instances2: the made-up instances', by group
+\\     t_drawn1, t_drawn2: the screens they're drawn into, by group
 \\     t_deep1, t_deep2: the deep floor's instances'
 
 .test_capture
@@ -206,13 +209,18 @@ ENDSECTION
 \\ over 8, 4, 2 or 1; and the cell's floor's height as it's seen from an eye a signed byte over 4
 \\ (shifted) from it. Then each instance clipped over a made-up span, [x, x + 0 to 127) cut at 128,
 \\ with made-up extents, and the first hidden over another: each instance made (or 0), then the
-\\ instances, summed by group.
+\\ instances, summed by group. And the case's sprites drawn into screen A or B by turns, made up
+\\ from the case's number (each byte its offset's low byte EOR its high EOR the number's low byte),
+\\ the screens summed by group.
 \\
 \\ Inputs:
 \\     none
 \\
 \\ Outputs:
 \\     t_instances1, t_instances2: their sums, by group
+\\     t_drawn1, t_drawn2: the screens', by group
+
+ASSERT row_edge+33 <= bound_top OR row_edge >= bound_bottom+SCREEN_WIDTH, "test_instances: the plotters' row edges over the bounds, which a group's cases share"
 
 .test_instances
 {
@@ -226,6 +234,8 @@ ENDSECTION
     ZA_AUTO1 instance                   ; local: the instance to clip
     ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
     ZA_AUTO1 sum2                       ; local: and the sum of the sums
+    ZA_AUTO1 drawn1                     ; local: the sum of the screens' bytes
+    ZA_AUTO1 drawn2                     ; local: and the sum of the sums
 
     LDA #LO(&ACE1):STA random
     LDA #HI(&ACE1):STA random+1
@@ -246,7 +256,7 @@ ENDSECTION
     UP_TO_64 random:STA bound_bottom,X
     INX
     BPL bounds                          ; to 127
-    LDA #0:STA case:STA sum1:STA sum2
+    LDA #0:STA case:STA sum1:STA sum2:STA drawn1:STA drawn2
 
     \\ the case: the pool taken, the offsets' shifts, and the instances to make
 
@@ -378,6 +388,43 @@ ENDSECTION
     JSR instance_hide
 .sum
     INSTANCE_SUMS sum1, sum2
+
+    \\ the case's sprites drawn, into a screen made up from its number, and the screen summed
+
+    ZA_AUTO1 number                     ; local: the case's number, its low byte
+    ZA_AUTO1 page                       ; local: a page of the screen
+
+    LDX #HI(SCREEN_A)
+    LDA case:LSR A:BCC screen
+    LDX #HI(SCREEN_B)                   ; every other case's
+.screen
+    STX base:STX make+2:STX sum_page+2
+    LDA group:ASL A:ASL A:ASL A:ASL A:ORA case:STA number
+    LDA #0:STA page
+.make_page
+    LDA page:EOR number:STA made+1
+    LDY #0
+.make_byte
+    TYA
+.made
+    EOR #0                              ; (the page EOR the number)
+.make
+    STA &FF00,Y                         ; (the operand's high byte the screen's page)
+    INY
+    BNE make_byte
+    INC make+2
+    INC page
+    LDA page:CMP #HI(SCREEN_B-SCREEN_A):BNE make_page
+    JSR sprites
+    LDY #0
+    LDX #HI(SCREEN_B-SCREEN_A)          ; pages
+.sum_page
+    LDA &FF00,Y:FLETCHER drawn1, drawn2 ; (the operand's high byte the screen's page)
+    INY
+    BNE sum_page
+    INC sum_page+2
+    DEX
+    BNE sum_page
     INC case
     LDA case:CMP #INSTANCE_CASES:BEQ grouped
     JMP each_case
@@ -385,6 +432,8 @@ ENDSECTION
     LDX group
     LDA sum1:STA t_instances1,X
     LDA sum2:STA t_instances2,X
+    LDA drawn1:STA t_drawn1,X
+    LDA drawn2:STA t_drawn2,X
     INC group
     LDA group:CMP #INSTANCE_GROUPS:BEQ done
     JMP each_group

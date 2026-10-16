@@ -14,7 +14,9 @@
 #   make test_walk       the walk, the whole capture, likewise; and test_walk3
 #                        over the stress scene, its depth capped at 3
 #   make test_fill       the fill, likewise
-#   make test_sprite     the sprite plotters, likewise: each
+#   make test_sprite     the sprite plotters, likewise
+#   make test_frame      whole frames, the sprites drawn, likewise; and test_frame3
+#                        over the stress scene, its depth capped at 3: each
 #                        test/CHECK_portal.6502, built with -D TEST=TRUE
 #   make map      remake src/mapdata.6502 from the C's demo scene,
 #                 test/stressdata.6502 from its stress scene, and
@@ -36,7 +38,7 @@ B2_WIN = b2
 
 SRC = boot.6502 portal.6502
 DEPS = $(SRC) $(wildcard src/*.6502) $(wildcard test/*.6502)
-CHECKS = arith vcache capture plot clip walk walk3 fill sprite
+CHECKS = arith vcache capture plot clip walk walk3 fill sprite frame frame3
 
 all: $(BUILD)/portal.ssd
 

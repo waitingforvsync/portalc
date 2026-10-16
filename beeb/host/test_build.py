@@ -10,7 +10,7 @@ import b2
 from test_tables import symbols
 
 USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot, clip, walk, '
-         'walk3, fill or sprite; its build, its symbols, and the C\'s answers)')
+         'walk3, fill, sprite, frame or frame3; its build, its symbols, and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -96,7 +96,8 @@ def capture_expected(c):
     7), the eye's height, the counts and each byte column's toggle_end; then each side of the eye's
     cell walked, its screen angles and columns, and if it has columns its ends and its lines at the
     cell's ceiling and floor and the eye's height. Then HEIGHT_OF's, by the eye's height: each
-    height's low byte, then its high; and the made-up lines', by row."""
+    height's low byte, then its high; the made-up lines', by row; and the made-up instances', and
+    the screens they're drawn into (summed by the C), by group."""
     frames, places = c['frames'], c['places']
     s1s, s2s = [], []
     for p in range(places):
@@ -156,6 +157,8 @@ def capture_expected(c):
         ('lines s2', 't_lines2', 0, 0, bytes(l2s)),
         ('instances s1', 't_instances1', 0, 0, hex_sums(c['insts'])[0]),
         ('instances s2', 't_instances2', 0, 0, hex_sums(c['insts'])[1]),
+        ('drawn s1', 't_drawn1', 0, 0, bytes.fromhex(c['drawn1'])),
+        ('drawn s2', 't_drawn2', 0, 0, bytes.fromhex(c['drawn2'])),
         ('deep s1', 't_deep1', 0, 0, hex_sums([c['deep']])[0]),
         ('deep s2', 't_deep2', 0, 0, hex_sums([c['deep']])[1]),
     ]
@@ -233,6 +236,15 @@ def sprite_expected(c):
     ]
 
 
+def frame_expected(c):
+    """Whole frames' sums, by the camera's place: its frames' screens, summed by the C as the Beeb
+    sums them."""
+    return [
+        ('frame s1', 't_screen1', 0, 0, bytes.fromhex(c['screen1'])),
+        ('frame s2', 't_screen2', 0, 0, bytes.fromhex(c['screen2'])),
+    ]
+
+
 def arith_expected(c):
     """The arithmetic macros' answers. Each check's are (name, label, where in it, the first
     answer's input, the answers)."""
@@ -272,7 +284,8 @@ def arith_expected(c):
 
 EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
             'plot': plot_expected, 'clip': clip_expected, 'walk': walk_expected,
-            'walk3': walk_expected, 'fill': fill_expected, 'sprite': sprite_expected}
+            'walk3': walk_expected, 'fill': fill_expected, 'sprite': sprite_expected,
+            'frame': frame_expected, 'frame3': frame_expected}
 
 
 def main():

@@ -12,6 +12,7 @@ INCLUDE "../src/capture_macros.6502"
 INCLUDE "../src/instance_macros.6502"
 INCLUDE "../src/plot_macros.6502"
 INCLUDE "../src/clip_macros.6502"
+INCLUDE "../src/sprite_macros.6502"
 INCLUDE "../src/entry_macros.6502"
 INCLUDE "test_macros.6502"
 INCLUDE "capture_macros.6502"
@@ -29,14 +30,16 @@ SECTION Portal, org = PORTAL_ORG, load = &FFFF0000+PORTAL_ORG, exec = &FFFF0000+
         INCLUDE "../src/plot.6502"
         INCLUDE "../src/instance.6502"
         INCLUDE "../src/clip.6502"
+        INCLUDE "../src/sprites.6502"
         INCLUDE "test.6502"
         INCLUDE "capture.6502"
     ENDSECTION
 
 .maincode_image
     SECTION MainCode, org = MAINCODE_ORG, guard = MAINCODE_END
-        INCLUDE "../src/mapdata.6502"
+        INCLUDE "../src/sprite.6502"
         INCLUDE "../src/irq.6502"
+        INCLUDE "../src/mapdata.6502"
     ENDSECTION
 
     INCLUDE "../src/entry.6502"

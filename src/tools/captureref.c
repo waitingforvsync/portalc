@@ -35,6 +35,15 @@ static uint8_t up_to_64(void)
     return v > 64 ? (uint8_t)(v - 64) : v;
 }
 
+// A byte into a pair of Fletcher sums, mod 255 as FLETCHER makes them: a carry out goes back in.
+static void fletcher(uint8_t *s1, uint8_t *s2, uint8_t b)
+{
+    unsigned t = (unsigned)*s1 + b;
+    *s1 = (uint8_t)(t > 255 ? t - 255 : t);
+    t = (unsigned)*s2 + *s1;
+    *s2 = (uint8_t)(t > 255 ? t - 255 : t);
+}
+
 static void hex(const uint8_t *b, unsigned n)
 {
     for (unsigned i = 0; i < n; i++)
@@ -176,7 +185,7 @@ int main(void)
     printf("],\n");
 
     // made-up instances of the first cell's sprite that has one, for the paths the walk never
-    // takes. A group's cases share made-up bounds, each column's top then bottom, 0 to 64. A case
+    // takes, and the sprite pass's draw order. A group's cases share made-up bounds, each column's top then bottom, 0 to 64. A case
     // starts with 0, 192, 384 or 576 of the clip pool's bytes taken, so it fills, and makes 3 to 6
     // instances (6 when they're near), each from a made-up camera: an offset from the sprite, each
     // part a signed byte times the case's 1, 2, 4 or 8; its facing, made up 1 in 4 times, else the
@@ -184,13 +193,16 @@ int main(void)
     // (the nearer, the closer to it); and the cell's floor's height as it's seen from an eye a
     // signed byte over 4 (shifted, so rounded down) from it. Then each instance clipped over a
     // made-up span, [x, x + 0 to 127) cut at 128, with made-up extents, and the first hidden over
-    // another: each instance made (or 0), then the instances
+    // another: each instance made (or 0), then the instances. And the case's sprites drawn into a
+    // screen made up from the case's number (each byte its offset's low byte EOR its high EOR the
+    // number's low byte), the screens summed here, by group: they'd be 4K a case
     uint8_t cell = 1;
     while (m.cells[cell].sprite == 0)
         cell++;
     const pt_sprite *sp = &m.sprites[m.cells[cell].sprite];
     pt_vertex base = m.verts[sp->v];
     unsigned made = 0, order = 0;
+    static uint8_t drawn1[INST_GROUPS], drawn2[INST_GROUPS];
     printf("  \"insts\": [");
     for (unsigned g = 0; g < INST_GROUPS; g++) {
         for (unsigned c = 0; c < PT_SCREEN_WIDTH; c++) {
@@ -239,10 +251,20 @@ int main(void)
                 pt_render_inst_hide(&r, 1, xl, xr > 128 ? (uint8_t)128 : (uint8_t)xr);
             }
             insts();
+            uint8_t number = (uint8_t)(g * INST_CASES + k);
+            for (unsigned i = 0; i < sizeof r.fb; i++)
+                r.fb[i] = (uint8_t)(i ^ (i >> 8) ^ number);
+            pt_render_sprites(&r);
+            for (unsigned i = 0; i < sizeof r.fb; i++)
+                fletcher(&drawn1[g], &drawn2[g], r.fb[i]);
         }
         printf("\"");
     }
-    printf("\n  ],\n");
+    printf("\n  ],\n  \"drawn1\": \"");
+    hex(drawn1, sizeof drawn1);
+    printf("\",\n  \"drawn2\": \"");
+    hex(drawn2, sizeof drawn2);
+    printf("\",\n");
 
     // a near sprite on a floor far below the eye, the camera 33 to 40 units straight ahead of it
     // (west), facing it, the eye 14 to 21 steps over the floor: an offset past 255 rows, in whole

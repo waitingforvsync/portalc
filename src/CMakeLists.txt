@@ -23,7 +23,8 @@ set(PORTAL_SOURCES
     vcache.h
 )
 
-# portal_depth3 is the same with the walk's depth capped at 3, for the walk's check (walk3ref)
+# portal_depth3 is the same with the walk's depth capped at 3, for the walk's and the frame's
+# checks over the stress scene (walk3ref, frame3ref)
 foreach(lib portal portal_depth3)
     add_library(${lib} STATIC ${PORTAL_SOURCES})
     target_link_libraries(${lib} PUBLIC richc)
@@ -57,7 +58,7 @@ endif()
 # comparison against a floating-point ray cast ----
 
 foreach(tool sweep fb2ppm mapdump refcmp tables mapasm arithref vcacheref captureref plotref clipref
-             walkref fillref spriteref)
+             walkref fillref spriteref frameref)
     add_executable(portalc_${tool} tools/${tool}.c)
     target_link_libraries(portalc_${tool} PRIVATE portal)
     if(NOT MSVC)
@@ -70,8 +71,12 @@ endif()
 add_executable(portalc_walk3ref tools/walkref.c)
 target_link_libraries(portalc_walk3ref PRIVATE portal_depth3)
 target_compile_definitions(portalc_walk3ref PRIVATE WALK_STRESS)
+add_executable(portalc_frame3ref tools/frameref.c)
+target_link_libraries(portalc_frame3ref PRIVATE portal_depth3)
+target_compile_definitions(portalc_frame3ref PRIVATE FRAME_STRESS)
 if(NOT MSVC)
     target_compile_options(portalc_walk3ref PRIVATE -Wall -Wextra)
+    target_compile_options(portalc_frame3ref PRIVATE -Wall -Wextra)
 endif()
 
 # ---- tests ----

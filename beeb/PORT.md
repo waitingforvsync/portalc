@@ -8,8 +8,8 @@ The C in `src/` is the reference. The 6502 does the same thing, byte for
 byte wherever `make test` can check it. It takes shortcuts where the C's
 checks show they're safe: see [Where the 6502 differs](#where-the-6502-differs).
 
-The first demo is a stationary camera with only the turn keys. There's no
-moving, no collision, no stepping through portals and no sprites yet.
+The first demo is a stationary camera with only the turn keys, sprites
+drawn. There's no moving, no collision and no stepping through portals yet.
 
 ## How far it's got
 
@@ -22,7 +22,7 @@ ambitions.
 | C | 6502 | State |
 |---|---|---|
 | `pt_arith_init` (arith.c) | `make_tables` (tables.6502), packed at assembly time by `pk_` and unpacked by `UNPACK` | done: every byte, `portalc_tables` |
-| main.c's loop: `pt_camera_tick`, `pt_render_frame` | `start` (start.6502): `update_camera`, `capture`, wait, `fill`, `sprites`, swap, `unplot` | done, bar `sprites`, a stub: the first demo runs |
+| main.c's loop: `pt_camera_tick`, `pt_render_frame` | `start` (start.6502): `update_camera`, `capture`, wait, `fill`, `sprites`, swap, `unplot` | done: the first demo runs, sprites and all |
 | main.c's `gather_input` | `irq` (irq.6502): vsync count, keys as the `IN_` bits, screen swap | done, checked by hand in jsbeeb |
 | — | `boot.6502`: finds a sideways RAM bank | Beeb only, in progress |
 | — | `entry` (entry.6502): takes over the machine, copies the code out, sets up the screen | Beeb only |
@@ -106,7 +106,7 @@ ambitions.
 | `pt_sprite_plot_engine`: `assign`, `strip_engine`, `strip_engine_clip`, `fetch`, `nearest`, `nearest_event`, `stretch` | `sprite_engine`: the strip's slots, the clean strip's runs under the screen, the clipped strip's events (each slot's next, `NEAREST_EVENT`), the stretch and `events_due`; the handlers `change1` to `change4` and `swallow1` to `swallow4`, from `CHANGES` and `CHANGE_COLUMN` (sprite_macros.6502) | done, in the plotters' check: every instruction run and each branch both ways, counted on the cycle-exact model |
 | `pt_sprite_plot_rebuild`: `strip_rebuild`, `strip_rebuild_clip`, `afetch`, `dummy`, `rebuild_pair` | `sprite_rebuild`; `REBUILD_FETCH`, `REBUILD_DUMMY`, and `REBUILD_PAIR`, inline in each strip's pair loop | done, in the plotters' check: every instruction run and each branch both ways |
 | `classify`, `findcol` | `strip_window`, `find_column` | done, in the plotters' check |
-| the sprite pass in `frame` | `sprites` (sprites.6502) | stub |
+| the sprite pass in `frame` | `sprites` (sprites.6502): each instance in the draw order to `sprite_plot`, whole if its visits showed every column, all of it (`whole && cols == width`) | done: whole frames (the capture, the fill, the sprites, the unplot) from the walk's places at 32 angles each, the screens summed by place: `portalc_frameref` over the demo scene, and `portalc_frame3ref` over the stress scene, the depth capped at 3; and the capture's made-up instance cases drawn, for sprites overlapping (`pt_render_sprites`, `portalc_captureref`) |
 | `unplot` (render.c), with `pt_render_unplot` for the checks | `unplot` (unplot.6502), each record through `unplot_flat`, `unplot_shallow` or `unplot_steep`, then row 0 | done: the plotters' made-up runs cleared at each gradient, `portalc_plotref`; and each place's first frame in the walks' checks |
 | `pt_unplot_shallow`, `pt_unplot_steep` (plot.c), with `unpart_`, `unbyte_` | `UNPLOT_SHALLOW`, `UNPLOT_STEEP` (unplot_macros.6502), with `UNPLOT_PART` and `UNPLOT_BYTES` | done, in the unplot's checks |
 
@@ -475,7 +475,16 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
      page lower to fit (&3A00), and `MainCode` has 3,991 bytes left.
      `mode5_pixel` is plot.6502's; the sprite check has a copy, as it
      doesn't assemble plot.6502.
-  3. `sprites` in the frame, and a whole-frame check.
+  3. ~~`sprites` in the frame, and a whole-frame check.~~ Done. Over the
+     frame check's 4,672 frames (the walk's places at 32 angles each) the
+     pass costs 2.3k cycles a frame on average: 22.3k in the one frame in
+     ten that shows the boulder, and 50.9k at most. The demo's start view
+     is the C's byte for byte, boulder and all. Neither scene has two
+     sprites in one frame, so the capture's check draws its made-up
+     instance cases too (3 to 6 boulders a case, 1,828 of its 2,794 in an
+     order of more than one): drawn near to far, 47 of its 64 groups'
+     screens differ. Neither scene has a second art, so nothing checks
+     which art `sprites` picks.
 - Later: moving, collision and `pt_vcache_locate`.
 - To revisit, if the cycles are wanted: two copies of the stretch loops,
   one going on to the handler and one, for the stretch to a clip event or

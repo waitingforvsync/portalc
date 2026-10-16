@@ -239,6 +239,10 @@ void pt_render_inst_hide(pt_render *r, uint8_t ii, uint8_t xl, uint8_t xr);
 // (unplot), for the tools' checks: T is all 0 after.
 void pt_render_unplot(pt_render *r);
 
+// The frame's sprites drawn into fb, far first, from its instances (the
+// sprite pass), for the tools' checks.
+void pt_render_sprites(pt_render *r);
+
 // A height z as an edge's lines see it from an eye at eye_z (height_of).
 pt_height pt_render_height(uint8_t z, uint8_t eye_z);
 

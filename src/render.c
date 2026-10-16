@@ -1501,11 +1501,12 @@ void pt_render_unplot(pt_render *r)
     unplot(r);
 }
 
-static void frame(pt_render *r, uint8_t angle, uint8_t cell)
+// The sprite pass: the instances drawn over the fill, far first, each
+// clipped to the rows its cell's visits showed in each column, and whole if
+// they showed every column, all of it in each.
+static void sprites(pt_render *r)
 {
     const pt_map *m = r->map;
-    pt_render_capture(r, angle, cell);
-    pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->toggle_end);
     for (uint8_t k = 0; k < r->num_order; k++) {
         const pt_inst *in = &r->insts[r->order[k]];
         uint8_t width = (uint8_t)(in->cx1 - in->cx0);
@@ -1514,6 +1515,19 @@ static void frame(pt_render *r, uint8_t angle, uint8_t cell)
                                .whole = in->whole && in->cols == width};
         pt_sprite_plot(r->fb, &m->arts[m->sprites[in->sprite].art], in->place, clip);
     }
+}
+
+void pt_render_sprites(pt_render *r)
+{
+    sprites(r);
+}
+
+static void frame(pt_render *r, uint8_t angle, uint8_t cell)
+{
+    const pt_map *m = r->map;
+    pt_render_capture(r, angle, cell);
+    pt_mode5_fill(r->fb, r->tb, pt_shade(m->cells[cell].ceil), r->toggle_end);
+    sprites(r);
     unplot(r);
 
     if (r->num_visits > r->visits_high)

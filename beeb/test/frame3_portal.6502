@@ -1,0 +1,6 @@
+\\ test/frame3_portal.6502 - make test_frame3's PORTAL: whole frames' check over the C's stress
+\\ scene, the walk's depth capped at 3, as test_walk3's.
+
+depth_cap = 3
+stress_scene = TRUE
+INCLUDE "frame_portal.6502"

@@ -1,16 +1,57 @@
 \\ sprites.6502 - the sprites, over the fill.
 
-\\ Draw the frame's sprites, far to near, into the buffer not on show, each clipped to the columns
-\\ its cells showed. A stub for now.
+\\ Draw the frame's sprites, far to near, into the buffer not on show, each clipped to the rows its
+\\ cells showed in each column (frame's sprite pass): each instance's place and clip to sprite_plot.
 \\
 \\ Inputs:
 \\     base: the buffer's page
-\\     the capture's instances, order and clip rows
+\\     num_order, draw_order: the instances, far first
+\\     the instances and their clip rows (instance.6502)
 \\
 \\ Outputs:
 \\     the buffer: the sprites drawn
+\\     A, X, Y: corrupted
 
 .sprites
 {
+    ZA_AUTO1 next                       ; local: the next in the draw order
+
+    LDA #0:STA next
+.each
+    LDX next:CPX num_order:BEQ done
+    INC next
+    LDY draw_order,X                    ; the instance
+    LDX instance_sprite,Y
+    LDA sprite_art,X:STA sprite_plot.art
+    LDA instance_scalelo,Y:STA sprite_plot.scale
+    LDA instance_scalehi,Y:STA sprite_plot.scale+1
+    LDA instance_xlo,Y:STA sprite_plot.x
+    LDA instance_xhi,Y:STA sprite_plot.x+1
+    LDA instance_ylo,Y:STA sprite_plot.y
+    LDA instance_yhi,Y:STA sprite_plot.y+1
+    LDA instance_x0,Y:STA sprite_plot.x0
+
+    \\ its clip: the bottoms at its place in the pool, the tops its width on
+
+    LDA instance_x1,Y:SEC:SBC instance_x0,Y:TAX     ; the width
+    CLC
+    LDA instance_cliplo,Y:ADC #LO(clip_rows):STA sprite_plot.bottoms
+    LDA instance_cliphi,Y:ADC #HI(clip_rows):STA sprite_plot.bottoms+1
+    TXA:ADC sprite_plot.bottoms:STA sprite_plot.tops    ; (C clear: the pool's in memory)
+    LDA sprite_plot.bottoms+1:ADC #0:STA sprite_plot.tops+1
+
+    \\ whole if its cells' visits showed every column, and all of it in each
+
+    TXA:CMP instance_columns,Y:BEQ every
+    LDA #0
+    BEQ classed                         ; (always) a column not shown
+    ZA_UNREACHABLE
+.every
+    LDA instance_whole,Y
+.classed
+    STA sprite_plot.whole
+    JSR sprite_plot
+    JMP each
+.done
     RTS
 }

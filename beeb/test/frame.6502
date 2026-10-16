@@ -1,0 +1,83 @@
+\\ test/frame.6502 - make test's check of whole frames: the capture, the fill and the sprites into
+\\ the screens from places in each cell, for host/test_build.py.
+
+INCLUDE "places.6502"
+
+ANGLES = 32                             ; from each place: every 8th of the C's 256ths
+
+SECTION TestResults
+.t_screen1  SKIP PLACES                 ; each place's frames' screens' Fletcher sums
+.t_screen2  SKIP PLACES
+ENDSECTION
+
+\\ From each place, at each angle, a frame as the main loop draws one: the capture, the fill and the
+\\ sprites into screen A or B by turns, then the unplot; the screens summed by place.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_screen1, t_screen2: the frames' screens' sums, by place
+
+.test_frame
+{
+    ZA_AUTO1 place                      ; local: the camera's place
+    ZA_AUTO1 sum1                       ; local: the sum of the screens' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    JSR map_init                        ; the vertex cache and visits empty
+    JSR clear_t
+    LDA #0:STA place
+.position
+    LDX place
+    LDA t_placecell,X:STA camcell
+    LDA t_placexlo,X:STA camx
+    LDA t_placexhi,X:STA camx+1
+    LDA t_placeylo,X:STA camy
+    LDA t_placeyhi,X:STA camy+1
+    JSR vcache_reset
+    LDA #0:STA camangle:STA camangle+1:STA sum1:STA sum2
+.angle
+    JSR capture
+    LDX #HI(SCREEN_A)
+    LDA camangle:AND #1024/ANGLES:BEQ screen
+    LDX #HI(SCREEN_B)                   ; every other frame's
+.screen
+    STX base
+    JSR fill
+    JSR sprites
+    JSR unplot
+
+    \\ the screen summed
+
+    LDA base:STA page+2
+    LDY #0
+    LDX #HI(SCREEN_B-SCREEN_A)          ; pages
+.page
+    LDA &FF00,Y:FLETCHER sum1, sum2     ; (the operand's high byte the screen's page)
+    INY
+    BNE page
+    INC page+2
+    DEX
+    BNE page
+
+    CLC:LDA camangle:ADC #1024/ANGLES   ; on to the next angle
+    STA camangle
+    LDA camangle+1:ADC #0:AND #3:STA camangle+1
+    ORA camangle
+    BEQ angles                          ; round to 0: all of them
+    JMP angle
+
+    \\ the place's sums
+
+.angles
+    LDX place
+    LDA sum1:STA t_screen1,X
+    LDA sum2:STA t_screen2,X
+    INC place
+    LDA place:CMP #PLACES
+    BEQ done
+    JMP position
+.done
+    RTS
+}

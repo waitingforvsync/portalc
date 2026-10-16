@@ -68,3 +68,55 @@ ENDSECTION
     LDY ysave
     RTS
 }
+
+\\ The cell the camera's in, from the one it was in (pt_vcache_locate): across each portal side its
+\\ vertices' angles say it's crossed, a cell at a time (8 at most, as the C asserts; none counted).
+\\
+\\ Inputs:
+\\     camcell: the cell it was in
+\\     camx, camy: where it is, the vertex cache emptied since it moved
+\\
+\\ Outputs:
+\\     camcell: the cell it's in
+\\     A, X, Y: corrupted
+
+.vcache_locate
+{
+    ZA_AUTO1 side                       ; local: the side
+    ZA_AUTO1 adjacent                   ; local: the cell across it
+    ZA_AUTO2 start                      ; local: its start's angle, then the angle to its end
+
+.pass
+    LDX camcell
+    LDY cell_first,X
+.each_side
+    LDA side_adj,Y:BEQ next             ; a wall
+    STA adjacent
+    STY side
+    LDX side_v,Y
+    VCACHE_VERT_TO_X
+    LDA vc_anglo,X:STA start
+    LDA vc_anghi,X:STA start+1
+    LDX camcell
+    RING_NEXT
+    LDX side_v,Y
+    VCACHE_VERT_TO_X
+    SEC
+    LDA vc_anglo,X:SBC start:STA start
+    LDA vc_anghi,X:SBC start+1:AND #3   ; the angle to the end: 10 bits
+    CMP #2:BCC kept                     ; under a half turn: inside, its vertices clockwise
+    BNE crossed                         ; over
+    LDA start:BNE crossed
+    LDA adjacent:CMP camcell:BCS kept   ; on it: the lower-numbered cell's
+.crossed
+    LDA adjacent:STA camcell
+    BNE pass                            ; (always: a cell across is never 0)
+    ZA_UNREACHABLE
+.kept
+    LDY side
+    LDX camcell
+.next
+    INY
+    TYA:CMP cell_first+1,X:BNE each_side
+    RTS
+}

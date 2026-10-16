@@ -1,5 +1,5 @@
-\\ test/arith.6502 - make test's check of the arithmetic macros: LOG2_8, LOG2_16, EXP2_8 and
-\\ POLAR, over every input or sums of them, for host/test_build.py to compare with the C's.
+\\ test/arith.6502 - make test's check of the arithmetic macros: LOG2_8, LOG2_16, EXP2_8, POLAR, the
+\\ sines' multiplies and MULTIPLY_FRACTION, over every input or sums of them, for host/test_build.py.
 
 TEST_CAM = &1000                        ; POLAR's camera, both ways
 
@@ -22,6 +22,18 @@ SECTION TestResults
 .t_pfar1    SKIP &100                   ; and far
 .t_pfar2    SKIP &100
 .t_bits     SKIP 1                      ; MAP_OFFSET_BITS, the far grid's bound
+.t_usin1    SKIP &100                   ; UNITS_SINE's sums, by angle DIV 4
+.t_usin2    SKIP &100
+.t_ucos1    SKIP &100                   ; and its cosine's
+.t_ucos2    SKIP &100
+.t_msin1    SKIP &100                   ; MULTIPLY_SINE's
+.t_msin2    SKIP &100
+.t_mcos1    SKIP &100
+.t_mcos2    SKIP &100
+.t_dot1     SKIP &100                   ; DOT_DIRECTION's
+.t_dot2     SKIP &100
+.t_frac1    SKIP &100                   ; MULTIPLY_FRACTION's, by the fraction
+.t_frac2    SKIP &100
 ENDSECTION
 
 SECTION Frame                           ; POLAR's workspace: the loader's, before the engine's
@@ -39,7 +51,7 @@ ENDSECTION
 \\     none
 \\
 \\ Outputs:
-\\     t_log8f to t_bits: the answers
+\\     t_log8f to t_frac2: the answers
 
 .test_arith
 {
@@ -90,6 +102,15 @@ ENDSECTION
     TEST_POLAR t_nearxlo, t_nearxhi, t_pnear1, t_pnear2
     TEST_POLAR t_farxlo, t_farxhi, t_pfar1, t_pfar2
     LDA #MAP_OFFSET_BITS:STA t_bits
+
+    \\ the sines' multiplies, and MULTIPLY_FRACTION
+
+    TEST_SINE 0, FALSE, t_usin1, t_usin2
+    TEST_SINE 0, TRUE, t_ucos1, t_ucos2
+    TEST_SINE 1, FALSE, t_msin1, t_msin2
+    TEST_SINE 1, TRUE, t_mcos1, t_mcos2
+    TEST_SINE 2, FALSE, t_dot1, t_dot2
+    TEST_FRACTION t_frac1, t_frac2
     RTS
 }
 

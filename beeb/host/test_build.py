@@ -10,7 +10,8 @@ import b2
 from test_tables import symbols
 
 USAGE = ('usage: test_build.py CHECK DISC SYMBOLS JSON (arith, vcache, capture, plot, clip, walk, '
-         'walk3, fill, sprite, frame or frame3; its build, its symbols, and the C\'s answers)')
+         'walk3, fill, sprite, frame, frame3, camera or camerastress; its build, its symbols, '
+         'and the C\'s answers)')
 DONE = 0xA5
 
 
@@ -59,7 +60,7 @@ def fletcher_bytes(values):
 
 def vcache_expected(c):
     """The vertex cache's sums, by the camera's vertex: each vertex's first entry, its entry
-    the second time, and its polar form."""
+    the second time, and its polar form; and the cells located round each place, by place."""
     flat, n = c['vcache'], c['verts']
     s1s, s2s = [], []
     for p in range(n):
@@ -70,9 +71,12 @@ def vcache_expected(c):
         s1, s2 = fletcher_bytes(bs)
         s1s.append(s1)
         s2s.append(s2)
+    locate1, locate2 = hex_sums(c['locate'])
     return [
         ('VCACHE_VERT s1', 't_vcache1', 0, 0, bytes(s1s)),
         ('VCACHE_VERT s2', 't_vcache2', 0, 0, bytes(s2s)),
+        ('locate s1', 't_locate1', 0, 0, locate1),
+        ('locate s2', 't_locate2', 0, 0, locate2),
     ]
 
 
@@ -236,6 +240,19 @@ def sprite_expected(c):
     ]
 
 
+def camera_expected(c):
+    """The camera's tick's sums, by place: each frame's camera after it, made-up and into the
+    place's corner."""
+    camera1, camera2 = hex_sums(c['places'])
+    corner1, corner2 = hex_sums(c['corners'])
+    return [
+        ('camera s1', 't_camera1', 0, 0, camera1),
+        ('camera s2', 't_camera2', 0, 0, camera2),
+        ('corner s1', 't_corner1', 0, 0, corner1),
+        ('corner s2', 't_corner2', 0, 0, corner2),
+    ]
+
+
 def frame_expected(c):
     """Whole frames' sums, by the camera's place: its frames' screens, summed by the C as the Beeb
     sums them."""
@@ -243,6 +260,17 @@ def frame_expected(c):
         ('frame s1', 't_screen1', 0, 0, bytes.fromhex(c['screen1'])),
         ('frame s2', 't_screen2', 0, 0, bytes.fromhex(c['screen2'])),
     ]
+
+
+def grouped(values, size):
+    """A pair of sums over each group of size answers in turn, 16 bits each (low byte first), as
+    two byte strings."""
+    s1s, s2s = [], []
+    for g in range(0, len(values), size):
+        s1, s2 = fletcher(values[g:g + size])
+        s1s.append(s1)
+        s2s.append(s2)
+    return bytes(s1s), bytes(s2s)
 
 
 def arith_expected(c):
@@ -279,13 +307,24 @@ def arith_expected(c):
         ('POLAR near s2', 't_pnear2', 0, 0, near2),
         ('POLAR far s1', 't_pfar1', 0, 0, far1),
         ('POLAR far s2', 't_pfar2', 0, 0, far2),
+    ] + [
+        (label % (s + 1), table % (s + 1), 0, 0, sums[s])
+        for name, size, label, table in (('units_sin', 512, 'UNITS_SINE s%d', 't_usin%d'),
+                                        ('units_cos', 512, 'UNITS cos s%d', 't_ucos%d'),
+                                        ('mul_sin', 512, 'MULTIPLY_SINE s%d', 't_msin%d'),
+                                        ('mul_cos', 512, 'MULTIPLY cos s%d', 't_mcos%d'),
+                                        ('dot_dir', 512, 'DOT_DIRECTION s%d', 't_dot%d'),
+                                        ('mulu16_frac', 128, 'FRACTION s%d', 't_frac%d'))
+        for sums in [grouped(c[name], size)]
+        for s in (0, 1)
     ]
 
 
 EXPECTED = {'arith': arith_expected, 'vcache': vcache_expected, 'capture': capture_expected,
             'plot': plot_expected, 'clip': clip_expected, 'walk': walk_expected,
             'walk3': walk_expected, 'fill': fill_expected, 'sprite': sprite_expected,
-            'frame': frame_expected, 'frame3': frame_expected}
+            'frame': frame_expected, 'frame3': frame_expected, 'camera': camera_expected,
+            'camerastress': camera_expected}
 
 
 def main():

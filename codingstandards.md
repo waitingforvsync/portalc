@@ -246,7 +246,9 @@ The rest:
   `portalc_fillref`; `make test_sprite`, the sprite plotters against
   `portalc_spriteref`; `make test_frame`, whole frames, sprites drawn,
   against `portalc_frameref`, and `make test_frame3`, over the stress scene,
-  against `portalc_frame3ref`.
+  against `portalc_frame3ref`; `make test_camera`, the camera's tick against
+  `portalc_cameraref`, and `make test_camerastress`, over the stress scene,
+  against `portalc_camerastressref`.
 - A macro or routine is run over every input where that's feasible,
   summed where the answers won't fit. Each check is its own program,
   `test/CHECK_portal.6502` (`-D TEST=TRUE`), with only the engine files it

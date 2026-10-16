@@ -27,13 +27,22 @@ FUNCTION place_cells(c)
     ENDIF
 = r
 
+FUNCTION place_vertices(c)
+    IF c == MAP_CELLS
+        r = {}
+    ELSE
+        r = CONCAT(255, ring(c), place_vertices(c+1))
+    ENDIF
+= r
+
 place_x = places(map_vert_x, 1)
 place_y = places(map_vert_y, 1)
 place_cell = place_cells(1)
+place_vertex = place_vertices(1)
 PLACES = LEN(place_cell)
 ASSERT PLACES <= 256, "test: the places are a byte's"
 
-\\ The places: each one's cell and position.
+\\ The places: each one's cell, position, and the vertex it's near (255 for a cell's centroid).
 
     FITPAGE PLACES
 .t_placecell EQUB place_cell
@@ -45,3 +54,5 @@ ASSERT PLACES <= 256, "test: the places are a byte's"
 .t_placeylo  EQUB LO(place_y)
     FITPAGE PLACES
 .t_placeyhi  EQUB HI(place_y)
+    FITPAGE PLACES
+.t_placevertex EQUB place_vertex

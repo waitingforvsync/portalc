@@ -420,3 +420,175 @@ MACRO MULTIPLY
     TAX
     LDA (sq1hiptr),Y:SBC (sq2hiptr),Y
 ENDMACRO
+
+\\ The step from which a quadrant's sine rounds to 1 (arith.h's PT_SIN_ONE): sinq's 256s from it.
+
+SIN_ONE = 256-SUM(ROUND(256*SIN((0..255)*(PI/512))) == 256)
+
+\\ A 10-bit angle's sine (or cosine), as pt_mul_sin's sin_mag has it: its magnitude at scale 256,
+\\ from sinq at j, or at 256 - j where it runs down from 1 (quadrants 1 and 3; for a cosine 0, 2).
+\\
+\\ Inputs:
+\\     angle: the angle
+\\     cosine: TRUE for its cosine (its sine a quarter turn on)
+\\
+\\ Outputs:
+\\     A: the magnitude, unless it's 1
+\\     C: set if it's 1 (256)
+\\     X: corrupted
+\\     Y: preserved
+
+MACRO SINE angle, cosine
+    LDA angle+1:LSR A:LDA angle
+    IF cosine
+        BCC falling                     ; the quadrant a quarter turn on: odd
+    ELSE
+        BCS falling
+    ENDIF
+    CMP #SIN_ONE:BCS done               ; from it on, 1
+    TAX:LDA sinq,X                      ; (C clear)
+    BCC done                            ; (always)
+    ZA_UNREACHABLE
+.falling
+    CMP #256-SIN_ONE+1:BCC one          ; under it, 1
+    EOR #&FF:TAX:LDA sinq+1,X           ; 256 - j
+    CLC
+    BCC done                            ; (always)
+    ZA_UNREACHABLE
+.one
+    SEC
+.done
+ENDMACRO
+
+\\ v times a 10-bit angle's sine or cosine (pt_mul_sin, pt_mul_cos): |v| times the magnitude, the
+\\ low byte's product rounded (mulu16_frac_round), then signed by v's sign and the angle's.
+\\
+\\ Inputs:
+\\     v: the value, signed, never -32768
+\\     angle: the angle
+\\     product: where the product goes
+\\     cosine: TRUE for the cosine
+\\
+\\ Outputs:
+\\     product: v sin angle (or cos), signed
+\\     v: corrupted (its magnitude)
+\\     A, X, Y: corrupted
+
+MACRO MULTIPLY_SINE v, angle, product, cosine
+    ZA_AUTO1 sign                       ; local: bit 7 the product's
+
+    LDA angle+1
+    IF cosine
+        LSR A:EOR angle+1               ; the quadrant a quarter turn on's high bit: its two bits'
+    ELSE                                ; EOR
+        LSR A
+    ENDIF
+    LSR A                               ; C: the lower half turn
+    LDA #0:ROR A
+    EOR v+1:STA sign
+    LDA v+1:BPL positive
+    LDA #0:SEC:SBC v:STA v
+    LDA #0:SBC v+1:STA v+1
+.positive
+    SINE angle, cosine
+    BCC fraction
+    LDA v:STA product                   ; times 1
+    LDA v+1:STA product+1
+    JMP signed
+.fraction
+    MULTIPLIER
+    LDY v:MULTIPLY
+    STA product                         ; the low byte's product's high byte
+    TXA:ASL A                           ; C: its low byte's top bit, the rounding
+    LDA product:ADC #0:STA product
+    LDY v+1:MULTIPLY
+    STA product+1
+    TXA:CLC:ADC product:STA product
+    LDA product+1:ADC #0:STA product+1
+.signed
+    BIT sign:BPL done
+    LDA #0:SEC:SBC product:STA product
+    LDA #0:SBC product+1:STA product+1
+.done
+ENDMACRO
+
+\\ n whole units times a 10-bit angle's sine or cosine, in 256ths: pt_mul_sin of n shifted up 8,
+\\ exactly n times the magnitude, as the low byte's product is 0.
+\\
+\\ Inputs:
+\\     n: the units, under 128
+\\     angle: the angle
+\\     product: where the product goes
+\\     cosine: TRUE for the cosine
+\\
+\\ Outputs:
+\\     product: n sin angle (or cos), s.8
+\\     A, X, Y: corrupted
+
+MACRO UNITS_SINE n, angle, product, cosine
+    SINE angle, cosine
+    BCC fraction
+    LDA #0:STA product                  ; times 1
+    LDA n:STA product+1
+    JMP signed
+.fraction
+    MULTIPLIER
+    LDY n:MULTIPLY
+    STX product:STA product+1
+.signed
+    LDA angle+1
+    IF cosine
+        LSR A:EOR angle+1               ; bit 0: the quadrant a quarter turn on's high bit
+        AND #1
+    ELSE
+        AND #2                          ; the quadrant's high bit
+    ENDIF
+    BEQ done                            ; the upper half turn
+    LDA #0:SEC:SBC product:STA product
+    LDA #0:SBC product+1:STA product+1
+.done
+ENDMACRO
+
+\\ The component of (ux, uy) along a 10-bit angle (pt_dot_dir): ux cos angle + uy sin angle.
+\\
+\\ Inputs:
+\\     ux, uy: the vector, each under 2^14 either way
+\\     angle: the angle
+\\     sum: where the component goes
+\\
+\\ Outputs:
+\\     sum: the component, signed
+\\     ux, uy: corrupted (their magnitudes)
+\\     A, X, Y: corrupted
+
+MACRO DOT_DIRECTION ux, uy, angle, sum
+    ZA_AUTO2 along                      ; local: uy's part
+
+    MULTIPLY_SINE ux, angle, sum, TRUE
+    MULTIPLY_SINE uy, angle, along, FALSE
+    CLC
+    LDA sum:ADC along:STA sum
+    LDA sum+1:ADC along+1:STA sum+1
+ENDMACRO
+
+\\ A value times a fraction f (pt_mulu16_frac): (value f) >> 8, exact, the low byte's product's low
+\\ byte dropped.
+\\
+\\ Inputs:
+\\     value: 16 bits
+\\     f: the fraction, 256ths
+\\     product: where the product goes
+\\
+\\ Outputs:
+\\     product: (value f) >> 8
+\\     A, X, Y: corrupted
+
+MACRO MULTIPLY_FRACTION value, f, product
+    LDA f:MULTIPLIER
+    LDY value:MULTIPLY
+    STA product                         ; the low byte's product's high byte
+    LDY value+1:MULTIPLY
+    STA product+1
+    TXA:CLC:ADC product:STA product
+    LDA product+1:ADC #0:STA product+1
+ENDMACRO

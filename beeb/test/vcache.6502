@@ -1,13 +1,21 @@
 \\ test/vcache.6502 - make test's check of the vertex cache: from each vertex in turn, every
-\\ vertex's entry and polar form, asked for twice, for host/test_build.py to compare with the C's.
+\\ vertex's entry and polar form, asked for twice; and the cell located near each place.
+
+INCLUDE "places.6502"
 
 ORDER_STEP = 23                         ; the vertices are asked for in the order 7 + 23k MOD n
 ASSERT MAP_VERTS MOD ORDER_STEP != 0, "test: the order must reach every vertex"
 order = (7 + ORDER_STEP*(0..MAP_VERTS-1)) MOD MAP_VERTS
 
+LOCATE_STEP = 9                         ; vcache_locate's positions round a place: from -31 to 32
+LOCATE_POSITIONS = 8                    ; each way
+ASSERT 1 << MAP_OFFSET_BITS > 2*(MAP_SPAN+32)+1, "test_vcache: 32 units off the map, past POLAR"
+
 SECTION TestResults
 .t_vcache1  SKIP MAX_VERTS              ; the vertex cache's Fletcher sums, by the camera's vertex
 .t_vcache2  SKIP MAX_VERTS
+.t_locate1  SKIP PLACES                 ; the cells located round each place's
+.t_locate2  SKIP PLACES
 ENDSECTION
 
 SECTION Frame                           ; the loader's, before the engine's
@@ -22,6 +30,7 @@ ENDSECTION
 \\
 \\ Outputs:
 \\     t_vcache1, t_vcache2: the sums, by the camera's vertex
+\\     t_locate1, t_locate2: test_locate's
 
 .test_vcache
 {
@@ -72,11 +81,70 @@ ENDSECTION
     LDA sum2:STA t_vcache2,X
     INC camvertex
     LDA camvertex:CMP #MAP_VERTS
-    BEQ done
+    BEQ located
     JMP position
+.located
+    JMP test_locate
+}
+
+\\ From each place's cell, the cell located at each of 8 by 8 positions round it, -31 to 32 units
+\\ off each way in steps of 9, the vertex cache emptied at each: the cells summed by place.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_locate1, t_locate2: the sums, by place
+
+.test_locate
+{
+    ZA_AUTO1 place                      ; local: the place
+    ZA_AUTO1 across                     ; local: the position's x offset's index
+    ZA_AUTO1 down                       ; local: and its y's
+    ZA_AUTO1 sum1                       ; local: the sum of the cells
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA place
+.each_place
+    LDA #0:STA sum1:STA sum2:STA down
+.each_row
+    LDA #0:STA across
+.each_position
+    LDX place
+    LDY across
+    CLC
+    LDA t_placexlo,X:ADC t_offset,Y:STA camx
+    LDA t_offset,Y:AND #&80:BEQ x_extended
+    LDA #&FF                            ; the offset's sign, extended
+.x_extended
+    ADC t_placexhi,X:STA camx+1
+    LDY down
+    CLC
+    LDA t_placeylo,X:ADC t_offset,Y:STA camy
+    LDA t_offset,Y:AND #&80:BEQ y_extended
+    LDA #&FF
+.y_extended
+    ADC t_placeyhi,X:STA camy+1
+    LDA t_placecell,X:STA camcell
+    JSR vcache_reset
+    JSR vcache_locate
+    LDA camcell:FLETCHER sum1, sum2
+    INC across
+    LDA across:CMP #LOCATE_POSITIONS:BNE each_position
+    INC down
+    LDA down:CMP #LOCATE_POSITIONS:BNE each_row
+    LDX place
+    LDA sum1:STA t_locate1,X
+    LDA sum2:STA t_locate2,X
+    INC place
+    LDA place:CMP #PLACES:BEQ done
+    JMP each_place
 .done
     RTS
 }
+
+    FITPAGE LOCATE_POSITIONS
+.t_offset   EQUB LOCATE_STEP*(0..<LOCATE_POSITIONS)-31
 
     FITPAGE MAP_VERTS
 .t_order    EQUB order

@@ -58,7 +58,7 @@ endif()
 # comparison against a floating-point ray cast ----
 
 foreach(tool sweep fb2ppm mapdump refcmp tables mapasm arithref vcacheref captureref plotref clipref
-             walkref fillref spriteref frameref)
+             walkref fillref spriteref frameref cameraref)
     add_executable(portalc_${tool} tools/${tool}.c)
     target_link_libraries(portalc_${tool} PRIVATE portal)
     if(NOT MSVC)
@@ -71,12 +71,16 @@ endif()
 add_executable(portalc_walk3ref tools/walkref.c)
 target_link_libraries(portalc_walk3ref PRIVATE portal_depth3)
 target_compile_definitions(portalc_walk3ref PRIVATE WALK_STRESS)
+add_executable(portalc_camerastressref tools/cameraref.c)
+target_link_libraries(portalc_camerastressref PRIVATE portal)
+target_compile_definitions(portalc_camerastressref PRIVATE CAMERA_STRESS)
 add_executable(portalc_frame3ref tools/frameref.c)
 target_link_libraries(portalc_frame3ref PRIVATE portal_depth3)
 target_compile_definitions(portalc_frame3ref PRIVATE FRAME_STRESS)
 if(NOT MSVC)
     target_compile_options(portalc_walk3ref PRIVATE -Wall -Wextra)
     target_compile_options(portalc_frame3ref PRIVATE -Wall -Wextra)
+    target_compile_options(portalc_camerastressref PRIVATE -Wall -Wextra)
 endif()
 
 # ---- tests ----

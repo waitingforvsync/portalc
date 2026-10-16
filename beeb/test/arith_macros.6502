@@ -1,5 +1,5 @@
 \\ test/arith_macros.6502 - the arithmetic check's macros: LOG2_16 at one bound, POLAR over one
-\\ square of points.
+\\ square of points, the sines' multiplies over every angle, MULTIPLY_FRACTION over every fraction.
 
 \\ LOG2_16 at bound bits, over every x under it. Too many answers to keep, so each high byte's
 \\ go into a pair of sums.
@@ -100,5 +100,148 @@ MACRO TEST_POLAR xlo, xhi, sums1, sums2
     INC row
     BEQ done
     JMP rows
+.done
+ENDMACRO
+
+\\ The made-up value i at a, as arithref makes them: a * a_step + i * i_step, wrapping 16 bits, the
+\\ next from this one.
+\\
+\\ Inputs:
+\\     value: this one
+\\     i_step: the step from one to the next
+\\
+\\ Outputs:
+\\     value: the next
+\\     A: corrupted
+
+MACRO NEXT_VALUE value, i_step
+    CLC
+    LDA value:ADC #LO(i_step):STA value
+    LDA value+1:ADC #HI(i_step):STA value+1
+ENDMACRO
+
+\\ A sine's multiply at every 10-bit angle, summed by four angles at a time, each answer's low byte
+\\ then its high: UNITS_SINE of every n under 128; MULTIPLY_SINE of 128 made-up values (angle * &79B9
+\\ + i * &9E37, &8000 taken as &7FFF); or DOT_DIRECTION of those, quartered (ux), and quartered
+\\ again EOR &5555 (uy), each shifted signed.
+\\
+\\ Inputs:
+\\     kind: 0 UNITS_SINE, 1 MULTIPLY_SINE, 2 DOT_DIRECTION
+\\     cosine: TRUE for the cosine (not DOT_DIRECTION)
+\\     sums1, sums2: where the sums go, by angle DIV 4
+\\
+\\ Outputs:
+\\     sums1, sums2: the sums
+\\     A, X, Y: corrupted
+
+MACRO TEST_SINE kind, cosine, sums1, sums2
+    ZA_AUTO2 angle                      ; local: the angle
+    ZA_AUTO2 base                       ; local: its made-up values' first, angle * &79B9
+    ZA_AUTO2 value                      ; local: the next made-up value
+    ZA_AUTO1 i                          ; local: its index
+    ZA_AUTO2 v                          ; local: the multiply's value
+    ZA_AUTO2 u                          ; local: and DOT_DIRECTION's uy
+    ZA_AUTO2 product                    ; local: the answer
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+    ZA_AUTO1 group                      ; local: the angle's high byte, shifted out
+
+    LDA #0:STA angle:STA angle+1:STA base:STA base+1
+.each_angle
+    LDA angle:AND #3:BNE summing
+    STA sum1:STA sum2                   ; a group's first angle
+.summing
+    LDA base:STA value
+    LDA base+1:STA value+1
+    LDA #0:STA i
+.each
+    IF kind == 0
+        UNITS_SINE i, angle, product, cosine
+    ELSE
+        LDA value:STA v
+        LDA value+1:STA v+1
+        CMP #&80:BNE made
+        LDA v:BNE made
+        LDA #&FF:STA v                  ; &8000: &7FFF
+        LDA #&7F:STA v+1
+    .made
+        IF kind == 1
+            MULTIPLY_SINE v, angle, product, cosine
+        ELSE
+            LDA v:EOR #&55:STA u
+            LDA v+1:EOR #&55:STA u+1
+            FOR shift = 1..2
+                LDA v+1:CMP #&80:ROR A:STA v+1:ROR v
+                LDA u+1:CMP #&80:ROR A:STA u+1:ROR u
+            NEXT
+            DOT_DIRECTION v, u, angle, product
+        ENDIF
+        NEXT_VALUE value, &9E37
+    ENDIF
+    LDA product:FLETCHER sum1, sum2
+    LDA product+1:FLETCHER sum1, sum2
+    INC i
+    BMI summed                          ; past 127
+    JMP each
+.summed
+
+    \\ the group's sums after its fourth angle; then the next angle
+
+    LDA angle:AND #3:CMP #3:BNE next
+    LDA angle+1:STA group
+    LDA angle
+    LSR group:ROR A
+    LSR group:ROR A                     ; angle DIV 4
+    TAX
+    LDA sum1:STA sums1,X
+    LDA sum2:STA sums2,X
+.next
+    NEXT_VALUE base, &79B9
+    INC angle:BNE each_angle_test
+    INC angle+1
+.each_angle_test
+    LDA angle+1:CMP #4:BEQ done
+    JMP each_angle
+.done
+ENDMACRO
+
+\\ MULTIPLY_FRACTION at every fraction, of 128 made-up values (f * &3C6F + i * &5BD1), summed by
+\\ the fraction, each answer's low byte then its high.
+\\
+\\ Inputs:
+\\     sums1, sums2: where the sums go, by the fraction
+\\
+\\ Outputs:
+\\     sums1, sums2: the sums
+\\     A, X, Y: corrupted
+
+MACRO TEST_FRACTION sums1, sums2
+    ZA_AUTO1 f                          ; local: the fraction
+    ZA_AUTO2 base                       ; local: its made-up values' first, f * &3C6F
+    ZA_AUTO2 value                      ; local: the next made-up value
+    ZA_AUTO1 i                          ; local: its index
+    ZA_AUTO2 product                    ; local: the answer
+    ZA_AUTO1 sum1                       ; local: the sum of the answers' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA f:STA base:STA base+1
+.each_fraction
+    LDA #0:STA sum1:STA sum2:STA i
+    LDA base:STA value
+    LDA base+1:STA value+1
+.each
+    MULTIPLY_FRACTION value, f, product
+    LDA product:FLETCHER sum1, sum2
+    LDA product+1:FLETCHER sum1, sum2
+    NEXT_VALUE value, &5BD1
+    INC i
+    BPL each                            ; to 127
+    LDX f
+    LDA sum1:STA sums1,X
+    LDA sum2:STA sums2,X
+    NEXT_VALUE base, &3C6F
+    INC f
+    BEQ done
+    JMP each_fraction
 .done
 ENDMACRO

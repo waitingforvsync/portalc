@@ -1,5 +1,6 @@
-// arithref.c - arith.c's logs, exps and polar forms as JSON: every answer make test checks the
-// Beeb's macros against (beeb/test/arith.6502). Run as portalc_arithref > arith.json.
+// arithref.c - arith.c's logs, exps, polar forms, sines' multiplies and fractions as JSON: every
+// answer make test checks the Beeb's macros against (beeb/test/arith.6502). Run as
+// portalc_arithref > arith.json.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -52,6 +53,52 @@ static void polar(const char *name, int32_t first, int32_t step)
     printf("],\n");
 }
 
+// The sines' multiplies' made-up values, as test/arith_macros.6502 makes them: a * 0x79B9 + i *
+// 0x9E37, wrapping 16 bits, 0x8000 taken as 0x7FFF (pt_mul_sin's v is never -32768).
+static int16_t made_up(unsigned a, unsigned i)
+{
+    uint16_t v = (uint16_t)(a * 0x79B9u + i * 0x9E37u);
+    return (int16_t)(v == 0x8000 ? 0x7FFF : v);
+}
+
+// At every 10-bit angle, 128 answers: of n << 8 for each n under 128 (UNITS_SINE), of the made-up
+// values (MULTIPLY_SINE), or the made-up values quartered and quartered again EOR 0x5555, shifted
+// signed, along it (DOT_DIRECTION); each as 16 bits.
+static void sines(const char *name, int kind, int cosine)
+{
+    printf("  \"%s\": [", name);
+    for (unsigned a = 0; a < 1024; a++)
+        for (unsigned i = 0; i < 128; i++) {
+            int16_t r;
+            if (kind == 0) {
+                int16_t v = (int16_t)(i << 8);
+                r = cosine ? pt_mul_cos(v, (uint16_t)a) : pt_mul_sin(v, (uint16_t)a);
+            } else if (kind == 1) {
+                int16_t v = made_up(a, i);
+                r = cosine ? pt_mul_cos(v, (uint16_t)a) : pt_mul_sin(v, (uint16_t)a);
+            } else {
+                int16_t v = made_up(a, i);
+                int16_t ux = (int16_t)(v >> 2);
+                int16_t uy = (int16_t)((int16_t)(v ^ 0x5555) >> 2);
+                r = pt_dot_dir(ux, uy, (uint16_t)a);
+            }
+            printf(a == 0 && i == 0 ? "%u" : ",%u", (unsigned)(uint16_t)r);
+        }
+    printf("],\n");
+}
+
+// At every fraction f, 128 answers of pt_mulu16_frac: of f * 0x3C6F + i * 0x5BD1, wrapping.
+static void fractions(void)
+{
+    printf("  \"mulu16_frac\": [");
+    for (unsigned f = 0; f < 256; f++)
+        for (unsigned i = 0; i < 128; i++) {
+            uint16_t a = (uint16_t)(f * 0x3C6Fu + i * 0x5BD1u);
+            printf(f == 0 && i == 0 ? "%u" : ",%u", (unsigned)pt_mulu16_frac(a, (uint8_t)f));
+        }
+    printf("],\n");
+}
+
 int main(void)
 {
     static pt_map m;
@@ -65,6 +112,12 @@ int main(void)
     list("exp2", 8 * 256, exp2_8, 0);
     polar("polar_near", -128, 1);
     polar("polar_far", -(1 << (bits - 1)) + 1, 1 << (bits - 8));
+    sines("units_sin", 0, 0);
+    sines("units_cos", 0, 1);
+    sines("mul_sin", 1, 0);
+    sines("mul_cos", 1, 1);
+    sines("dot_dir", 2, 0);
+    fractions();
     printf("  \"polar_bits\": %u\n", bits);
     printf("}\n");
     return 0;

@@ -1,0 +1,143 @@
+\\ test/camera.6502 - make test's check of the camera's tick: frames of made-up keys from each
+\\ place, and into each place's corner, for host/test_build.py.
+
+INCLUDE "places.6502"
+
+FRAMES = 32                             ; from each place, and into its corner
+
+SECTION TestResults
+.t_camera1  SKIP PLACES                 ; each place's frames' cameras' Fletcher sums
+.t_camera2  SKIP PLACES
+.t_corner1  SKIP PLACES                 ; and the frames into its corner's
+.t_corner2  SKIP PLACES
+ENDSECTION
+
+\\ From each place, the camera facing a made-up way (a byte, in 256ths), then 32 frames, each of
+\\ made-up keys (a byte's low 6 bits) and ticks (1 to 8: a byte's low 3 bits, + 1), the made-up
+\\ values the LFSR's bytes, as cameraref's: after each frame its x (fraction, low, high), its y, its
+\\ facing (1024ths, low then high), its cell and settled, summed by place.
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_camera1, t_camera2: the sums, by place
+\\     t_corner1, t_corner2: test_corners'
+
+.test_camera
+{
+    ZA_AUTO1 place                      ; local: the place
+    ZA_AUTO1 frame                      ; local: the frame
+    ZA_AUTO1 sum1                       ; local: the sum of the cameras' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    JSR map_init
+    LDA #LO(&ACE1):STA random
+    LDA #HI(&ACE1):STA random+1
+    LDA #0:STA random+2:STA random+3:STA place
+.each_place
+    LDX place
+    LDA t_placecell,X:STA camcell
+    LDA t_placexlo,X:STA camx
+    LDA t_placexhi,X:STA camx+1
+    LDA t_placeylo,X:STA camy
+    LDA t_placeyhi,X:STA camy+1
+    LDA #0:STA camxf:STA camyf:STA camsettled:STA camangle+1
+    JSR random_byte
+    ASL A:ROL camangle+1
+    ASL A:ROL camangle+1
+    STA camangle
+    JSR vcache_reset
+    LDA #0:STA sum1:STA sum2:STA frame
+.each_frame
+    JSR random_byte
+    AND #63:STA camera_tick.keys
+    JSR random_byte
+    AND #7:CLC:ADC #1:STA camera_tick.ticks
+    JSR camera_tick
+    FOR v = {camxf, camx, camx+1, camyf, camy, camy+1, camangle, camangle+1, camcell, camsettled}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    INC frame
+    LDA frame:CMP #FRAMES:BEQ frames
+    JMP each_frame
+.frames
+    LDX place
+    LDA sum1:STA t_camera1,X
+    LDA sum2:STA t_camera2,X
+    INC place
+    LDA place:CMP #PLACES:BEQ done
+    JMP each_place
+.done
+    JMP test_corners
+}
+
+\\ From each place near a vertex, the camera facing it (its angle from the place, rounded to 256ths),
+\\ then 32 frames of 8 ticks into the corner: forward 16, forward and left 8, forward and right 8.
+\\ After each, the camera as test_camera has it, summed by place (a centroid's sums 0).
+\\
+\\ Inputs:
+\\     none
+\\
+\\ Outputs:
+\\     t_corner1, t_corner2: the sums, by place
+
+.test_corners
+{
+    ZA_AUTO1 place                      ; local: the place
+    ZA_AUTO1 frame                      ; local: the frame
+    ZA_AUTO1 sum1                       ; local: the sum of the cameras' bytes
+    ZA_AUTO1 sum2                       ; local: and the sum of the sums
+
+    LDA #0:STA place
+.each_place
+    LDA #0:STA sum1:STA sum2
+    LDX place
+    LDA t_placevertex,X:CMP #255:BNE vertex
+    JMP summed                          ; a centroid
+.vertex
+    LDA t_placecell,X:STA camcell
+    LDA t_placexlo,X:STA camx
+    LDA t_placexhi,X:STA camx+1
+    LDA t_placeylo,X:STA camy
+    LDA t_placeyhi,X:STA camy+1
+    LDA #0:STA camxf:STA camyf:STA camsettled
+    JSR vcache_reset
+    LDX place
+    LDA t_placevertex,X:TAX
+    VCACHE_VERT_TO_X
+    CLC                                 ; its angle, rounded to 256ths: (a + 2) DIV 4
+    LDA vc_anglo,X:ADC #2:STA camangle
+    LDA vc_anghi,X:ADC #0:LSR A:ROR camangle:LSR A:ROR camangle
+    LDA #0:STA camangle+1               ; then back to 1024ths
+    LDA camangle
+    ASL A:ROL camangle+1
+    ASL A:ROL camangle+1
+    STA camangle
+    LDA #0:STA frame
+.each_frame
+    LDA #IN_FWD
+    LDX frame:CPX #16:BCC keyed
+    LDA #IN_FWD OR IN_LEFT
+    CPX #24:BCC keyed
+    LDA #IN_FWD OR IN_RIGHT
+.keyed
+    STA camera_tick.keys
+    LDA #8:STA camera_tick.ticks
+    JSR camera_tick
+    FOR v = {camxf, camx, camx+1, camyf, camy, camy+1, camangle, camangle+1, camcell, camsettled}
+        LDA v:FLETCHER sum1, sum2
+    NEXT
+    INC frame
+    LDA frame:CMP #FRAMES:BEQ summed
+    JMP each_frame
+.summed
+    LDX place
+    LDA sum1:STA t_corner1,X
+    LDA sum2:STA t_corner2,X
+    INC place
+    LDA place:CMP #PLACES:BEQ done
+    JMP each_place
+.done
+    RTS
+}

@@ -1,0 +1,5 @@
+\\ test/camerastress_portal.6502 - make test_camerastress's PORTAL: the camera's tick's check over the
+\\ C's stress scene, for its wedge's sharp corner and its narrow cells.
+
+stress_scene = TRUE
+INCLUDE "camera_portal.6502"

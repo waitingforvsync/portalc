@@ -32,9 +32,10 @@ typedef struct cand {
     uint8_t capped;    // neighbour's wall: only hits in front, foot on segment
 } cand;
 
-// A tick's move changes a wall's distance by under 12 units, plus a unit
-// for the position's truncation and one for each product's rounding: a wall
-// farther than this at the start of the move can't be met by it.
+// A frame's move (PT_CAM_MAX_TICKS ticks at most) changes a wall's distance
+// by under 12 units, plus a unit for the position's truncation and one for
+// each product's rounding: a wall farther than this at the start of the
+// move can't be met by it.
 #define FAR_SLACK 16
 
 // Collect a corner vertex, keeping the list free of duplicates.
@@ -149,6 +150,15 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
     return true;
 }
 
+// A distance as a signed byte, saturated: the slide's tests only ask it of
+// walls nearer than 56 units, so they answer the same, and -128 is free to
+// mark a distance not yet made.
+#define NOT_MADE INT8_MIN
+static int8_t saturated(int16_t d)
+{
+    return d > 127 ? (int8_t)127 : d < -127 ? (int8_t)-127 : (int8_t)d;
+}
+
 // Move an unsigned position by a signed displacement.
 static uint32_t apply(uint32_t p, int16_t d)
 {
@@ -160,13 +170,13 @@ static uint32_t apply(uint32_t p, int16_t d)
     return p + pt_u16(d);
 }
 
-// Wherever the tick leaves the camera: the vertex cache looks from there
-// (emptied if that's a new whole-unit position), and the cell is the one
-// its angles put the centre in, hopping across any portal side it has
-// crossed. The frame's capture then looks with the same cache.
+// Wherever the tick moved the camera to: the vertex cache looks afresh from
+// there (emptied, whether or not the whole units changed), and the cell is
+// the one its angles put the centre in, hopping across any portal side it
+// has crossed. The frame's capture then looks with the same cache.
 static void transition(pt_camera *c, const pt_map *m, pt_vcache *vc)
 {
-    pt_vcache_move(vc, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
+    pt_vcache_reset(vc, pt_u16((int32_t)(c->x >> 8)), pt_u16((int32_t)(c->y >> 8)));
     c->cell = pt_vcache_locate(vc, m, c->cell);
 }
 
@@ -182,19 +192,22 @@ void pt_camera_init(pt_camera *c, const pt_map *m, pt_vcache *vc, uint16_t x, ui
         .angle = angle,
         .cell = cell,
     };
-    pt_vcache_move(vc, x, y);
+    pt_vcache_reset(vc, x, y);
 }
 
-void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
+void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input, uint8_t ticks)
 {
+    RC_ASSERT(ticks >= 1 && ticks <= PT_CAM_MAX_TICKS);
+    uint8_t turn = (uint8_t)(ticks * PT_CAM_TURN_SPEED);
     if (input & PT_IN_TURNL)
-        c->angle = (uint8_t)(c->angle - PT_CAM_TURN_SPEED);
+        c->angle = (uint8_t)(c->angle - turn);
     if (input & PT_IN_TURNR)
-        c->angle = (uint8_t)(c->angle + PT_CAM_TURN_SPEED);
+        c->angle = (uint8_t)(c->angle + turn);
 
-    // desired displacement from the input: the facing step, exact (a whole
-    // number of units along the camera's angle, four 1024ths a step)
-    pt_xy f = pt_dir((int16_t)(PT_CAM_MOVE_SPEED << 8), (uint16_t)(c->angle << 2));
+    // desired displacement from the input: the facing step, the frame's
+    // ticks' worth at once, exact (a whole number of units along the
+    // camera's angle, four 1024ths a step)
+    pt_xy f = pt_dir((int16_t)(ticks * PT_CAM_MOVE_SPEED << 8), (uint16_t)(c->angle << 2));
     int16_t fx = f.x;
     int16_t fy = f.y;
     int16_t mx = 0;    // s.8, under 12 units in any direction
@@ -259,16 +272,16 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
     // close; neighbour walls and posts count too, or a corner shared with
     // the next cell wedges the slide before its own resolve can see it. The
     // slide below wants each candidate's distance from where it starts:
-    // these, if nothing pushes, else made again on first need (INT16_MIN
-    // marks not yet made; no distance comes near it)
-    int16_t cur_y[MAX_CAND];
+    // these, if nothing pushes, else made again on first need (NOT_MADE
+    // marks not yet made), each saturated to a byte
+    int8_t cur_y[MAX_CAND];
     bool pushed = false;
     for (uint8_t i = 0; i < nc; i++) {
         uint16_t a = cands[i].angle;
         uint16_t qx = pt_u16((int32_t)(c->x >> 8));
         uint16_t qy = pt_u16((int32_t)(c->y >> 8));
         int16_t across = side_across(m, cands[i].v, a, qx, qy);
-        cur_y[i] = across;
+        cur_y[i] = saturated(across);
         if (across >= PT_CAM_RADIUS)
             continue;
         if (cands[i].capped && across < 0)
@@ -285,10 +298,11 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
     }
     if (pushed)
         for (uint8_t i = 0; i < nc; i++)
-            cur_y[i] = INT16_MIN;
+            cur_y[i] = NOT_MADE;
     c->settled = !pushed && mx == 0 && my == 0;
     if (mx == 0 && my == 0) {
-        transition(c, m, vc);    // the resolve may still have pushed it
+        if (pushed)
+            transition(c, m, vc);
         return;
     }
 
@@ -307,7 +321,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
         uint16_t hit = 0;
         bool have_hit = false;
         for (uint8_t i = 0; i < nc; i++) {
-            if (cur_y[i] != INT16_MIN && cur_y[i] >= PT_CAM_RADIUS + FAR_SLACK)
+            if (cur_y[i] != NOT_MADE && cur_y[i] >= PT_CAM_RADIUS + FAR_SLACK)
                 continue;    // too far to reach this tick
             uint16_t a = cands[i].angle;
             int16_t across = side_across(m, cands[i].v, a, qx, qy);
@@ -317,8 +331,8 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
                 continue;
             if (!foot_in_range(m, &cands[i], qx, qy))
                 continue;
-            if (cur_y[i] == INT16_MIN)
-                cur_y[i] = side_across(m, cands[i].v, a, sx, sy);
+            if (cur_y[i] == NOT_MADE)
+                cur_y[i] = saturated(side_across(m, cands[i].v, a, sx, sy));
             if (across + HIT_EPS >= cur_y[i])
                 continue;
             worst = across;
@@ -349,6 +363,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input)
     c->x = apply(c->x, mx);
     c->y = apply(c->y, my);
 
-    // 3. transition
-    transition(c, m, vc);
+    // 3. transition, if it moved
+    if (pushed || mx != 0 || my != 0)
+        transition(c, m, vc);
 }

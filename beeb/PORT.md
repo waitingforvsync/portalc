@@ -8,8 +8,8 @@ The C in `src/` is the reference. The 6502 does the same thing, byte for
 byte wherever `make test` can check it. It takes shortcuts where the C's
 checks show they're safe: see [Where the 6502 differs](#where-the-6502-differs).
 
-The first demo is a stationary camera with only the turn keys, sprites
-drawn. There's no moving, no collision and no stepping through portals yet.
+The demo walks: the camera turns and moves, slides along walls and steps
+through portals, sprites drawn.
 
 ## How far it's got
 
@@ -22,7 +22,7 @@ ambitions.
 | C | 6502 | State |
 |---|---|---|
 | `pt_arith_init` (arith.c) | `make_tables` (tables.6502), packed at assembly time by `pk_` and unpacked by `UNPACK` | done: every byte, `portalc_tables` |
-| main.c's loop: `pt_camera_tick`, `pt_render_frame` | `start` (start.6502): `update_camera`, `capture`, wait, `fill`, `sprites`, swap, `unplot` | done: the first demo runs, sprites and all |
+| main.c's loop: `pt_camera_tick`, `pt_render_frame` | `start` (start.6502): `update_camera`, `capture`, wait, `fill`, `sprites`, swap, `unplot` | done: the demo runs, walking, sprites and all |
 | main.c's `gather_input` | `irq` (irq.6502): vsync count, keys as the `IN_` bits, screen swap | done, checked by hand in jsbeeb |
 | — | `boot.6502`: finds a sideways RAM bank | Beeb only, in progress |
 | — | `entry` (entry.6502): takes over the machine, copies the code out, sets up the screen | Beeb only |
@@ -41,7 +41,11 @@ ambitions.
 | `pt_view_col` | `LDA a2c,X` | done (a lookup) |
 | `pt_log_secant`, with the C's `view8` | `LOG_SECANT`: where in `lsec` it is | done, in `edge_ends`' check |
 | `pt_log_sine` | `LOG_SINE`: where in `lsec16` it is, negated | done, in `edge_ends`' check |
-| `pt_mul_sin`, `pt_dot_dir` and the rest | the tables only | not started |
+| `pt_mul_sin`, `pt_mul_cos`, with `sin_mag` | `MULTIPLY_SINE` (cosine by a flag), with `SINE`: \|v\| times the magnitude, the low byte's product rounded, then signed | done: every angle, 128 made-up values at each, summed by four angles, `portalc_arithref` |
+| `pt_mul_sin` of whole units shifted up 8 (the move, the pushes) | `UNITS_SINE`: n times the magnitude, one multiply, exact | done: every angle, every n under 128 |
+| `pt_dot_dir` | `DOT_DIRECTION` | done: every angle, 128 made-up vectors at each |
+| `pt_mulu16_frac` | `MULTIPLY_FRACTION` | done: every fraction, 128 made-up values at each |
+| `pt_rpost` | `LDA rpost,X`, X `d2 >> 3` | the table: done, `portalc_tables` |
 
 ### The map and the vertex cache
 
@@ -52,13 +56,17 @@ ambitions.
 | `pt_vcache_vert` | `VCACHE_VERT_TO_X`, with `vcache_make` on a miss | done: every vertex from every vertex, `portalc_vcacheref` |
 | `pt_vcache_reset` | `vcache_reset` | done |
 | `pt_map_ring_next` (map.h) | `RING_NEXT` (map_macros.6502) | done |
-| `pt_vcache_move`, `pt_vcache_locate` | — | not started |
+| `pt_vcache_locate`, `side_crossed` | `vcache_locate`: each portal side's angle from its start vertex to its end (`RING_NEXT`), 10 bits | done: the cells located at 8 by 8 positions round each place, -31 to 32 units off, from its cell: `portalc_vcacheref` (3,894 sides crossed, 26 half turns, 9 of them crossed, 353 locates of two hops or more) |
+| `pt_vcache_move` | — | not ported: the camera empties the cache whenever it moves (the C's camera too); only `pt_render_frame`, the C's probes', compares |
 
 ### The camera
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_camera_tick` (camera.c) | `update_camera` (camera.6502): the turn keys only | done, checked by hand in jsbeeb: both screens the same as the C's frame, sprites off, at the start, after 41 ticks left, and after 121 right, past 0 |
+| `pt_camera_tick` (camera.c) | `update_camera` (move.6502): the frame's ticks and keys, then `camera_tick`: the turn, the move, the walls (`add_wall`, `add_post`), the resolve, the slide (`slide`), the posts (`corner_deflect`), the transition | done: from each place 32 frames of made-up keys and 1 to 8 ticks, and 32 frames into its corner, the camera after each summed by place: `portalc_cameraref` over the demo scene, `portalc_camerastressref` over the stress scene (whose wedge blocks a slide for three rounds). The camera's state is camera.6502's |
+| `side_across`, `foot_in_range` | `wall_distance`, `wall_foot`, through `vertex_dot` and `dot_direction` | done, in the tick's checks |
+| `corner_deflect`, with `mulu16x8_lo` | `corner_deflect`, with `quartered` | done, in the tick's checks |
+| `apply` | `shift_camera` | done, in the tick's checks |
 
 ### The capture (render.c)
 
@@ -125,6 +133,11 @@ or two bytes of zero page.
 | `pt_render.cam4`: the facing, in 1024ths | `camangle` |
 | `pt_camera.angle`, in 256ths | — (only `CAM_START_ANGLE`, which `entry` multiplies by 4) |
 | `pt_camera.cell`, `pt_render.cam_cell` | `camcell` |
+| `pt_camera.settled` | `camsettled` |
+| `pt_camera_tick`'s `mx`, `my` | `move_x`, `move_y` |
+| `cands[].v`, `.angle`, `.capped`, `.len` | `candidate_vertex`, `candidate_anglelo`/`hi` (bit 7 of `hi` capped), `candidate_lengthlo`/`hi` |
+| `cur_y`, saturated to a byte | `candidate_distance` (`NOT_MADE` its `INT8_MIN`) |
+| `posts` | `post_vertex` |
 | `pt_render.vl` | `viewleft` |
 | `pt_render.eye_z` | `eye_z` |
 | `num_visits`, `num_kept`, `num_recs` | the same |
@@ -264,7 +277,8 @@ They have the same names as `pt_arith_tables`, except:
 `PT_MAX_RECS` is `MAX_RECS`, `PT_MAX_DEPTH` is `MAX_DEPTH`, `PT_MAX_KEPT` is
 `MAX_KEPT`, `PT_MAX_SPRITES` is `MAX_SPRITES`, `PT_CLIP_POOL` is `CLIP_POOL`,
 `PT_SPRITE_NEAR_L` is `SPRITE_NEAR_L`; and `PT_MAX_INSTS`, in whole words, is
-`MAX_INSTANCES`.
+`MAX_INSTANCES`. `PT_SIN_ONE` is `SIN_ONE`, worked out in arith_macros.6502
+from the sine itself.
 They're all in constants.6502. `POST_NEAR` and `POST_SCALE` name numbers the
 C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 
@@ -274,7 +288,10 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   The C's camera keeps 256ths, and so does the map, so `entry` multiplies
   `CAM_START_ANGLE` by 4.
 - **The vertex cache keeps no position.** Whatever moves the camera has to
-  call `vcache_reset`. The C's `pt_vcache_move` compares positions instead.
+  call `vcache_reset`, as the C's camera now does too; only the C's
+  `pt_render_frame`, for its probes, compares positions (`pt_vcache_move`).
+- **`vcache_locate` doesn't count its hops.** The C asserts 8 at most (a
+  ring of a fan); a camera's move crosses a cell or two.
 - **Fewer checks.** `vcache_make` doesn't check for a full cache, and
   `visit_of` doesn't check for too many visits. The C panics on both.
   `side_next` doesn't check that it isn't leaving the eye's cell's last
@@ -361,10 +378,11 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   routine, which reads the record itself (X its number). The C asserts T's
   screen is clear after; the checks find its junk rows clear too. It costs
   5.7k cycles a frame over the sweep's frames, 4.5k of it shallow runs.
-- **A frame's ticks share its keys.** The interrupt ORs the keys held at
-  each vsync into `keys` and counts the vsyncs in `framectr`; `update_camera`
-  takes both with the vsync held off and runs that many ticks with those
-  keys. The C reads the keys afresh for each tick.
+- **The interrupt gathers the keys.** It ORs the keys held at each vsync
+  into `keys` and counts the vsyncs in `framectr`; `update_camera` takes both
+  with the vsync held off and runs a tick of that many ticks' worth, as the
+  C's caller does. It doesn't cap them: the C asserts 8 at most, and a frame
+  of 165k cycles is 5.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has
@@ -485,7 +503,52 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
      order of more than one): drawn near to far, 47 of its 64 groups'
      screens differ. Neither scene has a second art, so nothing checks
      which art `sprites` picks.
-- Later: moving, collision and `pt_vcache_locate`.
+- Moving, in steps, each checked against the C:
+  1. ~~The C: a frame's ticks as one (`pt_camera_tick`'s `ticks`, up to
+     `PT_CAM_MAX_TICKS`), sharing its keys, the turn and the move that many
+     ticks' worth; 1 unit a tick, so a frame's move stays under 12 units
+     and nothing's capped; the vertex cache emptied whenever the camera
+     moves, the whole units compared or not.~~ Done.
+  2. ~~The arithmetic: `pt_mul_sin` and `pt_mul_cos` (a byte magnitude where
+     the C's is a whole number of units shifted up, as the move's and the
+     pushes' are), `pt_dot_dir`, `pt_mulu16_frac`, `pt_rpost`.~~ Done:
+     macros, which the tick will call through routines, as it's not hot.
+     The turn's 4 1024ths a tick is the C's too now (`PT_CAM_TURN_SPEED`
+     1): slower on purpose.
+  3. ~~`pt_vcache_locate` and the transition. No `side_v1` table: a side's
+     end comes from the ring.~~ Done: `vcache_locate`; the transition is
+     `vcache_reset` then it, which the tick calls when it moved.
+  4. ~~The tick: the move, the candidates and posts, the resolve, the slide,
+     the corners. Not a hot path (once a frame), so widths as narrow as
+     consistency allows, the C changed to match where the 6502 narrows.~~
+     Done: move.6502, 2.4K, which leaves sideways RAM 330 bytes; the
+     camera's state stays in camera.6502, which every check takes. The
+     slide's distances from its start are a byte, saturated (in the C too).
+     Every path runs in the two checks together, bar the sine's 1 in two of
+     the macros' expansions, which no wall or facing in either map meets
+     (`test_arith` takes every angle). Two breaks can't show: a
+     neighbour's wall from behind with the camera's foot on it (a solid wall
+     between two cells joined round a corner, which neither map has: the
+     foot test turns away every other), and the saturation's exact 128s
+     (no wall's ever that far, and one 128 off can't be met). On the
+     cycle-exact model a tick is 8k cycles on average over the made-up
+     frames, 11k to 13k pressing into corners, 33k at most; the transition's
+     polar forms are ones the capture would make anyway.
+  5. ~~`update_camera` and the demo, with frame times while moving.~~ Done:
+     it walks in jsbeeb at a unit a vsync. Timed on the cycle-exact model
+     from a jsbeeb snapshot at `.frame`, the driver doing the irq's work
+     (vsyncs every 40,000 cycles, 230 for the irq), over 2,734 vsyncs of
+     scripted keys (the corridor's length to the wall in cell 8, then
+     turning, backing off, strafing and going diagonally): 1,323 frames
+     shown, 24.2 fps on average, 8.3 at worst (six vsyncs) and 50 at best.
+     31% take one vsync, 43% two, 18% three, 9% four or more. A frame's
+     work is 81.1k cycles on average: the tick 6.8k, capture 32.6k, fill
+     33.5k, sprites 2.6k, unplot 5.5k. The worst is 217k, walking into the
+     pit at the boulder: 89k of sprites and 71k to 79k of capture. Standing
+     at the start it's 12.9 fps (154k: capture 74k, fill 39k, sprites 29k,
+     unplot 12k); walking from there the capture's 75.4k, so emptying the
+     vertex cache every frame costs it little. If sideways RAM runs out,
+     `sprites.6502` or `capture.6502` can move to main RAM.
 - To revisit, if the cycles are wanted: two copies of the stretch loops,
   one going on to the handler and one, for the stretch to a clip event or
   the strip's end, to `events_due`. The handler's `CMP next_event` then

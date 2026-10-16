@@ -1,0 +1,919 @@
+\\ move.6502 - the camera's tick (camera.c): a frame's ticks of the keys at once, the move sliding
+\\ along walls and round their ends, then the cell it ends up in.
+
+MAX_CANDIDATES = 32                     ; camera.c's MAX_CAND: walls and posts a tick, at most
+FAR_SLACK = 16                          ; camera.c's: a wall farther at the move's start can't meet it
+HIT_EPS = 2                             ; its truncation slack for the move's approach
+NOT_MADE = &80                          ; a candidate's distance not yet made
+ASSERT CAM_TURN_SPEED == 4, "camera_tick: the turn's the ticks * 4"
+
+\\ The tick's move, s.8 (under 12 units each way), its walls and their ends.
+
+ZA_AUTO2 move_x
+ZA_AUTO2 move_y
+ZA_AUTO1 candidates                     ; the walls
+ZA_AUTO1 posts                          ; and their ends
+
+\\ The walls the tick meets (camera.c's cand): its cell's, and each neighbour's it's within a radius
+\\ of; and their ends, the posts, each once.
+
+SECTION Between
+    FITPAGE MAX_CANDIDATES
+.candidate_vertex   SKIP MAX_CANDIDATES ; the wall's start
+    FITPAGE MAX_CANDIDATES
+.candidate_anglelo  SKIP MAX_CANDIDATES ; its direction, 10 bits
+    FITPAGE MAX_CANDIDATES
+.candidate_anglehi  SKIP MAX_CANDIDATES ; and bit 7 if it's a neighbour's (capped)
+    FITPAGE MAX_CANDIDATES
+.candidate_lengthlo SKIP MAX_CANDIDATES ; its foot's cap along it, its edge's len8 * 8
+    FITPAGE MAX_CANDIDATES
+.candidate_lengthhi SKIP MAX_CANDIDATES
+    FITPAGE MAX_CANDIDATES
+.candidate_distance SKIP MAX_CANDIDATES ; from the slide's start, saturated; NOT_MADE if not yet
+    FITPAGE MAX_CANDIDATES
+.post_vertex        SKIP MAX_CANDIDATES
+ENDSECTION
+
+\\ Run the frame's ticks at once, with the keys the interrupt's gathered: none if no vsync's come.
+\\
+\\ Inputs:
+\\     framectr, keys: the ticks and the keys
+\\     the camera
+\\
+\\ Outputs:
+\\     the camera: moved
+\\     framectr, keys: 0
+\\     A, X, Y: corrupted
+
+.update_camera
+{
+    \\ the ticks and the keys, with the vsync held off, so none comes between the read and the clear
+
+    SEI
+    LDX framectr
+    LDY keys
+    LDA #0:STA framectr:STA keys
+    CLI
+    TXA:BEQ done                        ; no ticks
+    STX camera_tick.ticks
+    STY camera_tick.keys
+    JMP camera_tick
+.done
+    RTS
+}
+
+\\ A frame's ticks of the keys at once (pt_camera_tick): turn, then move with sliding collision; and
+\\ if the camera moved, empty the vertex cache and find its cell.
+\\
+\\ Inputs:
+\\     ticks: the frame's, 1 to 8
+\\     keys: the keys, as the IN_ bits
+\\     camx, camxf, camy, camyf, camangle, camcell, camsettled: the camera
+\\
+\\ Outputs:
+\\     the camera: turned and moved
+\\     A, X, Y: corrupted
+
+.camera_tick
+{
+    ZA_AUTO1 ticks                      ; in
+    ZA_AUTO1 keys                       ; in
+    ZA_AUTO1 turn                       ; local: the ticks' turn, 1024ths
+
+    \\ the turn: left or right, both cancelling
+
+    LDA ticks:ASL A:ASL A:STA turn
+    LDA keys:AND #IN_TURNL OR IN_TURNR
+    CMP #IN_TURNR:BEQ right
+    CMP #IN_TURNL:BNE turned            ; neither, or both
+    SEC
+    LDA camangle:SBC turn:STA camangle
+    LDA camangle+1:SBC #0:AND #3:STA camangle+1
+    JMP turned
+.right
+    CLC
+    LDA camangle:ADC turn:STA camangle
+    LDA camangle+1:ADC #0:AND #3:STA camangle+1
+.turned
+
+    \\ the move: a step forward, the ticks' units along the facing; back; and a quarter turn either
+    \\ way for the strafes (right of the facing is (-sin, cos))
+
+    LDA ticks:STA units_direction.units
+    LDA camangle:STA units_direction.angle
+    LDA camangle+1:STA units_direction.angle+1
+    JSR units_direction
+    LDA #0:STA move_x:STA move_x+1:STA move_y:STA move_y+1
+    LDA keys:AND #IN_FWD:BEQ backward
+    LDA units_direction.x:STA move_x
+    LDA units_direction.x+1:STA move_x+1
+    LDA units_direction.y:STA move_y
+    LDA units_direction.y+1:STA move_y+1
+.backward
+    LDA keys:AND #IN_BACK:BEQ rightward
+    SEC
+    LDA move_x:SBC units_direction.x:STA move_x
+    LDA move_x+1:SBC units_direction.x+1:STA move_x+1
+    SEC
+    LDA move_y:SBC units_direction.y:STA move_y
+    LDA move_y+1:SBC units_direction.y+1:STA move_y+1
+.rightward
+    LDA keys:AND #IN_RIGHT:BEQ leftward
+    SEC
+    LDA move_x:SBC units_direction.y:STA move_x
+    LDA move_x+1:SBC units_direction.y+1:STA move_x+1
+    CLC
+    LDA move_y:ADC units_direction.x:STA move_y
+    LDA move_y+1:ADC units_direction.x+1:STA move_y+1
+.leftward
+    LDA keys:AND #IN_LEFT:BEQ moved
+    CLC
+    LDA move_x:ADC units_direction.y:STA move_x
+    LDA move_x+1:ADC units_direction.y+1:STA move_x+1
+    SEC
+    LDA move_y:SBC units_direction.x:STA move_y
+    LDA move_y+1:SBC units_direction.x+1:STA move_y+1
+.moved
+
+    \\ standing still where the last tick did, its resolve pushing nothing: nothing to do
+
+    LDA move_x:ORA move_x+1:ORA move_y:ORA move_y+1:BNE going
+    LDA camsettled:BEQ going
+    RTS
+.going
+
+    \\ the walls: the cell's, and each neighbour's the camera's within a radius of the portal to,
+    \\ capped; their ends the posts
+
+    ZA_AUTO1 side                       ; local: the cell's side
+    ZA_AUTO1 neighbour                  ; local: the cell across it
+    ZA_AUTO1 ring                       ; local: a side of the neighbour's
+
+    LDA #0:STA candidates:STA posts
+    LDA camx:STA vertex_dot.x
+    LDA camx+1:STA vertex_dot.x+1
+    LDA camy:STA vertex_dot.y
+    LDA camy+1:STA vertex_dot.y+1
+    LDX camcell
+    LDY cell_first,X
+.each_side
+    STY side
+    LDA side_adj,Y:BNE portal
+    STY add_wall.side                   ; a wall
+    STX add_wall.cell
+    LDA #0:STA add_wall.capped
+    JSR add_wall
+    JMP next_side
+.portal
+    STA neighbour
+    LDA side_v,Y:STA vertex_dot.vertex
+    LDA side_edge,Y:TAX
+    LDA edge_angle,X:STA dot_direction.angle
+    LDA side_anghi,Y:CLC:ADC #1:AND #3:STA dot_direction.angle+1   ; the inward normal
+    JSR vertex_dot
+    LDA dot_direction.dot+1:BMI near    ; past the portal's line: near enough
+    BNE next_side
+    LDA dot_direction.dot:CMP #CAM_RADIUS:BCS next_side
+.near
+    LDX neighbour
+    LDY cell_first,X
+.each_ring
+    STY ring
+    LDA side_adj,Y:BNE next_ring
+    STY add_wall.side                   ; the neighbour's wall, capped
+    STX add_wall.cell
+    LDA #&80:STA add_wall.capped
+    JSR add_wall
+.next_ring
+    LDX neighbour
+    LDY ring
+    INY
+    TYA:CMP cell_first+1,X:BNE each_ring
+.next_side
+    LDX camcell
+    LDY side
+    INY
+    TYA:CMP cell_first+1,X:BNE each_side
+
+    \\ the resolve: pushed out of each wall it's within a radius of, its foot on the wall; each
+    \\ wall's distance kept for the slide, unless anything pushed
+
+    ZA_AUTO1 pushed                     ; local: non-zero if anything did
+    ZA_AUTO1 index                      ; local: the candidate
+
+    LDA #0:STA pushed:STA index
+.each_resolve
+    LDX index:CPX candidates:BEQ resolved
+    LDA camx:STA vertex_dot.x
+    LDA camx+1:STA vertex_dot.x+1
+    LDA camy:STA vertex_dot.y
+    LDA camy+1:STA vertex_dot.y+1
+    JSR wall_distance
+    JSR saturated
+    LDX index:STA candidate_distance,X
+    LDA dot_direction.dot+1:BMI behind  ; under the radius
+    BNE next_resolve
+    LDA dot_direction.dot:CMP #CAM_RADIUS:BCS next_resolve
+    BCC within                          ; (always)
+    ZA_UNREACHABLE
+.behind
+    LDA candidate_anglehi,X:BMI next_resolve    ; a neighbour's, from behind
+.within
+    LDA #CAM_RADIUS:SEC:SBC dot_direction.dot   ; (the distance -87 to 39: a byte's enough)
+    STA units_direction.units
+    JSR wall_foot:BCC next_resolve
+    LDX index
+    LDA candidate_anglelo,X:STA units_direction.angle
+    LDA candidate_anglehi,X:CLC:ADC #1:AND #3:STA units_direction.angle+1  ; the inward normal
+    JSR units_direction
+    LDA units_direction.x:STA shift_camera.x
+    LDA units_direction.x+1:STA shift_camera.x+1
+    LDA units_direction.y:STA shift_camera.y
+    LDA units_direction.y+1:STA shift_camera.y+1
+    JSR shift_camera
+    INC pushed
+.next_resolve
+    INC index
+    JMP each_resolve
+.resolved
+    LDA pushed:BEQ kept
+    LDA #NOT_MADE                       ; each distance made again as it's wanted
+    LDX candidates
+.forget
+    DEX:BMI kept
+    STA candidate_distance,X
+    BPL forget                          ; (always)
+    ZA_UNREACHABLE
+.kept
+    LDA move_x:ORA move_x+1:ORA move_y:ORA move_y+1:BNE sliding
+    LDA pushed:BNE pushed_only
+    LDA #1:STA camsettled               ; still, and nothing pushed
+    RTS
+.pushed_only
+    LDA #0:STA camsettled
+    JMP transition
+.sliding
+    LDA #0:STA camsettled
+
+    \\ the slide: the nearest wall the move would bring nearer than the radius, and nearer than it
+    \\ starts (by more than the slack), its foot on it, takes the move's part across it; with none,
+    \\ the posts may deflect the move. Three rounds at most
+
+    ZA_AUTO1 rounds                     ; local: the rounds left
+    ZA_AUTO1 blocked                    ; local: non-zero if the last round met a wall
+    ZA_AUTO2 start_x                    ; local: where the move starts, whole units
+    ZA_AUTO2 start_y
+    ZA_AUTO2 target_x                   ; local: where it would end
+    ZA_AUTO2 target_y
+    ZA_AUTO2 across                     ; local: a wall's distance there
+    ZA_AUTO2 worst                      ; local: the nearest such wall's
+    ZA_AUTO1 hit                        ; local: and the wall, &FF none
+    ZA_AUTO2 nearer                     ; local: a wall's distance there, + HIT_EPS + 128
+    ZA_AUTO1 start_distance             ; local: and its distance at the start, + 128
+    ZA_AUTO1 deflected                  ; local: non-zero if a post did
+
+    LDA camx:STA start_x
+    LDA camx+1:STA start_x+1
+    LDA camy:STA start_y
+    LDA camy+1:STA start_y+1
+    LDA #3:STA rounds
+.round
+    CLC
+    LDA camxf:ADC move_x
+    LDA camx:ADC move_x+1:STA target_x
+    LDA #0:BIT move_x+1:BPL target_x_up
+    LDA #&FF
+.target_x_up
+    ADC camx+1:STA target_x+1
+    CLC
+    LDA camyf:ADC move_y
+    LDA camy:ADC move_y+1:STA target_y
+    LDA #0:BIT move_y+1:BPL target_y_up
+    LDA #&FF
+.target_y_up
+    ADC camy+1:STA target_y+1
+    LDA #CAM_RADIUS:STA worst
+    LDA #0:STA worst+1:STA index
+    LDA #&FF:STA hit
+.each_wall
+    LDX index:CPX candidates:BNE wall
+    JMP walls_met
+.wall
+    LDA candidate_distance,X
+    CMP #NOT_MADE:BEQ reachable
+    CMP #&80:BCS reachable              ; under 0
+    CMP #CAM_RADIUS+FAR_SLACK:BCC reachable
+    JMP next_wall                       ; too far to reach this frame
+.reachable
+    LDA target_x:STA vertex_dot.x
+    LDA target_x+1:STA vertex_dot.x+1
+    LDA target_y:STA vertex_dot.y
+    LDA target_y+1:STA vertex_dot.y+1
+    JSR wall_distance
+    LDA dot_direction.dot:STA across
+    LDX index
+    LDA dot_direction.dot+1:STA across+1:BPL facing
+    LDA candidate_anglehi,X:BMI next_wall       ; a neighbour's, from behind
+.facing
+    SEC
+    LDA across:SBC worst
+    LDA across+1:SBC worst+1:BPL next_wall      ; no nearer than the nearest yet
+    JSR wall_foot:BCC next_wall
+    LDX index
+    LDA candidate_distance,X:CMP #NOT_MADE:BNE approach
+    LDA start_x:STA vertex_dot.x        ; its distance from the start, wanted now
+    LDA start_x+1:STA vertex_dot.x+1
+    LDA start_y:STA vertex_dot.y
+    LDA start_y+1:STA vertex_dot.y+1
+    JSR wall_distance
+    JSR saturated
+    LDX index:STA candidate_distance,X
+.approach
+    LDA candidate_distance,X:EOR #&80:STA start_distance    ; + 128: a signed byte, unsigned
+    CLC
+    LDA across:ADC #HIT_EPS+128:STA nearer                  ; + 128 too
+    LDA across+1:ADC #0:STA nearer+1
+    SEC
+    LDA nearer:SBC start_distance
+    LDA nearer+1:SBC #0:BPL next_wall   ; no nearer than it starts, less the slack
+    LDA across:STA worst
+    LDA across+1:STA worst+1
+    STX hit
+.next_wall
+    INC index
+    JMP each_wall
+
+    \\ a wall met: the move along it; else the posts
+
+.walls_met
+    LDX hit:INX:BEQ unblocked           ; (&FF: none)
+    DEX
+    LDA #1:STA blocked
+    LDA candidate_anglelo,X:STA slide.angle
+    LDA candidate_anglehi,X:AND #3:STA slide.angle+1
+    JSR slide
+    JMP next_round
+.unblocked
+    LDA #0:STA blocked:STA deflected:STA index
+.each_post
+    LDX index:CPX posts:BEQ posted
+    LDA post_vertex,X:STA corner_deflect.post
+    JSR corner_deflect:BCC passed
+    LDA #1:STA deflected
+.passed
+    INC index
+    JMP each_post
+.posted
+    LDA deflected:BEQ slid              ; neither: the move stands
+.next_round
+    DEC rounds:BEQ slid
+    JMP round
+
+    \\ the move made, none if a wall still blocked it; and the cell, if it moved
+
+.slid
+    LDA blocked:BEQ apply
+    LDA #0:STA move_x:STA move_x+1:STA move_y:STA move_y+1
+.apply
+    LDA move_x:STA shift_camera.x
+    LDA move_x+1:STA shift_camera.x+1
+    LDA move_y:STA shift_camera.y
+    LDA move_y+1:STA shift_camera.y+1
+    JSR shift_camera
+    LDA pushed:ORA move_x:ORA move_x+1:ORA move_y:ORA move_y+1:BNE transition
+    RTS
+.transition
+    JSR vcache_reset
+    JMP vcache_locate
+}
+
+\\ A wall as a candidate (make_cand), and its ends as posts: its start and the next side's (on into
+\\ add_post).
+\\
+\\ Inputs:
+\\     side, cell: the wall and its cell
+\\     capped: &80 for a neighbour's wall, else 0
+\\
+\\ Outputs:
+\\     the candidates and posts: with it
+\\     A, X, Y: corrupted
+
+.add_wall
+{
+    ZA_AUTO1 side                       ; in
+    ZA_AUTO1 cell                       ; in
+    ZA_AUTO1 capped                     ; in
+
+    LDY side
+    LDX candidates
+    LDA side_v,Y:STA candidate_vertex,X
+    LDA side_anghi,Y:ORA capped:STA candidate_anglehi,X
+    LDA side_edge,Y:TAY
+    LDA edge_angle,Y:STA candidate_anglelo,X
+    LDA #0:STA candidate_lengthhi,X
+    LDA edge_len8,Y
+    ASL A:ROL candidate_lengthhi,X
+    ASL A:ROL candidate_lengthhi,X
+    ASL A:ROL candidate_lengthhi,X
+    STA candidate_lengthlo,X
+    INC candidates
+    LDY side
+    LDA side_v,Y:JSR add_post
+    LDX cell
+    LDY side
+    RING_NEXT
+    LDA side_v,Y
+}
+
+\\ A post, unless it's in already (add_post).
+\\
+\\ Inputs:
+\\     A: the vertex
+\\
+\\ Outputs:
+\\     the posts: with it
+\\     X: corrupted
+
+.add_post
+{
+    LDX posts
+.search
+    DEX:BMI new
+    CMP post_vertex,X:BNE search
+    RTS
+.new
+    LDX posts
+    STA post_vertex,X
+    INC posts
+    RTS
+}
+
+\\ A candidate wall's distance from a position, inside positive (side_across): the position's offset
+\\ from its start along the direction a quarter turn on.
+\\
+\\ Inputs:
+\\     X: the candidate
+\\     vertex_dot.x, .y: the position, whole units
+\\
+\\ Outputs:
+\\     dot_direction.dot: the distance
+\\     A, X, Y: corrupted
+
+.wall_distance
+{
+    LDA candidate_vertex,X:STA vertex_dot.vertex
+    LDA candidate_anglelo,X:STA dot_direction.angle
+    LDA candidate_anglehi,X:CLC:ADC #1:AND #3:STA dot_direction.angle+1
+    JMP vertex_dot
+}
+
+\\ Whether a position's foot on a candidate wall is on it (foot_in_range): its offset from the start
+\\ along the wall, from 0 to its cap.
+\\
+\\ Inputs:
+\\     X: the candidate
+\\     vertex_dot.x, .y: the position, whole units
+\\
+\\ Outputs:
+\\     C: set if it is
+\\     A, X, Y: corrupted
+
+.wall_foot
+{
+    ZA_AUTO1 candidate                  ; local: X
+
+    STX candidate
+    LDA candidate_vertex,X:STA vertex_dot.vertex
+    LDA candidate_anglelo,X:STA dot_direction.angle
+    LDA candidate_anglehi,X:AND #3:STA dot_direction.angle+1
+    JSR vertex_dot
+    CLC
+    LDA dot_direction.dot+1:BMI done    ; before the start
+    LDX candidate
+    SEC
+    LDA candidate_lengthlo,X:SBC dot_direction.dot
+    LDA candidate_lengthhi,X:SBC dot_direction.dot+1    ; C: within the cap
+.done
+    RTS
+}
+
+\\ A position's offset from a vertex, along an angle (pt_dot_dir of the offset).
+\\
+\\ Inputs:
+\\     vertex: the vertex
+\\     x, y: the position, whole units
+\\     dot_direction.angle: the angle
+\\
+\\ Outputs:
+\\     dot_direction.dot: the component
+\\     A, X, Y: corrupted
+
+.vertex_dot
+{
+    ZA_AUTO1 vertex                     ; in
+    ZA_AUTO2 x                          ; in
+    ZA_AUTO2 y                          ; in
+
+    LDX vertex
+    SEC
+    LDA x:SBC vert_xlo,X:STA dot_direction.ux
+    LDA x+1:SBC vert_xhi,X:STA dot_direction.ux+1
+    SEC
+    LDA y:SBC vert_ylo,X:STA dot_direction.uy
+    LDA y+1:SBC vert_yhi,X:STA dot_direction.uy+1
+}
+
+\\ The component of a vector along a 10-bit angle (pt_dot_dir).
+\\
+\\ Inputs:
+\\     ux, uy: the vector, under 2^14 either way
+\\     angle: the angle
+\\
+\\ Outputs:
+\\     dot: the component
+\\     ux, uy: corrupted
+\\     A, X, Y: corrupted
+
+.dot_direction
+{
+    ZA_AUTO2 ux                         ; in
+    ZA_AUTO2 uy                         ; in
+    ZA_AUTO2 angle                      ; in
+    ZA_AUTO2 dot                        ; out
+
+    DOT_DIRECTION ux, uy, angle, dot
+    RTS
+}
+
+\\ A distance as a signed byte, saturated to -127 to 127 (saturated): the slide only asks it of
+\\ walls under 56 units off, and -128 is NOT_MADE.
+\\
+\\ Inputs:
+\\     dot_direction.dot: the distance
+\\
+\\ Outputs:
+\\     A: the byte
+
+.saturated
+{
+    LDA dot_direction.dot+1:BMI negative
+    BNE far                             ; 256 or more
+    LDA dot_direction.dot:BPL done
+.far
+    LDA #127
+    RTS
+.negative
+    LDA dot_direction.dot:CLC:ADC #127
+    LDA dot_direction.dot+1:ADC #0:BMI near     ; under -127
+    LDA dot_direction.dot
+.done
+    RTS
+.near
+    LDA #&81                            ; -127
+    RTS
+}
+
+\\ n whole units along a 10-bit angle (pt_dir of n shifted up 8): exactly n cos, n sin, s.8.
+\\
+\\ Inputs:
+\\     units: n, under 128
+\\     angle: the angle
+\\
+\\ Outputs:
+\\     x, y: the step, s.8
+\\     A, X, Y: corrupted
+
+.units_direction
+{
+    ZA_AUTO1 units                      ; in
+    ZA_AUTO2 angle                      ; in
+    ZA_AUTO2 x                          ; out
+    ZA_AUTO2 y                          ; out
+
+    UNITS_SINE units, angle, x, TRUE
+    UNITS_SINE units, angle, y, FALSE
+    RTS
+}
+
+\\ The move's part along a wall (the slide): its component along the wall's direction, back along
+\\ it (pt_dir of pt_dot_dir).
+\\
+\\ Inputs:
+\\     angle: the wall's direction, 10 bits
+\\     move_x, move_y: the move
+\\
+\\ Outputs:
+\\     move_x, move_y: its part along the wall
+\\     A, X, Y: corrupted
+
+.slide
+{
+    ZA_AUTO2 angle                      ; in
+
+    LDA move_x:STA dot_direction.ux
+    LDA move_x+1:STA dot_direction.ux+1
+    LDA move_y:STA dot_direction.uy
+    LDA move_y+1:STA dot_direction.uy+1
+    LDA angle:STA dot_direction.angle
+    LDA angle+1:STA dot_direction.angle+1
+    JSR dot_direction
+    LDA dot_direction.dot:STA multiply_sine.v
+    LDA dot_direction.dot+1:STA multiply_sine.v+1
+    LDA angle:STA multiply_sine.angle
+    LDA angle+1:STA multiply_sine.angle+1
+    JSR multiply_cosine
+    LDA multiply_sine.product:STA move_x
+    LDA multiply_sine.product+1:STA move_x+1
+    LDA dot_direction.dot:STA multiply_sine.v
+    LDA dot_direction.dot+1:STA multiply_sine.v+1
+    LDA angle:STA multiply_sine.angle
+    LDA angle+1:STA multiply_sine.angle+1
+    JSR multiply_sine
+    LDA multiply_sine.product:STA move_y
+    LDA multiply_sine.product+1:STA move_y+1
+    RTS
+}
+
+\\ v times a 10-bit angle's cosine (pt_mul_cos): its sine a quarter turn on, so on into
+\\ multiply_sine.
+\\
+\\ Inputs:
+\\     multiply_sine.v, .angle: the value and the angle
+\\
+\\ Outputs:
+\\     as multiply_sine's, its angle corrupted
+
+.multiply_cosine
+{
+    LDA multiply_sine.angle+1:CLC:ADC #1:AND #3:STA multiply_sine.angle+1
+}
+
+\\ v times a 10-bit angle's sine (pt_mul_sin).
+\\
+\\ Inputs:
+\\     v: the value, signed, never -32768
+\\     angle: the angle
+\\
+\\ Outputs:
+\\     product: v sin angle
+\\     v: corrupted
+\\     A, X, Y: corrupted
+
+.multiply_sine
+{
+    ZA_AUTO2 v                          ; in
+    ZA_AUTO2 angle                      ; in
+    ZA_AUTO2 product                    ; out
+
+    MULTIPLY_SINE v, angle, product, FALSE
+    RTS
+}
+
+\\ The camera moved by a step, s.8 each way (apply, twice).
+\\
+\\ Inputs:
+\\     x, y: the step
+\\
+\\ Outputs:
+\\     camxf, camx, camyf, camy: moved
+\\     A: corrupted
+
+.shift_camera
+{
+    ZA_AUTO2 x                          ; in
+    ZA_AUTO2 y                          ; in
+
+    CLC
+    LDA camxf:ADC x:STA camxf
+    LDA camx:ADC x+1:STA camx
+    LDA #0:BIT x+1:BPL x_up
+    LDA #&FF                            ; its sign, extended
+.x_up
+    ADC camx+1:STA camx+1
+    CLC
+    LDA camyf:ADC y:STA camyf
+    LDA camy:ADC y+1:STA camy
+    LDA #0:BIT y+1:BPL y_up
+    LDA #&FF
+.y_up
+    ADC camy+1:STA camy+1
+    RTS
+}
+
+\\ A value times a fraction f, the low byte's product's low byte dropped (pt_mulu16_frac).
+\\
+\\ Inputs:
+\\     value: 16 bits
+\\     f: the fraction, 256ths
+\\
+\\ Outputs:
+\\     product: (a f) >> 8
+\\     A, X, Y: corrupted
+
+.multiply_fraction
+{
+    ZA_AUTO2 value                      ; in
+    ZA_AUTO1 f                          ; in
+    ZA_AUTO2 product                    ; out
+
+    MULTIPLY_FRACTION value, f, product
+    RTS
+}
+
+\\ A post as a point obstacle (corner_deflect): with the camera's circle over it and the move
+\\ nearing it, the move loses its part towards it, overcorrected by a quarter, so round the corner.
+\\
+\\ Inputs:
+\\     post: the vertex
+\\     camx, camy: the camera, whole units
+\\     move_x, move_y: the move, under 16 units each way
+\\
+\\ Outputs:
+\\     move_x, move_y: deflected
+\\     C: set if it was
+\\     A, X, Y: corrupted
+
+.corner_deflect
+{
+    ZA_AUTO1 post                       ; in
+    ZA_AUTO1 sign_x                     ; local: bit 7 if the camera's below the post in x (ux < 0)
+    ZA_AUTO1 sign_y                     ; local: and in y
+    ZA_AUTO1 far_x                      ; local: how far, under the radius (ax)
+    ZA_AUTO1 far_y
+    ZA_AUTO2 squared                    ; local: the distance squared (d2)
+    ZA_AUTO2 part_x                     ; local: the move's x quartered, times far_x (wx)
+    ZA_AUTO2 part_y
+    ZA_AUTO1 nearing                    ; local: bit 7 if the move nears the post (toward)
+
+    \\ the camera's offset from the post: each part under the radius either way
+
+    LDX post
+    SEC
+    LDA camx:SBC vert_xlo,X:TAY
+    LDA camx+1:SBC vert_xhi,X:STA sign_x
+    JSR within:BCC clear
+    STA far_x
+    LDX post
+    SEC
+    LDA camy:SBC vert_ylo,X:TAY
+    LDA camy+1:SBC vert_yhi,X:STA sign_y
+    JSR within:BCC clear
+    STA far_y
+
+    \\ within the circle, and not on the post itself
+
+    LDA far_x:MULTIPLIER
+    LDY far_x:MULTIPLY
+    STX squared:STA squared+1
+    LDA far_y:MULTIPLIER
+    LDY far_y:MULTIPLY
+    TAY                                 ; its high byte
+    TXA:CLC:ADC squared:STA squared
+    TYA:ADC squared+1:STA squared+1
+    CMP #HI(CAM_RADIUS*CAM_RADIUS):BCC inside
+    BNE clear
+    LDA squared:CMP #LO(CAM_RADIUS*CAM_RADIUS):BCS clear
+.inside
+    LDA squared+1:BNE near              ; 256 or more: off the post
+.clear
+    CLC
+    RTS
+.near
+
+    \\ each part of the move, quartered, times the camera's offset that way
+
+    LDA move_x:STA quartered.v
+    LDA move_x+1:STA quartered.v+1
+    LDA far_x:STA quartered.by
+    JSR quartered
+    STX part_x:STA part_x+1
+    LDA move_y:STA quartered.v
+    LDA move_y+1:STA quartered.v+1
+    LDA far_y:STA quartered.by
+    JSR quartered
+    STX part_y:STA part_y+1
+
+    \\ M . u as a sign and a magnitude: whether each part nears the post (the move's sign against
+    \\ the offset's), and their sum or difference
+
+    LDA move_x+1:EOR sign_x:STA sign_x  ; bit 7: x nears it (nx)
+    LDA move_y+1:EOR sign_y:STA sign_y
+    EOR sign_x:BMI differ
+    CLC                                 ; both alike: the sum
+    LDA part_x:ADC part_y:STA multiply_fraction.value
+    LDA part_x+1:ADC part_y+1:STA multiply_fraction.value+1
+    LDA sign_x:STA nearing
+    JMP summed
+.differ
+    SEC
+    LDA part_x:SBC part_y:STA multiply_fraction.value
+    LDA part_x+1:SBC part_y+1:STA multiply_fraction.value+1
+    LDA sign_x:STA nearing
+    BCS summed                          ; x's the larger
+    SEC
+    LDA part_y:SBC part_x:STA multiply_fraction.value
+    LDA part_y+1:SBC part_x+1:STA multiply_fraction.value+1
+    LDA sign_y:STA nearing
+.summed
+    BIT nearing:BPL clear               ; moving away
+    LDA multiply_fraction.value:ORA multiply_fraction.value+1:BEQ clear     ; or tangent
+
+    \\ f = |M . u| / d2 in q14, overcorrected by a quarter: rpost, by d2 / 8, doubled
+
+    LDA squared+1:LSR A:STA squared+1
+    LDA squared:ROR A
+    LSR squared+1:ROR A
+    LSR squared+1:ROR A
+    TAX
+    LDA rpost,X:STA multiply_fraction.f
+    JSR multiply_fraction
+    ASL multiply_fraction.product:ROL multiply_fraction.product+1
+
+    \\ the correction along u: f times 4 far_x, f times 4 far_y; the move pushed away from the post
+
+    LDA multiply_fraction.product:STA multiply_fraction.value
+    LDA multiply_fraction.product+1:STA multiply_fraction.value+1
+    LDA far_x:ASL A:ASL A:STA multiply_fraction.f
+    JSR multiply_fraction
+    LDA multiply_fraction.product:STA part_x
+    LDA multiply_fraction.product+1:STA part_x+1
+    LDA far_y:ASL A:ASL A:STA multiply_fraction.f
+    JSR multiply_fraction               ; (a kept: f again)
+    LDA move_x+1:EOR sign_x:BMI x_less  ; (sign_x: the move's sign EOR the offset's, so this is the
+    CLC                                 ; offset's)
+    LDA move_x:ADC part_x:STA move_x
+    LDA move_x+1:ADC part_x+1:STA move_x+1
+    JMP x_moved
+.x_less
+    SEC
+    LDA move_x:SBC part_x:STA move_x
+    LDA move_x+1:SBC part_x+1:STA move_x+1
+.x_moved
+    LDA move_y+1:EOR sign_y:BMI y_less
+    CLC
+    LDA move_y:ADC multiply_fraction.product:STA move_y
+    LDA move_y+1:ADC multiply_fraction.product+1:STA move_y+1
+    SEC
+    RTS
+.y_less
+    SEC
+    LDA move_y:SBC multiply_fraction.product:STA move_y
+    LDA move_y+1:SBC multiply_fraction.product+1:STA move_y+1
+    SEC
+    RTS
+
+    \\ an offset's part, high byte in A, low in Y: its magnitude if under the radius (C set), else C
+    \\ clear
+
+.within
+    BEQ positive
+    CMP #&FF:BNE beyond
+    CPY #256-CAM_RADIUS+1:BCC beyond
+    TYA:EOR #&FF:ADC #0                 ; (C set: + 1)
+    SEC
+    RTS
+.positive
+    CPY #CAM_RADIUS:BCS beyond
+    TYA
+    SEC
+    RTS
+.beyond
+    CLC
+    RTS
+}
+
+\\ A part of the move, quartered, times a byte (mulu16x8_lo of |v| >> 2): |v| under 16 units, so
+\\ the product fits 16 bits.
+\\
+\\ Inputs:
+\\     v: the part, s.8
+\\     by: the byte
+\\
+\\ Outputs:
+\\     X, A: the product's low and high bytes
+\\     v: corrupted
+\\     Y: corrupted
+
+.quartered
+{
+    ZA_AUTO2 v                          ; in
+    ZA_AUTO1 by                         ; in
+    ZA_AUTO1 low                        ; local: the low byte's product's high byte
+
+    LDA v+1:BPL positive
+    LDA #0:SEC:SBC v:STA v
+    LDA #0:SBC v+1:STA v+1
+.positive
+    LSR v+1:ROR v
+    LSR v+1:ROR v
+    LDA by:MULTIPLIER
+    LDY v:MULTIPLY
+    STA low
+    TXA:PHA                             ; the product's low byte
+    LDY v+1:MULTIPLY                    ; (v's high byte under 4: its product's a byte)
+    TXA:CLC:ADC low
+    TAY
+    PLA:TAX
+    TYA
+    RTS
+}

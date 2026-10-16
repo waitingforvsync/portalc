@@ -65,7 +65,7 @@ int main(int argc, char **argv)
                               | ((r & 2) ? PT_IN_TURNR : 0) | ((r & 4) ? PT_IN_LEFT : 0)
                               | ((r & 8) ? PT_IN_BACK : 0));
         }
-        pt_camera_tick(&cam, &map, &vc, input);
+        pt_camera_tick(&cam, &map, &vc, input, PT_CAM_MAX_TICKS);
         if ((tick & 7) == 0) {
             pt_render_view(&render, cam.angle, cam.cell);
             fwrite(render.fb, 1, PT_FB_BYTES, fp);

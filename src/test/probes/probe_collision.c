@@ -57,7 +57,7 @@ RC_TEST(probe, collision_distance)
                               | ((r & 2) ? PT_IN_TURNR : 0) | ((r & 4) ? PT_IN_LEFT : 0)
                               | ((r & 8) ? PT_IN_BACK : 0));
         }
-        pt_camera_tick(&cam, m, &vc_, input);
+        pt_camera_tick(&cam, m, &vc_, input, (uint8_t)(1 + ((seed >> 24) & 7)));
 
         double x = cam.x / 256.0;
         double y = cam.y / 256.0;

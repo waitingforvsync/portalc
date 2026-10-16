@@ -53,8 +53,8 @@ RC_TEST(probe, fan_crossings)
         uint16_t vx = m->verts[open[i]].x;
         uint16_t vy = m->verts[open[i]].y;
         for (unsigned a = 0; a < 256; a++) {
-            // start 24 units before the vertex, walk 6 ticks (48 units)
-            // through it
+            // start 24 units before the vertex, walk 6 frames of 8 ticks
+            // (48 units) through it
             double ang = a * (3.14159265358979323846 * 2.0 / 256.0);
             double sx = vx - cos(ang) * 24.0;
             double sy = vy - sin(ang) * 24.0;
@@ -63,7 +63,7 @@ RC_TEST(probe, fan_crossings)
             pt_camera cam;
             pt_camera_init(&cam, m, &vc_, (uint16_t)sx, (uint16_t)sy, (uint8_t)a);
             for (int t = 0; t < 6; t++) {
-                pt_camera_tick(&cam, m, &vc_, PT_IN_FWD);
+                pt_camera_tick(&cam, m, &vc_, PT_IN_FWD, PT_CAM_MAX_TICKS);
                 uint8_t want = pt_map_find_cell(m, (uint16_t)(cam.x >> 8),
                                                 (uint16_t)(cam.y >> 8));
                 if (want == 0 || want == cam.cell)

@@ -75,8 +75,9 @@ static bool side_crossed(pt_vcache *vc, const pt_map *m, const pt_cell *c, uint8
 uint8_t pt_vcache_locate(pt_vcache *vc, const pt_map *m, uint8_t cell)
 {
     // a move skimming a fan vertex may cross several cells, and can legally
-    // walk the long way round the fan, so the cap allows a full ring of hops
-    for (uint8_t pass = 0; pass < 8; pass++) {
+    // walk the long way round the fan: a full ring of hops at most (which
+    // the 6502 doesn't count)
+    for (uint8_t hops = 0;; hops++) {
         const pt_cell *c = &m->cells[cell];
         bool crossed = false;
         for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
@@ -88,7 +89,7 @@ uint8_t pt_vcache_locate(pt_vcache *vc, const pt_map *m, uint8_t cell)
             }
         }
         if (!crossed)
-            break;
+            return cell;
+        RC_ASSERT(hops < 8);
     }
-    return cell;
 }

@@ -58,7 +58,7 @@ RC_TEST(probe, walk_from_reachable_states)
             pt_camera cam;
             pt_camera_init(&cam, m, &vc_, (uint16_t)sx, (uint16_t)sy, (uint8_t)a);
             for (int t = 0; t < 6; t++) {
-                pt_camera_tick(&cam, m, &vc_, PT_IN_FWD);
+                pt_camera_tick(&cam, m, &vc_, PT_IN_FWD, PT_CAM_MAX_TICKS);
                 uint16_t px = (uint16_t)(cam.x >> 8);
                 uint16_t py = (uint16_t)(cam.y >> 8);
                 for (unsigned r = 0; r < 8; r++)

@@ -24,6 +24,39 @@ ENDSECTION
     RTS
 }
 
+\\ The checks' made-up values' LFSR: 32 bits, Galois, taps &80200003. A check seeds it.
+
+ZA_AUTO 4, random
+
+\\ The LFSR's next byte, eight steps on, as the C's checks step theirs: one step leaves the low byte
+\\ the last one shifted a bit.
+\\
+\\ Inputs:
+\\     random: the LFSR
+\\
+\\ Outputs:
+\\     random: stepped
+\\     A: its low byte
+\\     X, Y: preserved
+
+.random_byte
+{
+    ZA_AUTO1 steps                      ; local: the steps to go
+
+    LDA #8:STA steps
+.step
+    LSR random+3:ROR random+2:ROR random+1:ROR random
+    BCC stepped
+    LDA random+3:EOR #&80:STA random+3
+    LDA random+2:EOR #&20:STA random+2
+    LDA random:EOR #&03:STA random
+.stepped
+    DEC steps
+    BNE step
+    LDA random
+    RTS
+}
+
 \\ Empty T, its junk rows too.
 \\
 \\ Inputs:

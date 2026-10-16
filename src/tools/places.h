@@ -15,6 +15,7 @@
 typedef struct place {
     uint8_t cell;
     uint16_t x, y;
+    uint8_t vertex;    // the vertex it's near, 0xFF for the centroid
 } place;
 
 static unsigned places(const pt_map *m, place *out)
@@ -31,11 +32,11 @@ static unsigned places(const pt_map *m, place *out)
         uint32_t k = (uint32_t)(pt_map_ring_end(c) - c->first);
         uint32_t cx = sx / k;
         uint32_t cy = sy / k;
-        out[n++] = (place) {cell, (uint16_t)cx, (uint16_t)cy};
+        out[n++] = (place) {cell, (uint16_t)cx, (uint16_t)cy, 0xFF};
         for (uint8_t s = c->first; s < pt_map_ring_end(c); s++) {
             pt_vertex v = m->verts[pt_map_side(m, s)->v];
             out[n++] = (place) {cell, (uint16_t)((cx + 7u * v.x) / 8),
-                                (uint16_t)((cy + 7u * v.y) / 8)};
+                                (uint16_t)((cy + 7u * v.y) / 8), pt_map_side(m, s)->v};
         }
     }
     for (unsigned i = 0; i < n; i++)

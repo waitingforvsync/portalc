@@ -17,9 +17,9 @@
 
 #define PT_CAM_RADIUS 40
 _Static_assert(PT_CAM_RADIUS * PT_CAM_RADIUS == PT_RPOST_END, "the posts' table covers the circle");
-#define PT_CAM_MOVE_SPEED 2    // whole units per tick
+#define PT_CAM_MOVE_SPEED 3    // whole units per tick
 #define PT_CAM_TURN_SPEED 1    // 256ths of a turn per tick
-#define PT_CAM_MAX_TICKS 4     // a call's at most: its move under 12 units, as camera.c needs
+#define PT_CAM_MAX_TICKS 4     // a call's at most: its move under 17 units, as camera.c needs
 
 // the start pose in the demo scene
 #define PT_CAM_START_X 1756

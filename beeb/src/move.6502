@@ -2,14 +2,14 @@
 \\ along walls and round their ends, then the cell it ends up in.
 
 MAX_CANDIDATES = 32                     ; camera.c's MAX_CAND: walls and posts a tick, at most
-FAR_SLACK = 16                          ; camera.c's: a wall farther as the move starts can't be met
+FAR_SLACK = 21                          ; camera.c's: a wall farther as the move starts can't be met
 HIT_EPS = 2                             ; its truncation slack for the move's approach
 NOT_MADE = &80                          ; a candidate's distance not yet made
 ASSERT CAM_TURN_SPEED == 4, "camera_tick: the turn's the ticks * 4"
-ASSERT CAM_MOVE_SPEED == 2, "camera_tick: the move's the ticks * 2"
+ASSERT CAM_MOVE_SPEED == 3, "camera_tick: the move's the ticks * 3"
 ASSERT CAM_MAX_TICKS == 4, "move.6502's header: up to 4 ticks a call"
 
-\\ The tick's move, s.8 (under 12 units each way), its walls and their ends.
+\\ The tick's move, s.8 (under 17 units each way), its walls and their ends.
 
 ZA_AUTO2 move_x
 ZA_AUTO2 move_y
@@ -100,8 +100,9 @@ ENDSECTION
 
     \\ the turn: left or right, both cancelling (and the move's units, for after)
 
-    LDA ticks:ASL A:STA units_direction.units
-    ASL A:STA turn
+    LDA ticks:ASL A:ADC ticks           ; 3 a tick (C clear: ticks under 64)
+    STA units_direction.units
+    ADC ticks:STA turn                  ; 4 a tick
     LDA keys:AND #IN_TURNL OR IN_TURNR
     CMP #IN_TURNR:BEQ right
     CMP #IN_TURNL:BNE turned            ; neither, or both
@@ -744,7 +745,7 @@ ENDSECTION
 \\ Inputs:
 \\     post: the vertex
 \\     camx, camy: the camera, whole units
-\\     move_x, move_y: the move, under 16 units each way
+\\     move_x, move_y: the move, under 17 units each way
 \\
 \\ Outputs:
 \\     move_x, move_y: deflected
@@ -900,7 +901,7 @@ ENDSECTION
     RTS
 }
 
-\\ A part of the move, quartered, times a byte (mulu16x8_lo of |v| >> 2): |v| under 16 units, so
+\\ A part of the move, quartered, times a byte (mulu16x8_lo of |v| >> 2): |v| under 17 units, so
 \\ the product fits 16 bits.
 \\
 \\ Inputs:
@@ -928,7 +929,7 @@ ENDSECTION
     LDY v:MULTIPLY
     STA low
     TXA:PHA                             ; the product's low byte
-    LDY v+1:MULTIPLY                    ; (v's high byte under 4: its product's a byte)
+    LDY v+1:MULTIPLY                    ; (v's high byte 4 at most: by under 40, a byte)
     TXA:CLC:ADC low
     TAY
     PLA:TAX

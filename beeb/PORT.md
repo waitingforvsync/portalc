@@ -383,9 +383,9 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
 - **The interrupt gathers the keys.** It ORs the keys held at each vsync
   into `keys` and counts the vsyncs in `framectr`; `update_camera` takes both
   with the vsync held off and runs them through `camera_tick` 4 at a time
-  (`CAM_MAX_TICKS`), the keys shared, as main.c does: 4 ticks at 2 units
-  keep a call's move under 12 units, as `FAR_SLACK` needs. A long frame is
-  just more calls.
+  (`CAM_MAX_TICKS`), the keys shared, as main.c does: 4 ticks at 3 units
+  keep a call's move under 17 units, as `FAR_SLACK` needs. A frame of more
+  than 4 vsyncs takes more calls, each a whole tick's cost.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has
@@ -561,6 +561,16 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
      to 4 ticks, the corners 4. A move exactly tangent to a post
      (`corner_deflect`'s zero magnitude) no longer comes up in either check:
      it's a shortcut, the correction 0 either way.
+  7. ~~3 units a tick.~~ Done. `FAR_SLACK` is 21 now (camera.c and
+     move.6502), for a call's move under 17 units (4 ticks at 3, a strafe's
+     diagonal 16.97), which camera.c asserts. `corner_deflect`'s bounds hold
+     at 17: its products fit 16 bits to about 24 units a part, and `f` stays
+     under 1.33 in q14. The move's 3 a tick and the turn's 4 are an
+     `ASL:ADC` and an `ADC`. The camera can end a move up to 17 units inside
+     its radius, near a wall's end (judged from where the move starts, and
+     never pushed back out) or a neighbour's wall (for a tick):
+     `probe_collision` saw 22.74 at closest, and its tripwire came down from
+     28 to 21. Its 29.17 before was the same thing at 11.3 units, not drift.
 - ~~The fill's tables, made by the loader.~~ Done: 528 bytes that were
   `EQUB`s in sideways RAM, where any code before them could push them onto
   new pages (the tick's loop cost 104 bytes of padding). `make_tables`
@@ -570,6 +580,12 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   3,321 and `Tables` 124. On the way: a check now stops in `test`, not
   back in the loader, which the T-clearing checks wipe (the fill check's
   return landed on a `BRK` once the loader moved).
+- To revisit: the camera ending a move inside its radius, by up to the
+  move's length, near a wall's end or a neighbour's wall (Moving step 7). A
+  bigger radius gets some back: 44 at most while `rpost` takes d2 / 8 as a
+  byte (and `trowhi` would need a `FITPAGE`), about 27 at closest. Judging
+  posts and neighbours' walls from the radius plus the move, and a post's
+  approach along it, gets it all back, for work on every moving tick.
 - To revisit, if the cycles are wanted: two copies of the stretch loops,
   one going on to the handler and one, for the stretch to a clip event or
   the strip's end, to `events_due`. The handler's `CMP next_event` then

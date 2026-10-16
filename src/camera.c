@@ -33,12 +33,12 @@ typedef struct cand {
 } cand;
 
 // A call's move (PT_CAM_MAX_TICKS ticks at most) changes a wall's distance
-// by under 12 units, plus a unit for the position's truncation and one for
+// by under 17 units, plus a unit for the position's truncation and one for
 // each product's rounding: a wall farther than this at the start of the
 // move can't be met by it.
-#define FAR_SLACK 16
+#define FAR_SLACK 21
 #define MAX_MOVE (PT_CAM_MAX_TICKS * PT_CAM_MOVE_SPEED)
-_Static_assert(2 * MAX_MOVE * MAX_MOVE < 12 * 12, "a call's move, diagonal too, under 12 units");
+_Static_assert(2 * MAX_MOVE * MAX_MOVE < 17 * 17, "a call's move, diagonal too, under 17 units");
 
 // Collect a corner vertex, keeping the list free of duplicates.
 static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
@@ -116,10 +116,11 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
 
     // M . v as a sign and a magnitude: only approach gates, and the division
     // below wants the magnitude anyway, so nothing here is ever negated. The
-    // move drops to 1/64-unit steps so each product fits u16 (|M| < 16
-    // units makes it 10 bits, times a byte), and so does the sum: by
-    // Cauchy-Schwarz it is at most |M| * |v| / 4 < 1024 * 40
-    RC_ASSERT(*mx > -4096 && *mx < 4096 && *my > -4096 && *my < 4096);
+    // move drops to 1/64-unit steps so each product fits u16 (each part
+    // under 17 units makes it under 1088, times a byte under 40), and so
+    // does the sum: by Cauchy-Schwarz it is at most |M| * |v| / 4, and |M|
+    // under 17 * sqrt(2) units makes that under 1539 * 40
+    RC_ASSERT(*mx > -17 * 256 && *mx < 17 * 256 && *my > -17 * 256 && *my < 17 * 256);
     uint16_t wx = mulu16x8_lo(pt_u16((*mx < 0 ? -(int32_t)*mx : *mx) >> 2), pt_u8(ax));
     uint16_t wy = mulu16x8_lo(pt_u16((*my < 0 ? -(int32_t)*my : *my) >> 2), pt_u8(ay));
     bool nx = (*mx < 0) != (ux < 0);
@@ -139,11 +140,11 @@ static bool corner_deflect(const pt_map *m, uint8_t v, uint32_t px, uint32_t py,
     if (!toward || mag == 0)
         return false;    // moving away or tangent
 
-    // f = |M . v| / (v . v) in q14, overcorrected by a quarter: under 0.71 *
-    // 1.25 of 2^14 for any move this slow. The division and the quarter are
-    // one byte, pt_rpost, and a fractional multiply. The correction along v
-    // is f * a / 64 in s.8, one fractional multiply by 4a (a < 40, so a
-    // byte)
+    // f = |M . v| / (v . v) in q14, overcorrected by a quarter: under 1.07 *
+    // 1.25 of 2^14 for any move this slow (|M| under 17 units, |v| 16 on).
+    // The division and the quarter are one byte, pt_rpost, and a fractional
+    // multiply. The correction along v is f * a / 64 in s.8, one fractional
+    // multiply by 4a (a < 40, so a byte)
     uint16_t f = pt_u16((int32_t)pt_mulu16_frac(mag, pt_rpost(d2)) << 1);
     int16_t cx = pt_i16(pt_mulu16_frac(f, pt_u8((int32_t)ax << 2)));
     int16_t cy = pt_i16(pt_mulu16_frac(f, pt_u8((int32_t)ay << 2)));
@@ -212,7 +213,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input,
     pt_xy f = pt_dir((int16_t)(ticks * PT_CAM_MOVE_SPEED << 8), (uint16_t)(c->angle << 2));
     int16_t fx = f.x;
     int16_t fy = f.y;
-    int16_t mx = 0;    // s.8, under 12 units in any direction
+    int16_t mx = 0;    // s.8, under 17 units in any direction
     int16_t my = 0;
     if (input & PT_IN_FWD) {
         mx = pt_i16((int32_t)mx + fx);

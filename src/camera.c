@@ -32,11 +32,13 @@ typedef struct cand {
     uint8_t capped;    // neighbour's wall: only hits in front, foot on segment
 } cand;
 
-// A frame's move (PT_CAM_MAX_TICKS ticks at most) changes a wall's distance
+// A call's move (PT_CAM_MAX_TICKS ticks at most) changes a wall's distance
 // by under 12 units, plus a unit for the position's truncation and one for
 // each product's rounding: a wall farther than this at the start of the
 // move can't be met by it.
 #define FAR_SLACK 16
+#define MAX_MOVE (PT_CAM_MAX_TICKS * PT_CAM_MOVE_SPEED)
+_Static_assert(2 * MAX_MOVE * MAX_MOVE < 12 * 12, "a call's move, diagonal too, under 12 units");
 
 // Collect a corner vertex, keeping the list free of duplicates.
 static void add_post(uint8_t *posts, uint8_t *np, uint8_t v)
@@ -204,7 +206,7 @@ void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input,
     if (input & PT_IN_TURNR)
         c->angle = (uint8_t)(c->angle + turn);
 
-    // desired displacement from the input: the facing step, the frame's
+    // desired displacement from the input: the facing step, the call's
     // ticks' worth at once, exact (a whole number of units along the
     // camera's angle, four 1024ths a step)
     pt_xy f = pt_dir((int16_t)(ticks * PT_CAM_MOVE_SPEED << 8), (uint16_t)(c->angle << 2));

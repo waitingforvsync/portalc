@@ -63,7 +63,7 @@ ambitions.
 
 | C | 6502 | State |
 |---|---|---|
-| `pt_camera_tick` (camera.c) | `update_camera` (move.6502): the frame's ticks and keys, then `camera_tick`: the turn, the move, the walls (`add_wall`, `add_post`), the resolve, the slide (`slide`), the posts (`corner_deflect`), the transition | done: from each place 32 frames of made-up keys and 1 to 8 ticks, and 32 frames into its corner, the camera after each summed by place: `portalc_cameraref` over the demo scene, `portalc_camerastressref` over the stress scene (whose wedge blocks a slide for three rounds). The camera's state is camera.6502's |
+| `pt_camera_tick` (camera.c) | `update_camera` (move.6502): the frame's ticks and keys, then `camera_tick` for each 4 of them: the turn, the move, the walls (`add_wall`, `add_post`), the resolve, the slide (`slide`), the posts (`corner_deflect`), the transition | done: from each place 32 frames of made-up keys and 1 to 4 ticks, and 32 frames into its corner, the camera after each summed by place: `portalc_cameraref` over the demo scene, `portalc_camerastressref` over the stress scene (whose wedge blocks a slide for three rounds). The camera's state is camera.6502's |
 | `side_across`, `foot_in_range` | `wall_distance`, `wall_foot`, through `vertex_dot` and `dot_direction` | done, in the tick's checks |
 | `corner_deflect`, with `mulu16x8_lo` | `corner_deflect`, with `quartered` | done, in the tick's checks |
 | `apply` | `shift_camera` | done, in the tick's checks |
@@ -269,6 +269,7 @@ They have the same names as `pt_arith_tables`, except:
 | `rpost` | `rpost`, which is `rpostmem` - 32: it starts at index 32 |
 | — | `trowhi`: row y's page in T |
 | — | `shr3`: b DIV 8, a sprite run byte's row (and `SCREEN_AT`'s block) |
+| — | `fill_exitlo_a` to `fill_tailhi_b`: the fill's, by a column's end row, where each screen's body takes the RTS and where its tail starts |
 
 ### Constants
 
@@ -370,6 +371,7 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   the tail stores the colour from there down. Tables by the end row say
   where the RTS and the tail go: ends 64 and 65 stop at the body's own RTS,
   so they patch `fill_spare`, and the tail starts at row 1, as no end is 0.
+  `make_tables` steps them through the blocks, in builds with the fill.
   A byte above a column's end costs 9 cycles, one below 5, and a column 134
   more: 32.6k cycles a frame over walkref's frames.
 - **The unplot holds its 0 in A.** Its row moves (`UNPLOT_MOVE`) step Y and
@@ -380,9 +382,10 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
   5.7k cycles a frame over the sweep's frames, 4.5k of it shallow runs.
 - **The interrupt gathers the keys.** It ORs the keys held at each vsync
   into `keys` and counts the vsyncs in `framectr`; `update_camera` takes both
-  with the vsync held off and runs a tick of that many ticks' worth, as the
-  C's caller does. It doesn't cap them: the C asserts 8 at most, and a frame
-  of 165k cycles is 5.
+  with the vsync held off and runs them through `camera_tick` 4 at a time
+  (`CAM_MAX_TICKS`), the keys shared, as main.c does: 4 ticks at 2 units
+  keep a call's move under 12 units, as `FAR_SLACK` needs. A long frame is
+  just more calls.
 - **`toggle_end` and `num_recs` are plot.6502's**, as the records are; the
   capture only resets them.
 - **A child walk keeps only three bytes of its parent's.** The C's walk has
@@ -549,6 +552,24 @@ C writes out: 256 and 1.25 * 2^15, in arith.h's notes on `rpost`.
      unplot 12k); walking from there the capture's 75.4k, so emptying the
      vertex cache every frame costs it little. If sideways RAM runs out,
      `sprites.6502` or `capture.6502` can move to main RAM.
+  6. ~~Twice the speed: 2 units a tick.~~ Done. A call takes 4 ticks at
+     most now (`PT_CAM_MAX_TICKS`, `CAM_MAX_TICKS`), so its move stays under
+     12 units and `FAR_SLACK` holds (camera.c asserts it). A frame's ticks
+     past 4 take more calls, in main.c and `update_camera` both, the keys
+     shared; main.c no longer drops a stall's ticks past the cap, but runs
+     up to 255 of them, the Beeb's byte. The checks' made-up frames take 1
+     to 4 ticks, the corners 4. A move exactly tangent to a post
+     (`corner_deflect`'s zero magnitude) no longer comes up in either check:
+     it's a shortcut, the correction 0 either way.
+- ~~The fill's tables, made by the loader.~~ Done: 528 bytes that were
+  `EQUB`s in sideways RAM, where any code before them could push them onto
+  new pages (the tick's loop cost 104 bytes of padding). `make_tables`
+  steps them through the fill's blocks (`STEPPED`), and `test_tables`
+  checks them against the blocks' labels. `TABLES_ORG` came down three
+  pages to &3700 to fit them: sideways RAM has 910 bytes left, `MainCode`
+  3,321 and `Tables` 124. On the way: a check now stops in `test`, not
+  back in the loader, which the T-clearing checks wipe (the fill check's
+  return landed on a `BRK` once the loader moved).
 - To revisit, if the cycles are wanted: two copies of the stretch loops,
   one going on to the handler and one, for the stretch to a clip event or
   the strip's end, to `events_due`. The handler's `CMP next_event` then

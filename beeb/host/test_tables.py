@@ -7,8 +7,9 @@ loader made every table just as arith.c does.
 SYMBOLS is Baron's symbol dump, for where the tables are; TABLES is
 portalc_tables' JSON, the C's. trowhi, which the C hasn't (it works the
 page out), is checked against T_ORG; shr3, which it writes out as b >> 3,
-against b >> 3. The tables are read until they match,
-or for 20 seconds: the loader only writes them once.
+against b >> 3; the fill's, which are the Beeb's alone, against its blocks'
+places. The tables are read until they match, or for 20 seconds: the loader
+only writes them once.
 """
 
 import json
@@ -37,7 +38,8 @@ CHECKS = [
     ('rpost', 32, 'rpost', 32, 200 - 32),
     ('trowhi', 0, 'trowhi', 0, 65),
     ('shr3', 0, 'shr3', 0, 256),
-]
+] + [('fill_%s%s_%s' % (k, b, s), 0, 'fill_%s%s_%s' % (k, b, s), 0, 66)
+     for s in 'ab' for k in ('exit', 'tail') for b in ('lo', 'hi')]
 
 
 def symbols(path):
@@ -70,6 +72,15 @@ def main():
         want = {k: bytes.fromhex(v) for k, v in json.load(f).items()}
     want['trowhi'] = bytes((syms['T_ORG'] >> 8) + y // 4 for y in range(65))
     want['shr3'] = bytes(b >> 3 for b in range(256))
+    for s in 'ab':
+        # by the end row: the RTS at the row's block, past row 63 at fill_spare; the tail from
+        # the row's store, row 1's first and row 65 row 64's
+        exits = [syms['fill_body_' + s] + syms['FILL_BLOCK'] * y for y in range(64)]
+        exits += [syms['fill_spare']] * 2
+        tails = [syms['fill_tail_' + s] + syms['FILL_STORE'] * (min(y, 64) - 1) for y in range(66)]
+        for k, v in (('exit', exits), ('tail', tails)):
+            want['fill_%slo_%s' % (k, s)] = bytes(a & 255 for a in v)
+            want['fill_%shi_%s' % (k, s)] = bytes(a >> 8 for a in v)
     expect = [want[c][coff:coff + n] for _, _, c, coff, n in CHECKS]
 
     proc = None if b2.alive() else b2.private()

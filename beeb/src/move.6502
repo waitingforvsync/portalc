@@ -1,11 +1,13 @@
-\\ move.6502 - the camera's tick (camera.c): a frame's ticks of the keys at once, the move sliding
+\\ move.6502 - the camera's tick (camera.c): up to 4 ticks of the keys at once, the move sliding
 \\ along walls and round their ends, then the cell it ends up in.
 
 MAX_CANDIDATES = 32                     ; camera.c's MAX_CAND: walls and posts a tick, at most
-FAR_SLACK = 16                          ; camera.c's: a wall farther at the move's start can't meet it
+FAR_SLACK = 16                          ; camera.c's: a wall farther as the move starts can't be met
 HIT_EPS = 2                             ; its truncation slack for the move's approach
 NOT_MADE = &80                          ; a candidate's distance not yet made
 ASSERT CAM_TURN_SPEED == 4, "camera_tick: the turn's the ticks * 4"
+ASSERT CAM_MOVE_SPEED == 2, "camera_tick: the move's the ticks * 2"
+ASSERT CAM_MAX_TICKS == 4, "move.6502's header: up to 4 ticks a call"
 
 \\ The tick's move, s.8 (under 12 units each way), its walls and their ends.
 
@@ -34,7 +36,8 @@ SECTION Between
 .post_vertex        SKIP MAX_CANDIDATES
 ENDSECTION
 
-\\ Run the frame's ticks at once, with the keys the interrupt's gathered: none if no vsync's come.
+\\ Run the frame's ticks, CAM_MAX_TICKS at a time, with the keys the interrupt's gathered: none if
+\\ no vsync's come.
 \\
 \\ Inputs:
 \\     framectr, keys: the ticks and the keys
@@ -47,6 +50,9 @@ ENDSECTION
 
 .update_camera
 {
+    ZA_AUTO1 held                       ; local: the keys, for each call
+    ZA_AUTO1 remaining                  ; local: the ticks after this call's
+
     \\ the ticks and the keys, with the vsync held off, so none comes between the read and the clear
 
     SEI
@@ -54,19 +60,31 @@ ENDSECTION
     LDY keys
     LDA #0:STA framectr:STA keys
     CLI
+    STY held
     TXA:BEQ done                        ; no ticks
+
+    \\ a call a cap's worth, the last the rest
+
+.each
+    LDX #CAM_MAX_TICKS
+    SEC:SBC #CAM_MAX_TICKS:BCS call     ; a cap's worth, the rest after (none if it's the last)
+    ADC #CAM_MAX_TICKS:TAX              ; under the cap: the last (C clear)
+    LDA #0
+.call
+    STA remaining
     STX camera_tick.ticks
-    STY camera_tick.keys
-    JMP camera_tick
+    LDA held:STA camera_tick.keys
+    JSR camera_tick
+    LDA remaining:BNE each
 .done
     RTS
 }
 
-\\ A frame's ticks of the keys at once (pt_camera_tick): turn, then move with sliding collision; and
-\\ if the camera moved, empty the vertex cache and find its cell.
+\\ Ticks of the keys at once (pt_camera_tick): turn, then move with sliding collision; and if the
+\\ camera moved, empty the vertex cache and find its cell.
 \\
 \\ Inputs:
-\\     ticks: the frame's, 1 to 8
+\\     ticks: 1 to CAM_MAX_TICKS
 \\     keys: the keys, as the IN_ bits
 \\     camx, camxf, camy, camyf, camangle, camcell, camsettled: the camera
 \\
@@ -80,9 +98,10 @@ ENDSECTION
     ZA_AUTO1 keys                       ; in
     ZA_AUTO1 turn                       ; local: the ticks' turn, 1024ths
 
-    \\ the turn: left or right, both cancelling
+    \\ the turn: left or right, both cancelling (and the move's units, for after)
 
-    LDA ticks:ASL A:ASL A:STA turn
+    LDA ticks:ASL A:STA units_direction.units
+    ASL A:STA turn
     LDA keys:AND #IN_TURNL OR IN_TURNR
     CMP #IN_TURNR:BEQ right
     CMP #IN_TURNL:BNE turned            ; neither, or both
@@ -99,7 +118,6 @@ ENDSECTION
     \\ the move: a step forward, the ticks' units along the facing; back; and a quarter turn either
     \\ way for the strafes (right of the facing is (-sin, cos))
 
-    LDA ticks:STA units_direction.units
     LDA camangle:STA units_direction.angle
     LDA camangle+1:STA units_direction.angle+1
     JSR units_direction

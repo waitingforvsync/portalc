@@ -1,5 +1,5 @@
-\\ tables_macros.6502 - the bit a delta packing that tables.6502 makes its smooth tables from:
-\\ the packing, done at assembly time, and the loader's unpacking.
+\\ tables_macros.6502 - the bit a delta packing that tables.6502 makes its smooth tables from (the
+\\ packing, done at assembly time, and the loader's unpacking), and its tables of steps.
 
 \\ A bit a delta: a table's first entry, then a bit for each delta after it, over a base for each
 \\ byte of bits. The first byte holds the (n - 1) MOD 8 odd deltas, under a set bit; every other,
@@ -117,4 +117,35 @@ ENDMACRO
 
 MACRO PACK v
     EQUB pk_packed(v)
+ENDMACRO
+
+\\ A table of addresses a step apart, from a first.
+\\
+\\ Inputs:
+\\     lo, hi: the table's low bytes and its high
+\\     first: entry 0
+\\     step: the step, under 256
+\\     n: the entries, 2 to 256
+\\
+\\ Outputs:
+\\     lo, hi: entries 0 to n - 1
+\\     A, Y: corrupted
+
+MACRO STEPPED lo, hi, first, step, n
+    LDA #LO(first):STA lo
+    IF HI(first) != LO(first)
+        LDA #HI(first)
+    ENDIF
+    STA hi
+    IF HI(first) == 0
+        TAY
+    ELSE
+        LDY #0
+    ENDIF
+    CLC
+.entry
+    LDA lo,Y:ADC #step:STA lo+1,Y
+    LDA hi,Y:ADC #0:STA hi+1,Y          ; (C clear: no entry past &FFFF)
+    INY
+    CPY #n-1:BNE entry                  ; (C clear going round: Y under n - 1)
 ENDMACRO

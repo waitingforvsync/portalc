@@ -57,8 +57,9 @@ int main(void)
     pt_vcache_init(&vc);
 
     // from each place, the camera facing a made-up way, then frames of made-up keys (6 bits) and
-    // ticks (1 to 8): after each, its x and y (fraction, low, high), its facing (1024ths, low then
-    // high), its cell and settled
+    // ticks (1 to PT_CAM_MAX_TICKS, a byte's low bits): after each, its x and y (fraction, low,
+    // high), its facing (1024ths, low then high), its cell and settled
+    _Static_assert((PT_CAM_MAX_TICKS & (PT_CAM_MAX_TICKS - 1)) == 0, "ticks: a byte's low bits");
     static place at[PT_MAX_PLACES];
     unsigned n = places(&m, at);
     printf("{\n  \"places\": [");
@@ -70,15 +71,16 @@ int main(void)
         printf(p ? ",\n    \"" : "\n    \"");
         for (unsigned f = 0; f < FRAMES; f++) {
             uint8_t keys = step() & 63;
-            uint8_t ticks = (uint8_t)((step() & 7) + 1);
+            uint8_t ticks = (uint8_t)((step() & (PT_CAM_MAX_TICKS - 1)) + 1);
             pt_camera_tick(&c, &m, &vc, keys, ticks);
             frame_bytes(&c);
         }
         printf("\"");
     }
 
-    // from each place near a vertex, the camera facing it (rounded to 256ths), then 8 ticks a frame
-    // into the corner: forward 16, forward and left 8, forward and right 8
+    // from each place near a vertex, the camera facing it (rounded to 256ths), then
+    // PT_CAM_MAX_TICKS ticks a frame into the corner: forward 16, forward and left 8, forward and
+    // right 8
     printf("\n  ],\n  \"corners\": [");
     for (unsigned p = 0; p < n; p++) {
         printf(p ? ",\n    \"" : "\n    \"");
@@ -88,8 +90,10 @@ int main(void)
             pt_camera c = {.x = (uint32_t)at[p].x << 8, .y = (uint32_t)at[p].y << 8,
                            .angle = (uint8_t)((a + 2u) >> 2), .cell = at[p].cell, .settled = false};
             for (unsigned f = 0; f < FRAMES; f++) {
-                uint8_t keys = f < 16 ? PT_IN_FWD : f < 24 ? PT_IN_FWD | PT_IN_LEFT : PT_IN_FWD | PT_IN_RIGHT;
-                pt_camera_tick(&c, &m, &vc, keys, 8);
+                uint8_t keys = f < 16   ? PT_IN_FWD
+                               : f < 24 ? PT_IN_FWD | PT_IN_LEFT
+                                        : PT_IN_FWD | PT_IN_RIGHT;
+                pt_camera_tick(&c, &m, &vc, keys, PT_CAM_MAX_TICKS);
                 frame_bytes(&c);
             }
         }

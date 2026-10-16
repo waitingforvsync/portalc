@@ -8,6 +8,8 @@ ASSERT POST_SCALE MOD 8 == 0 AND HI(RPOST_DIVIDEND) < RPOST_START, "rpost: a byt
 
 ASSERT T_ORG+SCREEN_HEIGHT DIV 4*&100 == T_JUNK_BOT, "T: four rows a page, then the junk row"
 
+FILL_ENDS = SCREEN_HEIGHT+2             ; the fill's end rows, 0 to 65 (0 unused)
+
 SECTION Tables
 .nrm        SKIP &100                   ; the bits under b's leading one (0: unused)
 .k8         SKIP &100                   ; 8 - lz(b): its bit length (0: unused)
@@ -26,6 +28,24 @@ SECTION Tables
 .shr3       SKIP &100                   ; b DIV 8: a sprite run byte's row
 .rpostmem   SKIP RPOST_END-RPOST_START  ; POST_SCALE / d2, by d2 / 8
 .trowhi     SKIP SCREEN_HEIGHT+1        ; row y's page in T, to the junk row's
+IF DEFINED(fill_body_a)                 ; the fill's, by a column's end row, where it's assembled:
+    FITPAGE FILL_ENDS
+.fill_exitlo_a  SKIP FILL_ENDS          ; where screen A's body takes the RTS
+    FITPAGE FILL_ENDS
+.fill_exithi_a  SKIP FILL_ENDS
+    FITPAGE FILL_ENDS
+.fill_taillo_a  SKIP FILL_ENDS          ; where its tail starts
+    FITPAGE FILL_ENDS
+.fill_tailhi_a  SKIP FILL_ENDS
+    FITPAGE FILL_ENDS
+.fill_exitlo_b  SKIP FILL_ENDS          ; and screen B's
+    FITPAGE FILL_ENDS
+.fill_exithi_b  SKIP FILL_ENDS
+    FITPAGE FILL_ENDS
+.fill_taillo_b  SKIP FILL_ENDS
+    FITPAGE FILL_ENDS
+.fill_tailhi_b  SKIP FILL_ENDS
+ENDIF
 ENDSECTION
 
 ASSERT HI(trowhi) == HI(trowhi+SCREEN_HEIGHT), "trowhi: within a page"
@@ -230,6 +250,33 @@ LOG_STEP = ROUND(-256*log2(PI/1024))    ; 2137.2, for lsec16: a step's angle, it
     STA shr3,X
     INX
     BNE shifts
+
+    \\ the fill's, where it's assembled: by the end row, where each screen's body takes the RTS,
+    \\ the row's EOR (past row 63 fill_spare, as the body's own RTS ends it), and where its tail
+    \\ starts, the row's store from row 1's (row 65 row 64's)
+
+    IF DEFINED(fill_body_a)
+        STEPPED fill_exitlo_a, fill_exithi_a, fill_body_a, FILL_BLOCK, SCREEN_HEIGHT
+        STEPPED fill_exitlo_b, fill_exithi_b, fill_body_b, FILL_BLOCK, SCREEN_HEIGHT
+        STEPPED fill_taillo_a, fill_tailhi_a, fill_tail_a-FILL_STORE, FILL_STORE, SCREEN_HEIGHT+1
+        STEPPED fill_taillo_b, fill_tailhi_b, fill_tail_b-FILL_STORE, FILL_STORE, SCREEN_HEIGHT+1
+        last_a = fill_tail_a+FILL_STORE*(SCREEN_HEIGHT-1)    ; row 64's tail, row 65's too
+        last_b = fill_tail_b+FILL_STORE*(SCREEN_HEIGHT-1)
+        exits = {fill_exitlo_a, fill_exitlo_b, fill_exithi_a, fill_exithi_b}
+        spares = {LO(fill_spare), LO(fill_spare), HI(fill_spare), HI(fill_spare)}
+        tails = {fill_taillo_a, fill_tailhi_a, fill_taillo_b, fill_tailhi_b}
+        lasts = {LO(last_a), HI(last_a), LO(last_b), HI(last_b)}
+        rest = CONCAT(ZIP(exits+SCREEN_HEIGHT, spares), ZIP(exits+SCREEN_HEIGHT+1, spares))
+        rest_sorted = SORT(CONCAT(rest, ZIP(tails+SCREEN_HEIGHT+1, lasts)), 1)
+        FOR i = 0..<LEN(rest_sorted)            ; by value, each loaded once
+            IF i == 0
+                LDA #rest_sorted[0][1]
+            ELIF rest_sorted[i][1] != rest_sorted[i-1][1]
+                LDA #rest_sorted[i][1]
+            ENDIF
+            STA rest_sorted[i][0]
+        NEXT
+    ENDIF
     RTS
 }
 

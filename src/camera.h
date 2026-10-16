@@ -17,9 +17,9 @@
 
 #define PT_CAM_RADIUS 40
 _Static_assert(PT_CAM_RADIUS * PT_CAM_RADIUS == PT_RPOST_END, "the posts' table covers the circle");
-#define PT_CAM_MOVE_SPEED 1    // whole units per tick
+#define PT_CAM_MOVE_SPEED 2    // whole units per tick
 #define PT_CAM_TURN_SPEED 1    // 256ths of a turn per tick
-#define PT_CAM_MAX_TICKS 8     // a frame's at most: its move under 12 units, as camera.c needs
+#define PT_CAM_MAX_TICKS 4     // a call's at most: its move under 12 units, as camera.c needs
 
 // the start pose in the demo scene
 #define PT_CAM_START_X 1756
@@ -49,10 +49,10 @@ typedef struct pt_camera {
 void pt_camera_init(pt_camera *c, const pt_map *m, pt_vcache *vc, uint16_t x, uint16_t y,
                     uint8_t angle);
 
-// Advance a frame's ticks (1 to PT_CAM_MAX_TICKS), which share its keys, as
-// one: turn and move by that many ticks' worth, with sliding collision, and
-// if the camera moved, have the vertex cache look afresh from where it ends
-// up and cross portals by its angles.
+// Advance ticks (1 to PT_CAM_MAX_TICKS), which share their keys, as one:
+// turn and move by that many ticks' worth, with sliding collision, and if the
+// camera moved, have the vertex cache look afresh from where it ends up and
+// cross portals by its angles. A frame's ticks beyond the cap take more calls.
 void pt_camera_tick(pt_camera *c, const pt_map *m, pt_vcache *vc, uint8_t input, uint8_t ticks);
 
 #endif

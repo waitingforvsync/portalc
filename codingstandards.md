@@ -149,8 +149,9 @@ The rest:
 - Never negate a product: fuse the sums so terms go in by add or subtract
   (opposite signs are one subtraction; both negative, negate once).
 - Follow the flags through the code, C most of all:
-  - hoist `CLC`/`SEC` out of a loop whose body never touches C and whose
-    exit leaves it known;
+  - hoist `CLC`/`SEC` out of a loop whose body leaves C known at its
+    branch back: it never touches C, or the compare that loops does (`CPY
+    #n:BNE loop`, going round only under n, leaves C clear);
   - a branch on a known flag is a `JMP`, a byte shorter (with a
     `ZA_UNREACHABLE` after it);
   - the instructions that keep C: loads, stores, transfers, `INX`/`DEX`/
@@ -161,6 +162,11 @@ The rest:
   - a shift's carry is known when the bit it shifts out is: three `ROL dv+1`
     into a byte that started at 0 leave C clear, so the add after needs no
     `CLC`.
+- Follow the registers too, in macros above all, whose arguments are
+  often constants: no load of a byte A already holds (`STEPPED` stores
+  `first`'s high byte straight after its low when they're the same), and
+  `TAY` where A is known 0, not `LDY #0`. Code that runs once is no
+  exception.
 - Never shift a multi-byte value in memory while A is free: hold one byte
   in A, `ASL A:ROL dv+1` rather than `ASL dv:ROL dv+1`. Hold the byte the
   next instruction wants, the low byte where an add follows. In a loop it's
@@ -205,7 +211,10 @@ The rest:
   a cycle: `FITPAGE` before it (`src/macros.6502`), or an `ASSERT` where
   its place is fixed.
 - A table of any size is made by the loader, `make_tables` (tables.6502),
-  in the `Tables` section, not assembled into the code: `shr3`, `trowhi`.
+  in the `Tables` section, not assembled into the code: `shr3`, `trowhi`,
+  and code addresses too (the fill's, stepped through its blocks). A table
+  only some builds need is declared and made under `IF DEFINED` of a label
+  of its user's (`fill_body_a`), as every build assembles tables.6502.
   A handful of bytes stays by its code as `EQUB`s (plot.6502's
   `mode5_pixel`, which the sprite plotters read too; the sprite check,
   which doesn't assemble plot.6502, has its own copy). Before adding a

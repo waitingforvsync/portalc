@@ -81,7 +81,7 @@ RC_TEST(render, random_walkthrough)
                               | ((r & 2) ? PT_IN_TURNR : 0) | ((r & 4) ? PT_IN_LEFT : 0)
                               | ((r & 8) ? PT_IN_BACK : 0));
         }
-        pt_camera_tick(&cam, &map_, &vc_, input, (uint8_t)(1 + (tick & 7)));
+        pt_camera_tick(&cam, &map_, &vc_, input, (uint8_t)(1 + tick % PT_CAM_MAX_TICKS));
         RC_CHECK(cam.cell, >=, (uint8_t)1);
         RC_CHECK(cam.cell, <, map_.num_cells);
 

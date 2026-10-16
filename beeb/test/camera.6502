@@ -13,7 +13,7 @@ SECTION TestResults
 ENDSECTION
 
 \\ From each place, the camera facing a made-up way (a byte, in 256ths), then 32 frames, each of
-\\ made-up keys (a byte's low 6 bits) and ticks (1 to 8: a byte's low 3 bits, + 1), the made-up
+\\ made-up keys (a byte's low 6 bits) and ticks (1 to 4: a byte's low 2 bits, + 1), the made-up
 \\ values the LFSR's bytes, as cameraref's: after each frame its x (fraction, low, high), its y, its
 \\ facing (1024ths, low then high), its cell and settled, summed by place.
 \\
@@ -23,6 +23,8 @@ ENDSECTION
 \\ Outputs:
 \\     t_camera1, t_camera2: the sums, by place
 \\     t_corner1, t_corner2: test_corners'
+
+ASSERT CAM_MAX_TICKS == 4, "test_camera: the ticks a byte's low 2 bits, + 1"
 
 .test_camera
 {
@@ -53,7 +55,7 @@ ENDSECTION
     JSR random_byte
     AND #63:STA camera_tick.keys
     JSR random_byte
-    AND #7:CLC:ADC #1:STA camera_tick.ticks
+    AND #CAM_MAX_TICKS-1:CLC:ADC #1:STA camera_tick.ticks
     JSR camera_tick
     FOR v = {camxf, camx, camx+1, camyf, camy, camy+1, camangle, camangle+1, camcell, camsettled}
         LDA v:FLETCHER sum1, sum2
@@ -72,9 +74,9 @@ ENDSECTION
     JMP test_corners
 }
 
-\\ From each place near a vertex, the camera facing it (its angle from the place, rounded to 256ths),
-\\ then 32 frames of 8 ticks into the corner: forward 16, forward and left 8, forward and right 8.
-\\ After each, the camera as test_camera has it, summed by place (a centroid's sums 0).
+\\ From each place near a vertex, the camera facing it (its angle from the place, rounded to
+\\ 256ths), then 32 frames of 4 ticks into the corner: forward 16, forward and left 8, forward and
+\\ right 8. After each, the camera as test_camera has it, summed by place (a centroid's sums 0).
 \\
 \\ Inputs:
 \\     none
@@ -123,7 +125,7 @@ ENDSECTION
     LDA #IN_FWD OR IN_RIGHT
 .keyed
     STA camera_tick.keys
-    LDA #8:STA camera_tick.ticks
+    LDA #CAM_MAX_TICKS:STA camera_tick.ticks
     JSR camera_tick
     FOR v = {camxf, camx, camx+1, camyf, camy, camy+1, camangle, camangle+1, camcell, camsettled}
         LDA v:FLETCHER sum1, sum2

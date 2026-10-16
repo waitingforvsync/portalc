@@ -121,18 +121,23 @@ static void on_update(void *ctx, double dt)
 {
     (void)ctx;
 
-    // fixed 50 Hz ticks, BBC style: the frame's run as one, sharing its keys,
-    // as the Beeb runs the vsyncs a frame took; a long stall's clamped
+    // fixed 50 Hz ticks, BBC style: the frame's sharing its keys, as the Beeb
+    // runs the vsyncs a frame took, PT_CAM_MAX_TICKS a call; a stall's
+    // clamped to the Beeb's byte of them
     state.tick_acc += dt;
     uint8_t ticks = 0;
-    while (state.tick_acc >= TICK_SECONDS && ticks < PT_CAM_MAX_TICKS) {
+    while (state.tick_acc >= TICK_SECONDS && ticks < UINT8_MAX) {
         state.tick_acc -= TICK_SECONDS;
         ticks++;
     }
     if (state.tick_acc >= TICK_SECONDS)
         state.tick_acc = 0;
-    if (ticks != 0)
-        pt_camera_tick(&state.camera, &state.map, &state.vcache, gather_input(), ticks);
+    uint8_t input = gather_input();
+    while (ticks != 0) {
+        uint8_t n = ticks < PT_CAM_MAX_TICKS ? ticks : PT_CAM_MAX_TICKS;
+        pt_camera_tick(&state.camera, &state.map, &state.vcache, input, n);
+        ticks = (uint8_t)(ticks - n);
+    }
 }
 
 static void on_render(void *ctx, rc_vec2i size)

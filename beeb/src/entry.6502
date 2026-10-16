@@ -80,9 +80,8 @@ ASSERT maincode_image >= MAINCODE_ORG, "main RAM's code must load above where it
 
     JSR make_tables
     IF DEFINED(TEST)
-        \\ make test's build: the check, then nothing, its answers left for the host
-        JSR test
-    .@  JMP @-
+        \\ make test's build: the check, which stops there, its answers left for the host
+        JMP test
     ELSE
 
         \\ the camera, where the map starts it

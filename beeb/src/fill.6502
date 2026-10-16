@@ -44,29 +44,11 @@ ENDSECTION
     FILL_COLUMNS fill_body_a, fill_tail_a, fill_exitlo_a, fill_exithi_a, fill_taillo_a, fill_tailhi_a
 }
 
-\\ By the end row, 0 to 65 (0 unused, 65 the same as 64), where the RTS goes in each screen's body,
-\\ the row's EOR, and where its tail starts, its first store row 1's; then the blocks. The body's
-\\ own RTS ends rows 64 and 65, so their patch goes to fill_spare.
+\\ Each screen's blocks. make_tables (tables.6502) makes their tables, by a column's end row: where
+\\ the body takes the RTS, the row's EOR, and where the tail starts, the row's store.
 
-FUNCTION fill_exits(body) = CONCAT(body+6*(0..<SCREEN_HEIGHT), {fill_spare, fill_spare})
-FUNCTION fill_tails(tail) = tail+3*(CONCAT(0..SCREEN_HEIGHT, SCREEN_HEIGHT)-1)
-
-    FITPAGE SCREEN_HEIGHT+2
-.fill_exitlo_a EQUB LO(fill_exits(fill_body_a))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_exithi_a EQUB HI(fill_exits(fill_body_a))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_taillo_a EQUB LO(fill_tails(fill_tail_a))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_tailhi_a EQUB HI(fill_tails(fill_tail_a))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_exitlo_b EQUB LO(fill_exits(fill_body_b))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_exithi_b EQUB HI(fill_exits(fill_body_b))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_taillo_b EQUB LO(fill_tails(fill_tail_b))
-    FITPAGE SCREEN_HEIGHT+2
-.fill_tailhi_b EQUB HI(fill_tails(fill_tail_b))
+FILL_BLOCK = 6                          ; a body row's bytes: its EOR and its STA
+FILL_STORE = 3                          ; a tail row's: its STA
 
 .fill_body_a
     FILL_BODY SCREEN_A
@@ -76,3 +58,5 @@ FUNCTION fill_tails(tail) = tail+3*(CONCAT(0..SCREEN_HEIGHT, SCREEN_HEIGHT)-1)
     FILL_BODY SCREEN_B
 .fill_tail_b
     FILL_TAIL SCREEN_B
+ASSERT fill_tail_a-fill_body_a == FILL_BLOCK*SCREEN_HEIGHT+1, "the fill's body: its rows, an RTS"
+ASSERT fill_body_b-fill_tail_a == FILL_STORE*(SCREEN_HEIGHT-1)+1, "its tail: rows 1 on, an RTS"

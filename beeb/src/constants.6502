@@ -26,5 +26,7 @@ IN_TURNL = 16
 IN_TURNR = 32
 CAM_RADIUS = 40                         ; the camera's circle, in units (camera.h)
 CAM_TURN_SPEED = 4                      ; its turn a tick, in 1024ths (camera.h)
+CAM_MOVE_SPEED = 2                      ; its move a tick, in units (camera.h)
+CAM_MAX_TICKS = 4                       ; a tick call's at most (camera.h)
 POST_NEAR = 256                         ; d2 under this: on top of a post, left alone
 POST_SCALE = 1.25*2^15                  ; a post's 1/d2: its quarter's overcorrection, and q15

@@ -8,7 +8,7 @@ SECTION TestResults, org = TEST_RESULTS, guard = TEST_RESULTS_END, virtual = TRU
 .t_done     SKIP 1                      ; &A5 once the check's answers are written
 ENDSECTION
 
-\\ Run the check.
+\\ Run the check, then stop here: the loader that came in is gone, as T's clear wipes it.
 \\
 \\ Inputs:
 \\     none
@@ -21,7 +21,8 @@ ENDSECTION
     LDA #0:STA t_done
     JSR check
     LDA #&A5:STA t_done
-    RTS
+.stop
+    JMP stop
 }
 
 \\ The checks' made-up values' LFSR: 32 bits, Galois, taps &80200003. A check seeds it.
